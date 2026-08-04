@@ -19,16 +19,21 @@ shown as partial evidence.
 
 1. **Run integrity** shows the terminal trace status and explicit test gates.
    Missing evidence is `unknown` or `incomplete`, never an inferred pass.
-2. **Agent turns** places runtime observations and machine effects in node
-   lanes without treating model output as authority.
+2. **Agent turns** places runtime observations in `(node, Agent)` lanes and
+   keeps node-local machine effects in separate machine lanes, without treating
+   model output as authority.
 3. **Event causality** draws only recorded `causes` edges. Wall-clock order is
    not used to invent cross-node causality.
 4. **Collaboration evidence** shows case-neutral connected components formed
-   only by explicit backward `causes`. Bare Event, correlation, Delivery,
-   Handling, and Reference tokens are annotations, not cross-node identity
-   edges. The view does not assume a request/review/result workflow or invent
-   missing stages. Terminal Handlings, Reference changes, and later Artifact
-   reads are listed separately with their evidence class.
+   only by explicit backward `causes`. Standalone Runtime observations remain
+   in the Agent-turn view, so they cannot consume the bounded collaboration
+   component budget. Components with cross-node causes and accepted effects
+   are displayed first. Bare Event, correlation, Delivery, Handling, and
+   Reference tokens are annotations, not cross-node identity edges. The view
+   does not assume a request/review/result workflow or invent missing stages.
+   Open semantic kinds and bounded targets are displayed as labels. Terminal
+   Handlings, Reference changes, and later Artifact reads are listed separately
+   with their recorded outcome and state.
 5. **R8 preference coloring** partitions evidence by exact SelectionID before
    displaying per-node colors and signed margins. Distinct selections are never
    overlaid or counted together. Every result remains a local preference, not
@@ -75,7 +80,11 @@ The schema also closes the relation between each known `kind`, its allowed
 rename itself as an accepted R7 effect; `r7.delivery.readmitted` is authored by
 the receiving local authority after re-admission, not by transport. Every R8
 fact must carry a SelectionID digest, which is the isolation boundary for
-coloring and statistics.
+coloring and statistics. Kinds required by the visual evidence contract also
+carry their minimum display fields: accepted Events name their semantic kind
+and consequence, resolved Handlings carry an outcome, and R8 seeds, rounds,
+votes, and observations carry the exact preference evidence rendered by the
+coloring view.
 
 The result footer covers the exact preceding JSONL bytes, including their line
 terminators, with `trace_digest`. Its `record_count` counts only `fact` lines.

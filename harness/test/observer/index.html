@@ -289,6 +289,7 @@
     .fact-chip .seq { color: var(--muted); }
     .fact-chip .kind { display: block; color: var(--ink); overflow-wrap: anywhere; }
     .fact-chip .turn { display: block; margin-top: 3px; color: var(--muted); overflow-wrap: anywhere; }
+    .fact-chip .detail { display: block; margin-top: 3px; color: var(--muted); overflow-wrap: anywhere; }
 
     .canvas-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: #0a0f0d; }
     canvas { display: block; max-width: none; }
@@ -703,6 +704,7 @@
       });
       validateRefs(record.refs, label + ".refs");
       validateFacts(record.facts, label + ".facts");
+      validateKindEvidence(record, label);
       const classification = FACT_CLASSIFICATIONS.get(record.kind);
       if (!classification || classification.source !== record.source.class || classification.truth !== record.truth) {
         fail(label, "has an invalid kind/source/truth classification");
@@ -711,6 +713,40 @@
         fail(label + ".refs.selection", "is required for R8 preference evidence");
       }
       seen.add(record.id);
+    }
+
+    function validateKindEvidence(record, label) {
+      const required = (object, fields, path) => fields.forEach(field => {
+        if (!Object.prototype.hasOwnProperty.call(object, field)) fail(path + "." + field, "is required for " + record.kind);
+      });
+      switch (record.kind) {
+        case "r7.event.accepted":
+          required(record.refs, ["event", "event_digest"], label + ".refs");
+          required(record.facts, ["semantic_kind", "consequence"], label + ".facts");
+          break;
+        case "r7.handling.resolved":
+          required(record.refs, ["handling"], label + ".refs");
+          required(record.facts, ["outcome", "state"], label + ".facts");
+          if (record.facts.state !== "terminal" || !["completed", "declined", "unresolved"].includes(record.facts.outcome)) {
+            fail(label + ".facts", "does not describe a terminal Handling outcome");
+          }
+          break;
+        case "r8.selection.seeded":
+          required(record.facts, ["preference_after", "phase"], label + ".facts");
+          break;
+        case "r8.round.frozen":
+          required(record.facts, ["round", "sample_size", "alpha", "preference_before", "margin_before"], label + ".facts");
+          break;
+        case "r8.vote.observed":
+          required(record.facts, ["round", "votes_a", "votes_b", "authenticated"], label + ".facts");
+          break;
+        case "r8.round.settled":
+          required(record.facts, ["round", "preference_before", "preference_after", "margin_before", "margin_after", "recolored", "phase"], label + ".facts");
+          break;
+        case "r8.observation.produced":
+          required(record.facts, ["round", "result", "preference_after", "margin_after", "phase"], label + ".facts");
+          break;
+      }
     }
 
     function validateResult(record, factCount, seen, label) {
@@ -889,24 +925,32 @@
       setNotice(elements.agentNotice, visibleFacts.length < run.facts.length
         ? ordering + " Rendering the first " + visibleFacts.length + " of " + run.facts.length + " facts; the remainder is intentionally truncated."
         : ordering);
-      (run.header.participants || []).forEach(participant => lanes.set(participant.node, { participant, facts: [] }));
+      const laneKey = (nodeName, agentName) => nodeName + "\u0000" + (agentName || "");
+      (run.header.participants || []).forEach(participant => {
+        lanes.set(laneKey(participant.node, participant.agent), { participant, facts: [] });
+      });
       visibleFacts.forEach(fact => {
-        const key = fact.source.node;
-        if (!lanes.has(key)) lanes.set(key, { participant: { node: key }, facts: [] });
+        const key = laneKey(fact.source.node, fact.agent);
+        if (!lanes.has(key)) lanes.set(key, { participant: { node: fact.source.node, agent: fact.agent }, facts: [] });
         lanes.get(key).facts.push(fact);
       });
       elements.lanes.replaceChildren();
-      lanes.forEach(({ participant, facts }, key) => {
+      lanes.forEach(({ participant, facts }) => {
         const lane = node("div", "lane");
-        const title = node("div", "lane-name", key);
-        const meta = [participant.agent, participant.runtime, participant.model].filter(Boolean).join(" · ");
-        title.append(node("span", "lane-meta", meta || "machine / runner lane"));
+        const title = node("div", "lane-name", participant.node + (participant.agent ? " / " + participant.agent : " / machine"));
+        const meta = [participant.runtime, participant.model].filter(Boolean).join(" · ");
+        title.append(node("span", "lane-meta", meta || (participant.agent ? "Agent evidence lane" : "authority / runner lane")));
         const track = node("div", "lane-track");
         facts.sort((a, b) => a.seq - b.seq).forEach(fact => {
           const chip = node("div", "fact-chip " + fact.source.class);
           chip.title = fact.id;
           chip.append(node("span", "seq", "#" + fact.seq), node("span", "kind", fact.kind));
           if (fact.turn) chip.append(node("span", "turn", fact.turn));
+          const details = [];
+          if (fact.facts.semantic_kind) details.push(fact.facts.semantic_kind);
+          if (fact.facts.consequence) details.push(fact.facts.consequence);
+          if (fact.facts.targets && fact.facts.targets.length) details.push("→ " + fact.facts.targets.join(", "));
+          if (details.length) chip.append(node("span", "detail", details.join(" · ")));
           track.append(chip);
         });
         lane.append(title, track);
@@ -999,7 +1043,8 @@
         context.rotate(-0.3);
         context.fillStyle = "#b8c4be";
         context.font = "9px ui-monospace, monospace";
-        context.fillText(short(fact.kind.replace("r7.", ""), 18), 0, 0);
+        const semantic = fact.facts.semantic_kind || fact.kind.replace("r7.", "");
+        context.fillText(short(semantic, 18), 0, 0);
         context.restore();
       });
       elements.legend.replaceChildren();
@@ -1042,6 +1087,18 @@
         .sort((left, right) => left[0].seq - right[0].seq);
     }
 
+    function isStandaloneRuntimeComponent(component) {
+      return component.length === 1 && component[0].source.class === "runtime" && component[0].causes.length === 0;
+    }
+
+    function collaborationPriority(component) {
+      const ids = new Set(component.map(fact => fact.id));
+      const nodes = new Set(component.map(fact => fact.source.node));
+      const hasRecordedEdge = component.some(fact => fact.causes.some(cause => ids.has(cause)));
+      const hasAcceptedEffect = component.some(fact => fact.truth === "accepted_local_fact");
+      return (nodes.size > 1 ? 8 : 0) + (hasRecordedEdge ? 4 : 0) + (hasAcceptedEffect ? 2 : 0) + (component.length > 1 ? 1 : 0);
+    }
+
     function recordedReferences(facts) {
       const values = new Set();
       facts.forEach(fact => {
@@ -1054,14 +1111,24 @@
 
     function renderCollaboration(run) {
       const allFacts = run.facts.filter(fact => !fact.kind.startsWith("r8.") && fact.kind !== "test.gate.checked");
-      const facts = allFacts.slice(0, LIMITS.collaborationFacts);
-      const allComponents = collaborationComponents(facts);
+      const referencedCauses = new Set();
+      allFacts.forEach(fact => fact.causes.forEach(cause => referencedCauses.add(cause)));
+      const standaloneRuntimeFacts = allFacts.filter(fact =>
+        fact.source.class === "runtime" && fact.causes.length === 0 && !referencedCauses.has(fact.id));
+      const standaloneRuntimeIDs = new Set(standaloneRuntimeFacts.map(fact => fact.id));
+      const collaborationFacts = allFacts.filter(fact => !standaloneRuntimeIDs.has(fact.id));
+      const facts = collaborationFacts.slice(0, LIMITS.collaborationFacts);
+      const rawComponents = collaborationComponents(facts);
+      const standaloneRuntime = standaloneRuntimeFacts.length + rawComponents.filter(isStandaloneRuntimeComponent).length;
+      const allComponents = rawComponents.filter(component => !isStandaloneRuntimeComponent(component));
+      allComponents.sort((left, right) => collaborationPriority(right) - collaborationPriority(left) || left[0].seq - right[0].seq);
       const components = allComponents.slice(0, LIMITS.collaborationComponents);
       const truncation = [];
-      if (allFacts.length > facts.length) truncation.push("facts " + facts.length + "/" + allFacts.length);
+      if (collaborationFacts.length > facts.length) truncation.push("collaboration facts " + facts.length + "/" + collaborationFacts.length);
       if (allComponents.length > components.length) truncation.push("components " + components.length + "/" + allComponents.length);
+      if (standaloneRuntime) truncation.push("standalone runtime observations shown in Agent turns " + standaloneRuntime);
       setNotice(elements.collaborationNotice, truncation.length
-        ? "Rendering explicit-cause components for a bounded sequence prefix (" + truncation.join(", ") + "). References do not create edges and no omitted workflow stage is inferred."
+        ? "Rendering protocol effects and explicit-cause components in evidence-priority order (" + truncation.join(", ") + "). References do not create edges and no omitted workflow stage is inferred."
         : "");
       elements.chains.replaceChildren();
       if (!components.length) {
@@ -1079,7 +1146,8 @@
         }
         const steps = node("div", "chain-steps");
         component.forEach(fact => {
-          const effects = [fact.facts.consequence, fact.facts.outcome, fact.facts.state, fact.facts.status].filter(Boolean);
+          const effects = [fact.facts.semantic_kind, fact.facts.consequence, fact.facts.outcome, fact.facts.state, fact.facts.status].filter(Boolean);
+          if (fact.facts.targets && fact.facts.targets.length) effects.push("→ " + fact.facts.targets.join(","));
           const label = "#" + fact.seq + " " + fact.source.node + " · " + fact.kind + (effects.length ? " · " + effects.join("/") : "");
           const step = node("span", "step", label);
           step.title = fact.id + (fact.causes.length ? " · causes=" + fact.causes.join(",") : "");
@@ -1094,7 +1162,10 @@
         const card = node("div", "final-card");
         card.append(node("span", "final-title", fact.kind));
         const refs = Object.entries(fact.refs || {}).map(([key, value]) => key + "=" + short(value)).join(" · ");
-        card.append(node("div", "final-detail", fact.truth + (refs ? " · " + refs : " · no content reference")));
+        const outcome = [fact.facts.semantic_kind, fact.facts.consequence, fact.facts.outcome, fact.facts.state].filter(Boolean);
+        if (fact.facts.targets && fact.facts.targets.length) outcome.push("→ " + fact.facts.targets.join(","));
+        const detail = [fact.truth, ...outcome, refs || "no content reference"].join(" · ");
+        card.append(node("div", "final-detail", detail));
         elements.finalState.append(card);
       });
       if (!finals.length) elements.finalState.append(node("div", "final-card", "No terminal Handling, Reference change, or later Artifact read was observed."));

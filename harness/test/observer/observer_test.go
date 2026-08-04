@@ -170,6 +170,8 @@ func TestObserverIsSingleFileLocalOnlyAndMarkupSafe(t *testing.T) {
 		"does not refer to an earlier fact", "trace_digest does not cover",
 		"invalid kind/source/truth classification", "explicit backward causes",
 		"no preference evidence is merged across selections", "collaborationComponents",
+		"validateKindEvidence", "isStandaloneRuntimeComponent", "collaborationPriority",
+		"semantic_kind", "terminal Handling outcome", "Agent evidence lane",
 	} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("observer HTML is missing %q", required)
@@ -372,6 +374,33 @@ func validateFact(t *testing.T, fact factRecord, sequence int, seen map[string]s
 	validateFactReferences(t, fact, sequence)
 	validateFactClassification(t, fact)
 	validateClosedFacts(t, sequence, fact.Facts)
+	validateRequiredFactEvidence(t, fact)
+}
+
+func validateRequiredFactEvidence(t *testing.T, fact factRecord) {
+	t.Helper()
+	if err := validateKindEvidence(factEvidenceInput(fact), fact.Sequence); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func factEvidenceInput(fact factRecord) Fact {
+	return Fact{
+		Kind: fact.Kind,
+		References: References{
+			Event: fact.Refs.Event, EventDigest: fact.Refs.EventDigest,
+			Handling: fact.Refs.Handling,
+		},
+		Fields: FactFields{
+			SemanticKind: fact.Facts.SemanticKind, Consequence: fact.Facts.Consequence,
+			Outcome: fact.Facts.Outcome, State: fact.Facts.State, Phase: fact.Facts.Phase,
+			PreferenceBefore: fact.Facts.PreferenceBefore, PreferenceAfter: fact.Facts.PreferenceAfter,
+			Result: fact.Facts.Result, Round: fact.Facts.Round, SampleSize: fact.Facts.SampleSize,
+			Alpha: fact.Facts.Alpha, VotesA: fact.Facts.VotesA, VotesB: fact.Facts.VotesB,
+			MarginBefore: fact.Facts.MarginBefore, MarginAfter: fact.Facts.MarginAfter,
+			Authenticated: fact.Facts.Authenticated, Recolored: fact.Facts.Recolored,
+		},
+	}
 }
 
 func validateFactIdentity(t *testing.T, fact factRecord, sequence int) {

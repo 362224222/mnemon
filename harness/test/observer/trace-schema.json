@@ -738,6 +738,198 @@
                 "truth"
               ]
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "r7.event.accepted"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "facts": {
+                    "required": [
+                      "semantic_kind",
+                      "consequence"
+                    ]
+                  },
+                  "refs": {
+                    "required": [
+                      "event",
+                      "event_digest"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "r7.handling.resolved"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "facts": {
+                    "properties": {
+                      "outcome": {
+                        "enum": [
+                          "completed",
+                          "declined",
+                          "unresolved"
+                        ]
+                      },
+                      "state": {
+                        "const": "terminal"
+                      }
+                    },
+                    "required": [
+                      "outcome",
+                      "state"
+                    ]
+                  },
+                  "refs": {
+                    "required": [
+                      "handling"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "r8.selection.seeded"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "facts": {
+                    "required": [
+                      "preference_after",
+                      "phase"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "r8.round.frozen"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "facts": {
+                    "required": [
+                      "round",
+                      "sample_size",
+                      "alpha",
+                      "preference_before",
+                      "margin_before"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "r8.vote.observed"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "facts": {
+                    "required": [
+                      "round",
+                      "votes_a",
+                      "votes_b",
+                      "authenticated"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "r8.round.settled"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "facts": {
+                    "required": [
+                      "round",
+                      "preference_before",
+                      "preference_after",
+                      "margin_before",
+                      "margin_after",
+                      "recolored",
+                      "phase"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "r8.observation.produced"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "facts": {
+                    "required": [
+                      "round",
+                      "result",
+                      "preference_after",
+                      "margin_after",
+                      "phase"
+                    ]
+                  }
+                }
+              }
+            }
           ]
         }
       ]

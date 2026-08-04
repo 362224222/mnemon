@@ -70,7 +70,70 @@ func (writer *Writer) validateFact(fact Fact, sequence int) (string, error) {
 	if err := validateFactFields(fact.Fields, sequence); err != nil {
 		return "", err
 	}
+	if err := validateKindEvidence(fact, sequence); err != nil {
+		return "", err
+	}
 	return canonicalTime(fmt.Sprintf("fact %d captured_at", sequence), fact.CapturedAt)
+}
+
+type kindEvidenceRule struct {
+	label string
+	valid func(Fact) bool
+}
+
+var kindEvidenceRules = map[string]kindEvidenceRule{
+	"r7.event.accepted":       {"accepted Event evidence", validAcceptedEventEvidence},
+	"r7.handling.resolved":    {"terminal Handling evidence", validResolvedHandlingEvidence},
+	"r8.selection.seeded":     {"seed preference evidence", validSelectionSeedEvidence},
+	"r8.round.frozen":         {"frozen round evidence", validFrozenRoundEvidence},
+	"r8.vote.observed":        {"vote evidence", validVoteEvidence},
+	"r8.round.settled":        {"settled round evidence", validSettledRoundEvidence},
+	"r8.observation.produced": {"preference observation", validPreferenceObservation},
+}
+
+func validateKindEvidence(fact Fact, sequence int) error {
+	rule, constrained := kindEvidenceRules[fact.Kind]
+	if !constrained || rule.valid(fact) {
+		return nil
+	}
+	return fmt.Errorf("trace writer: fact %d %s is required for %s",
+		sequence, rule.label, fact.Kind)
+}
+
+func validAcceptedEventEvidence(fact Fact) bool {
+	return fact.References.Event != "" && fact.References.EventDigest != "" &&
+		fact.Fields.SemanticKind != "" && fact.Fields.Consequence != ""
+}
+
+func validResolvedHandlingEvidence(fact Fact) bool {
+	return fact.References.Handling != "" && fact.Fields.State == "terminal" &&
+		slices.Contains([]string{"completed", "declined", "unresolved"}, fact.Fields.Outcome)
+}
+
+func validSelectionSeedEvidence(fact Fact) bool {
+	return fact.Fields.PreferenceAfter != "" && fact.Fields.Phase != ""
+}
+
+func validFrozenRoundEvidence(fact Fact) bool {
+	return fact.Fields.Round != nil && fact.Fields.SampleSize != nil &&
+		fact.Fields.Alpha != nil && fact.Fields.PreferenceBefore != "" &&
+		fact.Fields.MarginBefore != nil
+}
+
+func validVoteEvidence(fact Fact) bool {
+	return fact.Fields.Round != nil && fact.Fields.VotesA != nil &&
+		fact.Fields.VotesB != nil && fact.Fields.Authenticated != nil
+}
+
+func validSettledRoundEvidence(fact Fact) bool {
+	return fact.Fields.Round != nil && fact.Fields.PreferenceBefore != "" &&
+		fact.Fields.PreferenceAfter != "" && fact.Fields.MarginBefore != nil &&
+		fact.Fields.MarginAfter != nil && fact.Fields.Recolored != nil && fact.Fields.Phase != ""
+}
+
+func validPreferenceObservation(fact Fact) bool {
+	return fact.Fields.Round != nil && fact.Fields.Result != "" &&
+		fact.Fields.PreferenceAfter != "" && fact.Fields.MarginAfter != nil && fact.Fields.Phase != ""
 }
 
 func (writer *Writer) validateCauses(causes []string, sequence int) error {

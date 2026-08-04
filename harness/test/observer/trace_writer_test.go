@@ -139,6 +139,57 @@ func TestTraceWriterRejectsInconsistentTargetMetadata(t *testing.T) {
 	}
 }
 
+func TestTraceWriterRejectsKindsWithoutMinimumDisplayEvidence(t *testing.T) {
+	tests := []struct {
+		name string
+		fact Fact
+	}{
+		{"accepted Event", requiredEvidenceFact("trace:event", "r7.event.accepted")},
+		{"resolved Handling", requiredEvidenceFact("trace:resolved", "r7.handling.resolved")},
+		{"selection seed", requiredEvidenceFact("trace:seed", "r8.selection.seeded")},
+		{"frozen round", requiredEvidenceFact("trace:frozen", "r8.round.frozen")},
+		{"vote", requiredEvidenceFact("trace:vote", "r8.vote.observed")},
+		{"settled round", requiredEvidenceFact("trace:settled", "r8.round.settled")},
+		{"preference observation", requiredEvidenceFact("trace:observation", "r8.observation.produced")},
+	}
+	tests[0].fact.Fields.SemanticKind = ""
+	tests[1].fact.Fields.Outcome = ""
+	tests[2].fact.Fields.PreferenceAfter = ""
+	tests[3].fact.Fields.Alpha = nil
+	tests[4].fact.Fields.Authenticated = nil
+	tests[5].fact.Fields.Recolored = nil
+	tests[6].fact.Fields.Result = ""
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			writer := newTestWriter(t, &output)
+			written := output.Len()
+			if _, err := writer.Append(test.fact); err == nil || output.Len() != written {
+				t.Fatalf("append missing display evidence error = %v, bytes = %d want %d",
+					err, output.Len(), written)
+			}
+		})
+	}
+}
+
+func TestKindEvidenceRulesMatchClosedDisplayContract(t *testing.T) {
+	expected := []string{
+		"r7.event.accepted", "r7.handling.resolved", "r8.selection.seeded",
+		"r8.round.frozen", "r8.vote.observed", "r8.round.settled",
+		"r8.observation.produced",
+	}
+	if len(kindEvidenceRules) != len(expected) {
+		t.Fatalf("kind evidence rules = %d, want %d", len(kindEvidenceRules), len(expected))
+	}
+	for _, kind := range expected {
+		rule, exists := kindEvidenceRules[kind]
+		if !exists || rule.label == "" || rule.valid == nil {
+			t.Fatalf("kind evidence rule %q is missing or incomplete", kind)
+		}
+	}
+}
+
 func TestTraceWriterMakesOutputFailureTerminal(t *testing.T) {
 	destination := &failAfterFirstWrite{}
 	writer := newTestWriter(t, destination)
@@ -197,6 +248,28 @@ func testFact(id, kind string, source SourceClass, truth TruthClass) Fact {
 		ID: id, CapturedAt: testTime(2), Source: Source{Class: source, Node: "node-a"},
 		Agent: "agent-a", Turn: "turn-a", Kind: kind, Truth: truth,
 	}
+}
+
+func requiredEvidenceFact(id, kind string) Fact {
+	integer := 1
+	zero := 0
+	boolean := true
+	source, truth := SourceR7Authority, TruthAcceptedLocalFact
+	if strings.HasPrefix(kind, "r8.") {
+		source, truth = SourceR8Selector, TruthLocalPreference
+		if kind == "r8.vote.observed" {
+			truth = TruthObservation
+		}
+	}
+	fact := testFact(id, kind, source, truth)
+	fact.References = References{Event: "event:one", EventDigest: "sha256:" + strings.Repeat("1", 64),
+		Handling: "handling:one", Selection: "sha256:" + strings.Repeat("2", 64)}
+	fact.Fields = FactFields{SemanticKind: "work.result", Consequence: "handling.resolve.completed",
+		Outcome: "completed", State: "terminal", PreferenceBefore: "A", PreferenceAfter: "B",
+		Phase: "observed", Result: "threshold_reached", Round: &integer, SampleSize: &integer,
+		Alpha: &integer, VotesA: &zero, VotesB: &integer, MarginBefore: &zero,
+		MarginAfter: &integer, Authenticated: &boolean, Recolored: &boolean}
+	return fact
 }
 
 func testTime(second int) time.Time {
