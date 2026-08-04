@@ -126,6 +126,19 @@ func TestTraceWriterFailsClosedOnClassificationAndGateEvidence(t *testing.T) {
 	}
 }
 
+func TestTraceWriterRejectsInconsistentTargetMetadata(t *testing.T) {
+	var output bytes.Buffer
+	writer := newTestWriter(t, &output)
+	fact := testFact("trace:targets", "r7.event.accepted",
+		SourceR7Authority, TruthAcceptedLocalFact)
+	count := 2
+	fact.Fields.TargetCount = &count
+	fact.Fields.Targets = []string{"peer-a"}
+	if _, err := writer.Append(fact); err == nil {
+		t.Fatal("writer accepted a target count that did not match its bounded aliases")
+	}
+}
+
 func TestTraceWriterMakesOutputFailureTerminal(t *testing.T) {
 	destination := &failAfterFirstWrite{}
 	writer := newTestWriter(t, destination)

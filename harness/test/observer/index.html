@@ -472,9 +472,9 @@
     const FACT_FIELDS = Object.freeze([
       "action", "alpha", "artifact_count", "authenticated", "bypassed_hook", "byte_size",
       "code", "consequence", "duration_ms", "gate_id", "hook_cue", "invalid_votes",
-      "margin_after", "margin_before", "no_vote", "no_votes", "outcome", "phase",
+      "margin_after", "margin_before", "no_vote", "no_votes", "outcome", "payload_bytes", "phase",
       "preference_after", "preference_before", "recolored", "replayed", "result", "round",
-      "sample_size", "semantic_kind", "state", "status", "timed_out", "view_nonempty",
+      "sample_size", "semantic_kind", "state", "status", "target_count", "targets", "timed_out", "view_nonempty",
       "votes_a", "votes_b"
     ]);
     const FACT_CLASSIFICATION_ROWS = Object.freeze([
@@ -637,11 +637,11 @@
     }
 
     function validateRefs(refs, label) {
-      exactObject(refs, ["artifact", "correlation", "delivery", "event", "event_digest", "handling", "reference_head", "selection"], [], label);
+      exactObject(refs, ["artifact", "correlation", "delivery", "event", "event_digest", "handling", "principal", "reference_head", "selection"], [], label);
       optionalString(refs.artifact, DIGEST, label + ".artifact");
       optionalString(refs.event_digest, DIGEST, label + ".event_digest");
       optionalString(refs.selection, DIGEST, label + ".selection");
-      ["correlation", "delivery", "event", "handling", "reference_head"].forEach(key => optionalString(refs[key], TOKEN, label + "." + key));
+      ["correlation", "delivery", "event", "handling", "principal", "reference_head"].forEach(key => optionalString(refs[key], TOKEN, label + "." + key));
     }
 
     function validateFacts(facts, label) {
@@ -653,7 +653,7 @@
       if (facts.preference_after !== undefined) requireEnum(facts.preference_after, ["A", "B"], label + ".preference_after");
       if (facts.preference_before !== undefined) requireEnum(facts.preference_before, ["A", "B"], label + ".preference_before");
       if (facts.result !== undefined) requireEnum(facts.result, ["threshold_reached", "inconclusive"], label + ".result");
-      if (facts.state !== undefined) requireEnum(facts.state, ["open", "active", "pending", "settled", "expired", "retracted", "resolved"], label + ".state");
+      if (facts.state !== undefined) requireEnum(facts.state, ["open", "active", "pending", "settled", "expired", "retracted", "terminal"], label + ".state");
       if (facts.status !== undefined) requireEnum(facts.status, ["pass", "fail", "incomplete", "unknown", "not_applicable"], label + ".status");
       optionalInteger(facts.alpha, 1, 64, label + ".alpha");
       optionalInteger(facts.artifact_count, 0, 64, label + ".artifact_count");
@@ -661,12 +661,21 @@
       optionalInteger(facts.margin_after, -1024, 1024, label + ".margin_after");
       optionalInteger(facts.margin_before, -1024, 1024, label + ".margin_before");
       optionalInteger(facts.no_votes, 0, 64, label + ".no_votes");
+      optionalInteger(facts.payload_bytes, 0, 32768, label + ".payload_bytes");
       optionalInteger(facts.round, 0, 1024, label + ".round");
       optionalInteger(facts.sample_size, 0, 64, label + ".sample_size");
+      optionalInteger(facts.target_count, 0, 16, label + ".target_count");
       optionalInteger(facts.votes_a, 0, 64, label + ".votes_a");
       optionalInteger(facts.votes_b, 0, 64, label + ".votes_b");
       optionalInteger(facts.byte_size, 0, 16777216, label + ".byte_size");
       optionalInteger(facts.duration_ms, 0, 3600000, label + ".duration_ms");
+      if (facts.targets !== undefined) {
+        if (!Array.isArray(facts.targets) || facts.targets.length > 16) fail(label + ".targets", "must contain at most 16 targets");
+        facts.targets.forEach((target, index) => requireString(target, TOKEN, label + ".targets[" + index + "]"));
+      }
+      if (facts.target_count !== undefined && facts.target_count !== (facts.targets || []).length) {
+        fail(label + ".target_count", "must equal targets length");
+      }
       ["authenticated", "bypassed_hook", "hook_cue", "no_vote", "recolored", "replayed", "timed_out", "view_nonempty"].forEach(key => optionalBoolean(facts[key], label + "." + key));
       ["code", "gate_id", "semantic_kind"].forEach(key => optionalString(facts[key], TOKEN, label + "." + key));
     }
@@ -876,9 +885,10 @@
     function renderAgents(run) {
       const lanes = new Map();
       const visibleFacts = run.facts.slice(0, LIMITS.laneFacts);
+      const ordering = "Sequence is canonical evidence-emission order, not inferred wall-clock choreography; captured_at records each observation time.";
       setNotice(elements.agentNotice, visibleFacts.length < run.facts.length
-        ? "Rendering the first " + visibleFacts.length + " of " + run.facts.length + " facts by sequence; the remainder is intentionally truncated."
-        : "");
+        ? ordering + " Rendering the first " + visibleFacts.length + " of " + run.facts.length + " facts; the remainder is intentionally truncated."
+        : ordering);
       (run.header.participants || []).forEach(participant => lanes.set(participant.node, { participant, facts: [] }));
       visibleFacts.forEach(fact => {
         const key = fact.source.node;

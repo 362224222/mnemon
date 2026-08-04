@@ -100,7 +100,7 @@ func validateReferences(refs References, sequence int) error {
 		}
 	}
 	if !validOptionalTokens(refs.Correlation, refs.Delivery, refs.Event,
-		refs.Handling, refs.ReferenceHead) {
+		refs.Handling, refs.Principal, refs.ReferenceHead) {
 		return fmt.Errorf("trace writer: fact %d has invalid reference", sequence)
 	}
 	return nil
@@ -123,7 +123,7 @@ func validateFactFields(fields FactFields, sequence int) error {
 		{"preference_after", fields.PreferenceAfter, []string{"A", "B"}},
 		{"preference_before", fields.PreferenceBefore, []string{"A", "B"}},
 		{"result", fields.Result, []string{"threshold_reached", "inconclusive"}},
-		{"state", fields.State, []string{"open", "active", "pending", "settled", "expired", "retracted", "resolved"}},
+		{"state", fields.State, []string{"open", "active", "pending", "settled", "expired", "retracted", "terminal"}},
 		{"status", fields.Status, []string{"pass", "fail", "incomplete", "unknown", "not_applicable"}},
 	}
 	for _, check := range checks {
@@ -131,8 +131,12 @@ func validateFactFields(fields FactFields, sequence int) error {
 			return fmt.Errorf("trace writer: fact %d has invalid %s", sequence, check.name)
 		}
 	}
-	if !validOptionalTokens(fields.Code, fields.GateID, fields.SemanticKind) {
+	if !validOptionalTokens(fields.Code, fields.GateID, fields.SemanticKind) ||
+		len(fields.Targets) > 16 || !validOptionalTokens(fields.Targets...) {
 		return fmt.Errorf("trace writer: fact %d has invalid metadata token", sequence)
+	}
+	if fields.TargetCount != nil && *fields.TargetCount != len(fields.Targets) {
+		return fmt.Errorf("trace writer: fact %d has inconsistent target metadata", sequence)
 	}
 	integers := []struct {
 		name    string
@@ -145,8 +149,9 @@ func validateFactFields(fields FactFields, sequence int) error {
 		{"margin_after", fields.MarginAfter, -1024, 1024},
 		{"margin_before", fields.MarginBefore, -1024, 1024},
 		{"no_votes", fields.NoVotes, 0, 64}, {"round", fields.Round, 0, 1024},
+		{"payload_bytes", fields.PayloadBytes, 0, 32 << 10},
 		{"sample_size", fields.SampleSize, 0, 64}, {"votes_a", fields.VotesA, 0, 64},
-		{"votes_b", fields.VotesB, 0, 64},
+		{"votes_b", fields.VotesB, 0, 64}, {"target_count", fields.TargetCount, 0, 16},
 	}
 	for _, value := range integers {
 		if value.value != nil && (*value.value < value.minimum || *value.value > value.maximum) {

@@ -96,6 +96,11 @@
             "unresolved"
           ]
         },
+        "payload_bytes": {
+          "maximum": 32768,
+          "minimum": 0,
+          "type": "integer"
+        },
         "phase": {
           "enum": [
             "awaiting_seed",
@@ -148,7 +153,7 @@
             "settled",
             "expired",
             "retracted",
-            "resolved"
+            "terminal"
           ]
         },
         "status": {
@@ -159,6 +164,18 @@
             "unknown",
             "not_applicable"
           ]
+        },
+        "target_count": {
+          "maximum": 16,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/token"
+          },
+          "maxItems": 16,
+          "type": "array"
         },
         "timed_out": {
           "type": "boolean"
@@ -249,6 +266,9 @@
           "$ref": "#/$defs/digest"
         },
         "handling": {
+          "$ref": "#/$defs/token"
+        },
+        "principal": {
           "$ref": "#/$defs/token"
         },
         "reference_head": {

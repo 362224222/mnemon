@@ -83,43 +83,47 @@ type refsWire struct {
 	Event         string `json:"event,omitempty"`
 	EventDigest   string `json:"event_digest,omitempty"`
 	Handling      string `json:"handling,omitempty"`
+	Principal     string `json:"principal,omitempty"`
 	ReferenceHead string `json:"reference_head,omitempty"`
 	Selection     string `json:"selection,omitempty"`
 }
 
 type factsWire struct {
-	Action           string `json:"action,omitempty"`
-	Alpha            *int   `json:"alpha,omitempty"`
-	ArtifactCount    *int   `json:"artifact_count,omitempty"`
-	Authenticated    *bool  `json:"authenticated,omitempty"`
-	BypassedHook     *bool  `json:"bypassed_hook,omitempty"`
-	ByteSize         *int64 `json:"byte_size,omitempty"`
-	Code             string `json:"code,omitempty"`
-	Consequence      string `json:"consequence,omitempty"`
-	DurationMillis   *int64 `json:"duration_ms,omitempty"`
-	GateID           string `json:"gate_id,omitempty"`
-	HookCue          *bool  `json:"hook_cue,omitempty"`
-	InvalidVotes     *int   `json:"invalid_votes,omitempty"`
-	MarginAfter      *int   `json:"margin_after,omitempty"`
-	MarginBefore     *int   `json:"margin_before,omitempty"`
-	NoVote           *bool  `json:"no_vote,omitempty"`
-	NoVotes          *int   `json:"no_votes,omitempty"`
-	Outcome          string `json:"outcome,omitempty"`
-	Phase            string `json:"phase,omitempty"`
-	PreferenceAfter  string `json:"preference_after,omitempty"`
-	PreferenceBefore string `json:"preference_before,omitempty"`
-	Recolored        *bool  `json:"recolored,omitempty"`
-	Replayed         *bool  `json:"replayed,omitempty"`
-	Result           string `json:"result,omitempty"`
-	Round            *int   `json:"round,omitempty"`
-	SampleSize       *int   `json:"sample_size,omitempty"`
-	SemanticKind     string `json:"semantic_kind,omitempty"`
-	State            string `json:"state,omitempty"`
-	Status           string `json:"status,omitempty"`
-	TimedOut         *bool  `json:"timed_out,omitempty"`
-	ViewNonempty     *bool  `json:"view_nonempty,omitempty"`
-	VotesA           *int   `json:"votes_a,omitempty"`
-	VotesB           *int   `json:"votes_b,omitempty"`
+	Action           string   `json:"action,omitempty"`
+	Alpha            *int     `json:"alpha,omitempty"`
+	ArtifactCount    *int     `json:"artifact_count,omitempty"`
+	Authenticated    *bool    `json:"authenticated,omitempty"`
+	BypassedHook     *bool    `json:"bypassed_hook,omitempty"`
+	ByteSize         *int64   `json:"byte_size,omitempty"`
+	Code             string   `json:"code,omitempty"`
+	Consequence      string   `json:"consequence,omitempty"`
+	DurationMillis   *int64   `json:"duration_ms,omitempty"`
+	GateID           string   `json:"gate_id,omitempty"`
+	HookCue          *bool    `json:"hook_cue,omitempty"`
+	InvalidVotes     *int     `json:"invalid_votes,omitempty"`
+	MarginAfter      *int     `json:"margin_after,omitempty"`
+	MarginBefore     *int     `json:"margin_before,omitempty"`
+	NoVote           *bool    `json:"no_vote,omitempty"`
+	NoVotes          *int     `json:"no_votes,omitempty"`
+	Outcome          string   `json:"outcome,omitempty"`
+	PayloadBytes     *int     `json:"payload_bytes,omitempty"`
+	Phase            string   `json:"phase,omitempty"`
+	PreferenceAfter  string   `json:"preference_after,omitempty"`
+	PreferenceBefore string   `json:"preference_before,omitempty"`
+	Recolored        *bool    `json:"recolored,omitempty"`
+	Replayed         *bool    `json:"replayed,omitempty"`
+	Result           string   `json:"result,omitempty"`
+	Round            *int     `json:"round,omitempty"`
+	SampleSize       *int     `json:"sample_size,omitempty"`
+	SemanticKind     string   `json:"semantic_kind,omitempty"`
+	State            string   `json:"state,omitempty"`
+	Status           string   `json:"status,omitempty"`
+	TargetCount      *int     `json:"target_count,omitempty"`
+	Targets          []string `json:"targets,omitempty"`
+	TimedOut         *bool    `json:"timed_out,omitempty"`
+	ViewNonempty     *bool    `json:"view_nonempty,omitempty"`
+	VotesA           *int     `json:"votes_a,omitempty"`
+	VotesB           *int     `json:"votes_b,omitempty"`
 }
 
 type resultRecord struct {
@@ -396,7 +400,9 @@ func validateFactIdentity(t *testing.T, fact factRecord, sequence int) {
 
 func validateFactTokens(t *testing.T, fact factRecord, sequence int) {
 	t.Helper()
-	for _, value := range []string{fact.Agent, fact.Turn, fact.Facts.Code, fact.Facts.GateID, fact.Facts.SemanticKind} {
+	values := append([]string{fact.Agent, fact.Turn, fact.Facts.Code,
+		fact.Facts.GateID, fact.Facts.SemanticKind}, fact.Facts.Targets...)
+	for _, value := range values {
 		if value != "" && !validToken(value) {
 			t.Fatalf("fact %d has invalid token %q", sequence, value)
 		}
@@ -434,7 +440,7 @@ func validateFactReferences(t *testing.T, fact factRecord, sequence int) {
 		}
 	}
 	for _, value := range []string{fact.Refs.Correlation, fact.Refs.Delivery, fact.Refs.Event,
-		fact.Refs.Handling, fact.Refs.ReferenceHead} {
+		fact.Refs.Handling, fact.Refs.Principal, fact.Refs.ReferenceHead} {
 		if value != "" && !validToken(value) {
 			t.Fatalf("fact %d has invalid reference %q", sequence, value)
 		}
@@ -466,7 +472,7 @@ func validateClosedFacts(t *testing.T, sequence int, facts factsWire) {
 	checkEnum("preference_after", facts.PreferenceAfter, []string{"A", "B"})
 	checkEnum("preference_before", facts.PreferenceBefore, []string{"A", "B"})
 	checkEnum("result", facts.Result, []string{"threshold_reached", "inconclusive"})
-	checkEnum("state", facts.State, []string{"open", "active", "pending", "settled", "expired", "retracted", "resolved"})
+	checkEnum("state", facts.State, []string{"open", "active", "pending", "settled", "expired", "retracted", "terminal"})
 	checkEnum("status", facts.Status, []string{"pass", "fail", "incomplete", "unknown", "not_applicable"})
 	validateOptionalInt(t, sequence, "alpha", facts.Alpha, 1, 64)
 	validateOptionalInt(t, sequence, "artifact_count", facts.ArtifactCount, 0, 64)
@@ -474,12 +480,21 @@ func validateClosedFacts(t *testing.T, sequence int, facts factsWire) {
 	validateOptionalInt(t, sequence, "margin_after", facts.MarginAfter, -1024, 1024)
 	validateOptionalInt(t, sequence, "margin_before", facts.MarginBefore, -1024, 1024)
 	validateOptionalInt(t, sequence, "no_votes", facts.NoVotes, 0, 64)
+	validateOptionalInt(t, sequence, "payload_bytes", facts.PayloadBytes, 0, 32<<10)
 	validateOptionalInt(t, sequence, "round", facts.Round, 0, 1024)
 	validateOptionalInt(t, sequence, "sample_size", facts.SampleSize, 0, 64)
+	validateOptionalInt(t, sequence, "target_count", facts.TargetCount, 0, 16)
 	validateOptionalInt(t, sequence, "votes_a", facts.VotesA, 0, 64)
 	validateOptionalInt(t, sequence, "votes_b", facts.VotesB, 0, 64)
 	validateOptionalInt64(t, sequence, "byte_size", facts.ByteSize, 0, 16<<20)
 	validateOptionalInt64(t, sequence, "duration_ms", facts.DurationMillis, 0, 3600000)
+	if len(facts.Targets) > 16 {
+		t.Fatalf("fact %d targets exceed 16", sequence)
+	}
+	if facts.TargetCount != nil && *facts.TargetCount != len(facts.Targets) {
+		t.Fatalf("fact %d target count %d does not match %d targets",
+			sequence, *facts.TargetCount, len(facts.Targets))
+	}
 }
 
 func validateOptionalInt(t *testing.T, sequence int, name string, value *int, minimum, maximum int) {

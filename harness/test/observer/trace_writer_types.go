@@ -84,6 +84,7 @@ type References struct {
 	Event         string `json:"event,omitempty"`
 	EventDigest   string `json:"event_digest,omitempty"`
 	Handling      string `json:"handling,omitempty"`
+	Principal     string `json:"principal,omitempty"`
 	ReferenceHead string `json:"reference_head,omitempty"`
 	Selection     string `json:"selection,omitempty"`
 }
@@ -91,38 +92,41 @@ type References struct {
 // FactFields is the closed metadata vocabulary rendered by the observer.
 // Pointer scalars distinguish an observed zero or false value from absence.
 type FactFields struct {
-	Action           string `json:"action,omitempty"`
-	Alpha            *int   `json:"alpha,omitempty"`
-	ArtifactCount    *int   `json:"artifact_count,omitempty"`
-	Authenticated    *bool  `json:"authenticated,omitempty"`
-	BypassedHook     *bool  `json:"bypassed_hook,omitempty"`
-	ByteSize         *int64 `json:"byte_size,omitempty"`
-	Code             string `json:"code,omitempty"`
-	Consequence      string `json:"consequence,omitempty"`
-	DurationMillis   *int64 `json:"duration_ms,omitempty"`
-	GateID           string `json:"gate_id,omitempty"`
-	HookCue          *bool  `json:"hook_cue,omitempty"`
-	InvalidVotes     *int   `json:"invalid_votes,omitempty"`
-	MarginAfter      *int   `json:"margin_after,omitempty"`
-	MarginBefore     *int   `json:"margin_before,omitempty"`
-	NoVote           *bool  `json:"no_vote,omitempty"`
-	NoVotes          *int   `json:"no_votes,omitempty"`
-	Outcome          string `json:"outcome,omitempty"`
-	Phase            string `json:"phase,omitempty"`
-	PreferenceAfter  string `json:"preference_after,omitempty"`
-	PreferenceBefore string `json:"preference_before,omitempty"`
-	Recolored        *bool  `json:"recolored,omitempty"`
-	Replayed         *bool  `json:"replayed,omitempty"`
-	Result           string `json:"result,omitempty"`
-	Round            *int   `json:"round,omitempty"`
-	SampleSize       *int   `json:"sample_size,omitempty"`
-	SemanticKind     string `json:"semantic_kind,omitempty"`
-	State            string `json:"state,omitempty"`
-	Status           string `json:"status,omitempty"`
-	TimedOut         *bool  `json:"timed_out,omitempty"`
-	ViewNonempty     *bool  `json:"view_nonempty,omitempty"`
-	VotesA           *int   `json:"votes_a,omitempty"`
-	VotesB           *int   `json:"votes_b,omitempty"`
+	Action           string   `json:"action,omitempty"`
+	Alpha            *int     `json:"alpha,omitempty"`
+	ArtifactCount    *int     `json:"artifact_count,omitempty"`
+	Authenticated    *bool    `json:"authenticated,omitempty"`
+	BypassedHook     *bool    `json:"bypassed_hook,omitempty"`
+	ByteSize         *int64   `json:"byte_size,omitempty"`
+	Code             string   `json:"code,omitempty"`
+	Consequence      string   `json:"consequence,omitempty"`
+	DurationMillis   *int64   `json:"duration_ms,omitempty"`
+	GateID           string   `json:"gate_id,omitempty"`
+	HookCue          *bool    `json:"hook_cue,omitempty"`
+	InvalidVotes     *int     `json:"invalid_votes,omitempty"`
+	MarginAfter      *int     `json:"margin_after,omitempty"`
+	MarginBefore     *int     `json:"margin_before,omitempty"`
+	NoVote           *bool    `json:"no_vote,omitempty"`
+	NoVotes          *int     `json:"no_votes,omitempty"`
+	Outcome          string   `json:"outcome,omitempty"`
+	PayloadBytes     *int     `json:"payload_bytes,omitempty"`
+	Phase            string   `json:"phase,omitempty"`
+	PreferenceAfter  string   `json:"preference_after,omitempty"`
+	PreferenceBefore string   `json:"preference_before,omitempty"`
+	Recolored        *bool    `json:"recolored,omitempty"`
+	Replayed         *bool    `json:"replayed,omitempty"`
+	Result           string   `json:"result,omitempty"`
+	Round            *int     `json:"round,omitempty"`
+	SampleSize       *int     `json:"sample_size,omitempty"`
+	SemanticKind     string   `json:"semantic_kind,omitempty"`
+	State            string   `json:"state,omitempty"`
+	Status           string   `json:"status,omitempty"`
+	TargetCount      *int     `json:"target_count,omitempty"`
+	Targets          []string `json:"targets,omitempty"`
+	TimedOut         *bool    `json:"timed_out,omitempty"`
+	ViewNonempty     *bool    `json:"view_nonempty,omitempty"`
+	VotesA           *int     `json:"votes_a,omitempty"`
+	VotesB           *int     `json:"votes_b,omitempty"`
 }
 
 // Fact is one sanitized observation or committed effect. Sequence is assigned
