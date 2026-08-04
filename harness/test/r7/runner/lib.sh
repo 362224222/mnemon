@@ -149,12 +149,17 @@ r7_current() {
   r7_exec "$1" mnemon-harness agent current --json
 }
 
+r7_fresh_current() {
+  local node=$1
+  r7_attach "$node"
+  r7_current "$node"
+}
+
 r7_next_current() {
   local node=$1 attempts=${2:-40} view index
   index=1
   while test "$index" -le "$attempts"; do
-    r7_attach "$node"
-    view=$(r7_current "$node")
+    view=$(r7_fresh_current "$node")
     if printf '%s' "$view" | jq -e '.current != null' >/dev/null; then
       printf '%s\n' "$view"
       return 0

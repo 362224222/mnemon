@@ -5,16 +5,14 @@ r7_run_case() {
   local playbook_capture first_capture rework_capture revision_capture acceptance_capture
   local playbook_handle first_handle rework_handle revision_handle acceptance_handle intent
 
-  r7_attach implementer
-  view=$(r7_current implementer)
+  view=$(r7_fresh_current implementer)
   test "$(printf '%s' "$view" | jq -r '.current // "none"')" = none || \
     r7_fail "implementer did not begin with an empty View"
   initial_implementer=$view
 
   # Observe an empty reviewer View before the request. Its next Hook must
   # rotate that empty Current and reveal later-arriving work.
-  r7_attach reviewer
-  view=$(r7_current reviewer)
+  view=$(r7_fresh_current reviewer)
   test "$(printf '%s' "$view" | jq -r '.current // "none"')" = none || \
     r7_fail "reviewer did not begin with an empty View"
 

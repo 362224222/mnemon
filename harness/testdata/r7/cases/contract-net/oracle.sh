@@ -79,14 +79,12 @@ r7_run_case() {
   local award_capture award result_capture result
 
   for node in bidder-a bidder-b bidder-c; do
-    r7_attach "$node"
-    view=$(r7_current "$node")
+    view=$(r7_fresh_current "$node")
     test "$(printf '%s' "$view" | jq -r '.current // "none"')" = none || \
       r7_fail "$node did not begin with an empty View"
   done
 
-  r7_attach initiator
-  initial=$(r7_current initiator)
+  initial=$(r7_fresh_current initiator)
   test "$(printf '%s' "$initial" | jq -r '.current // "none"')" = none || \
     r7_fail "initiator did not begin with an empty View"
 
@@ -164,8 +162,7 @@ r7_run_case() {
   cost_b=$(awk -F= '$1 == "cost" { print $2 }' "$case_dir/artifacts/proposal-b.txt")
   test "$cost_b" -lt "$cost_a" || r7_fail "fixture no longer selects bidder-b"
 
-  r7_attach initiator
-  view=$(r7_current initiator)
+  view=$(r7_fresh_current initiator)
   test "$(printf '%s' "$view" | jq -r '.current // "none"')" = none || \
     r7_fail "initiator retained an unexpected response Handling"
   playbook_capture=$(r7_capture initiator "$case_dir/playbook.md")

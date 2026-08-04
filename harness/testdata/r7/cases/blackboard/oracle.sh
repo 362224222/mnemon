@@ -54,14 +54,12 @@ r7_run_case() {
   local verification_capture verification resolution_capture resolution
 
   for node in challenger verifier resolver; do
-    r7_attach "$node"
-    view=$(r7_current "$node")
+    view=$(r7_fresh_current "$node")
     test "$(printf '%s' "$view" | jq -r '.current // "none"')" = none || \
       r7_fail "$node did not begin with an empty View"
   done
 
-  r7_attach evidence
-  view=$(r7_current evidence)
+  view=$(r7_fresh_current evidence)
   test "$(printf '%s' "$view" | jq -r '.current // "none"')" = none || \
     r7_fail "evidence did not begin with an empty View"
 
@@ -73,10 +71,9 @@ r7_run_case() {
   receipt=$(r7_submit evidence "$intent")
   r7_expect_accepted "$receipt" "initial finding publication"
 
-  # A Reference Intent deliberately keeps the attachment usable. The next
-  # Current projects the newly accepted local head without inventing a second
-  # state store.
-  view=$(r7_current evidence)
+  # An accepted Reference ends its Host turn. A fresh turn projects the newly
+  # accepted local head without inventing a second state store.
+  view=$(r7_fresh_current evidence)
   head_v1=$(blackboard_reference_head "$view")
   reference_artifact=$(blackboard_reference_artifact "$view")
   test -n "$head_v1" && test -n "$reference_artifact" || \
@@ -150,7 +147,9 @@ r7_run_case() {
   receipt=$(r7_submit evidence "$intent")
   r7_expect_accepted "$receipt" "finding supersession"
 
-  view=$(r7_current evidence)
+  view=$(r7_fresh_current evidence)
+  subject=$(printf '%s' "$view" | jq -r '.current.facts.handle // empty')
+  test -n "$subject" || r7_fail "a fresh Handling was absent after supersession"
   head_v2=$(blackboard_reference_head "$view")
   reference_artifact=$(blackboard_reference_artifact "$view")
   test -n "$head_v2" && test "$head_v2" != "$head_v1" || \
@@ -163,7 +162,8 @@ r7_run_case() {
   # The old opaque head came from a different View and must fail closed. This
   # case does not inspect SQLite; the P-08 suite independently proves exact
   # CAS lineage. Here the public surface proves that stale authority cannot be
-  # carried forward by the Agent.
+  # carried forward by the Agent. Its rejection retains this exact View, so
+  # the valid Handling Intent below is an amended retry in the same Host turn.
   stale_capture=$(r7_capture evidence "$case_dir/artifacts/finding-v1.txt")
   stale_candidate=$(printf '%s' "$stale_capture" | jq -r .handle)
   intent=$(jq -cn --arg head "$head_v1" --arg finding "$stale_candidate" \
@@ -243,8 +243,7 @@ r7_run_case() {
   blackboard_receive_and_complete evidence "$case_dir/playbook.md" \
     "$case_dir/artifacts/resolution.txt" "evidence resolution observation"
 
-  r7_attach evidence
-  view=$(r7_current evidence)
+  view=$(r7_fresh_current evidence)
   test "$(printf '%s' "$view" | jq -r '.current // "none"')" = none || \
     r7_fail "evidence retained an unexpected Handling after resolution"
   head_v2=$(blackboard_reference_head "$view")
