@@ -43,7 +43,6 @@ agent_image=
 agent_image_id=
 agent_binary_digests=
 agent_containers=
-tar_flavor=
 turn_pids=()
 run_started_at=
 run_finished_at=
@@ -140,12 +139,6 @@ require_prerequisites() {
   esac
   command -v docker >/dev/null 2>&1 || fail 'docker is required'
   command -v jq >/dev/null 2>&1 || fail 'jq is required'
-  command -v tar >/dev/null 2>&1 || fail 'tar is required'
-  case "$(tar --version 2>&1)" in
-    *bsdtar*) tar_flavor=bsd ;;
-    *GNU\ tar*) tar_flavor=gnu ;;
-    *) fail 'BSD tar or GNU tar is required for immutable projections' ;;
-  esac
   command -v sqlite3 >/dev/null 2>&1 ||
     fail 'sqlite3 is required for the authority-state oracle'
   docker info >/dev/null 2>&1 || fail 'Docker Engine is unavailable'
@@ -206,25 +199,11 @@ prepare_workspace() {
   chmod 0444 "$projection_dir/AGENTS.md"
 }
 
-copy_immutable_projection() {
-  local role=$1 container=$2 projection_dir="$runtime_root/workspaces/$1"
-  # docker cp from a host path preserves the host UID on Docker Desktop.  Feed
-  # an explicit root-owned archive instead so a capability-free Runtime cannot
-  # rewrite its instructions.  bsdtar and GNU tar spell owner overrides
-  # differently; both paths emit the same ustar ownership and mode.
-  if test "$tar_flavor" = bsd; then
-    COPYFILE_DISABLE=1 tar -cf - --format ustar --no-xattrs --uid 0 --gid 0 \
-      -C "$projection_dir" AGENTS.md | docker cp - "$container:/workspace"
-  else
-    tar -cf - --format=ustar --no-xattrs --owner=0 --group=0 \
-      -C "$projection_dir" AGENTS.md | docker cp - "$container:/workspace"
-  fi
-}
-
 start_agent_container() {
-  local role=$1 container endpoint
+  local role=$1 container endpoint projection
   container=$(container_for "$role")
   endpoint=$(endpoint_for "$role")
+  projection="$runtime_root/workspaces/$role/AGENTS.md"
   # The name is deterministic and unique to this run. Register it before
   # creation so even a partially created container is covered by cleanup.
   agent_containers="$agent_containers $container"
@@ -232,6 +211,7 @@ start_agent_container() {
     --network "$control_network" --network-alias "$role" \
     --memory 1g --memory-swap 1g --cpus 1 --pids-limit 256 \
     --security-opt no-new-privileges:true --cap-drop ALL \
+    --mount "type=bind,src=$projection,dst=/workspace/AGENTS.md,readonly" \
     --env "DOMAIN_ROLE=$role" --env "DOMAIN_ENDPOINT=$endpoint" \
     "$agent_image" >/dev/null
   # Root creates only the non-secret parent. It is writable just long enough
@@ -239,7 +219,6 @@ start_agent_container() {
   # tightens the parent again before any Agent turn.
   docker exec -u 0 "$container" sh -c \
     'test ! -e /runtime || test -d /runtime; mkdir -p /runtime; chmod 0733 /runtime'
-  copy_immutable_projection "$role" "$container"
   docker network connect "${project}_${role}-ops" "$container"
   test "$(docker inspect --format '{{.Image}}' "$container")" = "$agent_image_id" ||
     fail "$role does not run the candidate Agent image"
@@ -249,8 +228,9 @@ start_agent_container() {
 }
 
 assert_agent_boundary() {
-  local role=$1 container expected actual leaked
+  local role=$1 container expected actual leaked projection
   container=$(container_for "$role")
+  projection="$runtime_root/workspaces/$role/AGENTS.md"
   expected=$(printf '%s\n%s\n' "$control_network" "${project}_${role}-ops" | sort |
     tr '\n' ',' | sed 's/,$//')
   actual=$(docker inspect --format \
@@ -258,9 +238,13 @@ assert_agent_boundary() {
     sed '/^$/d' | sort | tr '\n' ',' | sed 's/,$//')
   test "$actual" = "$expected" ||
     fail "$role Agent networks = $actual, want $expected"
-  docker inspect "$container" | jq -e '
+  docker inspect "$container" | jq -e --arg projection "$projection" '
     length == 1 and
-    (.[0].Mounts | length) == 0 and
+    (.[0].Mounts | length) == 1 and
+    .[0].Mounts[0].Type == "bind" and
+    .[0].Mounts[0].Source == $projection and
+    .[0].Mounts[0].Destination == "/workspace/AGENTS.md" and
+    .[0].Mounts[0].RW == false and
     .[0].HostConfig.Memory == 1073741824 and
     .[0].HostConfig.MemorySwap == 1073741824 and
     .[0].HostConfig.NanoCpus == 1000000000 and
@@ -270,14 +254,12 @@ assert_agent_boundary() {
   ' >/dev/null || fail "$role Agent received an unexpected mount or resource/security profile"
   docker exec "$container" sh -c '
     probe=/workspace/.projection-replace-probe
-    test "$(stat -c %u /workspace)" = 0 &&
-    test "$(stat -c %a /workspace)" = 1777 &&
-    test "$(stat -c %u /workspace/AGENTS.md)" = 0 &&
+    test "$(stat -c %u /workspace)" = "$(id -u)" &&
     test "$(stat -c %a /workspace/AGENTS.md)" = 444 &&
     printf probe >"$probe" &&
     ! mv -f "$probe" /workspace/AGENTS.md 2>/dev/null &&
+    ! sh -c "printf changed > /workspace/AGENTS.md" 2>/dev/null &&
     rm -f "$probe" &&
-    test "$(stat -c %u /workspace/AGENTS.md)" = 0 &&
     test "$(stat -c %a /workspace/AGENTS.md)" = 444
   ' || fail "$role Agent can replace its immutable workspace projection"
   leaked=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container" |
