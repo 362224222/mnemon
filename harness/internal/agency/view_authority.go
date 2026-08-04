@@ -2,7 +2,7 @@ package agency
 
 import "sort"
 
-const viewAuthorityVersion = 2
+const viewAuthorityVersion = 3
 
 // MachineViewSpec is the complete machine-owned authority behind one bounded
 // Agent View. Its typed offers prevent an opaque handle from being repurposed
@@ -13,6 +13,7 @@ type MachineViewSpec struct {
 	Subjects     []SubjectBinding
 	References   []ReferenceExpectation
 	Targets      []ResolvedTarget
+	ReplyTarget  TargetRef
 	Artifacts    []ViewArtifactOffer
 	Provenance   []ProvenanceOffer
 }
@@ -27,6 +28,7 @@ type ViewAuthority struct {
 	subjects     map[string]SubjectBinding
 	references   map[string]ReferenceExpectation
 	targets      map[string]ResolvedTarget
+	replyTarget  TargetRef
 	artifacts    map[string]ViewArtifactOffer
 	provenance   map[string]EventRef
 	canonical    []byte
@@ -107,12 +109,32 @@ func (view *ViewAuthority) load(spec MachineViewSpec) error {
 	if err := loadTargets(view.targets, spec.Targets, spec.Attachment); err != nil {
 		return err
 	}
+	if err := loadReplyTarget(&view.replyTarget, spec.ReplyTarget, view.subjects, view.targets); err != nil {
+		return err
+	}
 	if err := loadArtifacts(view.artifacts, spec.Artifacts); err != nil {
 		return err
 	}
 	if err := loadProvenance(view.provenance, spec.Provenance); err != nil {
 		return err
 	}
+	return nil
+}
+
+func loadReplyTarget(destination *TargetRef, requested TargetRef,
+	subjects map[string]SubjectBinding, targets map[string]ResolvedTarget,
+) error {
+	if requested.IsZero() {
+		return nil
+	}
+	if requested.IsSelf() || len(subjects) != 1 {
+		return invalid("View reply target", "requires one current subject and one remote alias")
+	}
+	resolved, offered := targets[requested.canonicalKey()]
+	if !offered || resolved.destination != TargetDestinationRemote || resolved.requested != requested {
+		return invariant("View reply target", "must be one exact offered remote target")
+	}
+	*destination = requested
 	return nil
 }
 
@@ -253,6 +275,7 @@ type machineViewWire struct {
 	Subjects        []viewSubjectWire         `json:"subjects,omitempty"`
 	References      []viewReferenceWire       `json:"references,omitempty"`
 	Targets         []viewTargetWire          `json:"targets,omitempty"`
+	ReplyTarget     *targetWire               `json:"reply_target,omitempty"`
 	Artifacts       []viewArtifactOfferWire   `json:"artifacts,omitempty"`
 	Provenance      []viewProvenanceOfferWire `json:"provenance,omitempty"`
 }
@@ -317,6 +340,9 @@ func (view ViewAuthority) wire() machineViewWire {
 			Requested: targetWire{Self: target.requested.self, Alias: target.requested.alias.String()},
 			Resolved:  target.resolvedWire(),
 		})
+	}
+	if !view.replyTarget.IsZero() {
+		wire.ReplyTarget = &targetWire{Alias: view.replyTarget.Alias().String()}
 	}
 	for handle, artifact := range view.artifacts {
 		wire.Artifacts = append(wire.Artifacts, viewArtifactOfferWire{Handle: handle, Digest: artifact.digest.String()})

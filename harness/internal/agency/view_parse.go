@@ -49,6 +49,9 @@ func machineViewSpecFromWire(wire machineViewWire, attachment Attachment) (Machi
 	if spec.Targets, err = parseViewTargets(wire.Targets); err != nil {
 		return MachineViewSpec{}, err
 	}
+	if spec.ReplyTarget, err = parseViewReplyTarget(wire.ReplyTarget); err != nil {
+		return MachineViewSpec{}, err
+	}
 	if spec.Artifacts, err = parseViewArtifacts(wire.Artifacts); err != nil {
 		return MachineViewSpec{}, err
 	}
@@ -56,6 +59,20 @@ func machineViewSpecFromWire(wire machineViewWire, attachment Attachment) (Machi
 		return MachineViewSpec{}, err
 	}
 	return spec, nil
+}
+
+func parseViewReplyTarget(wire *targetWire) (TargetRef, error) {
+	if wire == nil {
+		return TargetRef{}, nil
+	}
+	target, err := parseTarget(*wire)
+	if err != nil {
+		return TargetRef{}, err
+	}
+	if target.IsSelf() {
+		return TargetRef{}, invalid("View reply target", "must be a remote alias")
+	}
+	return target, nil
 }
 
 func parseViewConsequences(values []string) ([]Consequence, error) {

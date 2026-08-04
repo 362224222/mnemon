@@ -76,7 +76,7 @@ func assertGuideTerminalSurface(t *testing.T, guide string) {
 		"mnemon-harness artifact capture --json < PATH",
 		"mnemon-harness artifact read \"$HANDLE\"",
 		"mnemon-harness agent submit --json",
-		"VIEW_TARGET", "CURRENT_HANDLE", "CAPTURE_HANDLE",
+		"VIEW_TARGET", "VIEW_REPLY_TARGET", "CURRENT_HANDLE", "CAPTURE_HANDLE",
 	} {
 		if !strings.Contains(guide, required) {
 			t.Errorf("guide lacks complete, bounded terminal surface %q", required)

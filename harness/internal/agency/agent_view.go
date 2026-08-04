@@ -4,7 +4,7 @@ import "sort"
 
 const (
 	AgentViewSchema              = "mnemon.agent.view"
-	AgentViewVersion             = 3
+	AgentViewVersion             = 4
 	MaxAgentViewCanonicalBytes   = 16 << 10
 	MaxAgentViewReferences       = 8
 	MaxAgentViewCurrentArtifacts = MaxArtifactInputs
@@ -149,7 +149,7 @@ func (view AgentView) CanonicalJSON() []byte { return copyBytes(view.canonical) 
 func projectCurrent(spec *AgentViewCurrentSpec, authority ViewAuthority) (*agentViewCurrentWire, map[string]struct{}, error) {
 	artifacts := make(map[string]struct{})
 	if spec == nil {
-		if len(authority.subjects) != 0 {
+		if len(authority.subjects) != 0 || !authority.replyTarget.IsZero() {
 			return nil, nil, invariant("Agent View current", "sealed subject must be projected")
 		}
 		return nil, artifacts, nil
@@ -166,6 +166,10 @@ func projectCurrent(spec *AgentViewCurrentSpec, authority ViewAuthority) (*agent
 	if _, offered := authority.provenance[spec.ReplyTo.String()]; !offered {
 		return nil, nil, invariant("Agent View current", "reply-to was not offered as provenance")
 	}
+	replyTarget, err := projectReplyTarget(authority)
+	if err != nil {
+		return nil, nil, err
+	}
 	artifactWires := make([]agentViewArtifactWire, 0, len(spec.Artifacts))
 	for _, handle := range spec.Artifacts {
 		offer, offered := authority.artifacts[handle.String()]
@@ -181,9 +185,21 @@ func projectCurrent(spec *AgentViewCurrentSpec, authority ViewAuthority) (*agent
 	sort.Slice(artifactWires, func(i, j int) bool { return artifactWires[i].Handle < artifactWires[j].Handle })
 	return &agentViewCurrentWire{
 		Facts: agentViewCurrentFactsWire{Handle: spec.Subject.String(), ReplyTo: spec.ReplyTo.String(),
-			Artifacts: artifactWires},
+			ReplyTarget: replyTarget, Artifacts: artifactWires},
 		Semantic: agentViewSemanticWire{Kind: spec.Kind.String(), Payload: spec.Payload.String()},
 	}, artifacts, nil
+}
+
+func projectReplyTarget(authority ViewAuthority) (string, error) {
+	if authority.replyTarget.IsZero() {
+		return "", nil
+	}
+	resolved, offered := authority.targets[authority.replyTarget.canonicalKey()]
+	if !offered || resolved.destination != TargetDestinationRemote ||
+		resolved.requested != authority.replyTarget {
+		return "", invariant("Agent View reply target", "does not match sealed remote target authority")
+	}
+	return authority.replyTarget.Alias().String(), nil
 }
 
 func projectReferences(specs []AgentViewReferenceSpec, authority ViewAuthority) (
@@ -333,64 +349,4 @@ func allowedIntentShape(consequence Consequence) agentViewIntentShapeWire {
 
 func publicArtifactWire(handle OpaqueHandle, digest Digest) agentViewArtifactWire {
 	return agentViewArtifactWire{Handle: handle.String(), Digest: digest.String()}
-}
-
-type agentViewWire struct {
-	Schema         string                     `json:"schema"`
-	Version        int                        `json:"version"`
-	View           string                     `json:"view"`
-	Current        *agentViewCurrentWire      `json:"current,omitempty"`
-	RelatedOpen    []agentViewRelatedWire     `json:"related_open,omitempty"`
-	Outstanding    agentViewOutstandingWire   `json:"outstanding"`
-	References     []agentViewReferenceWire   `json:"references,omitempty"`
-	Targets        []string                   `json:"targets,omitempty"`
-	AllowedIntents []agentViewIntentShapeWire `json:"allowed_intents"`
-	Provenance     []string                   `json:"provenance_handles,omitempty"`
-}
-
-type agentViewCurrentWire struct {
-	Facts    agentViewCurrentFactsWire `json:"facts"`
-	Semantic agentViewSemanticWire     `json:"semantic"`
-}
-
-type agentViewCurrentFactsWire struct {
-	Handle    string                  `json:"handle"`
-	ReplyTo   string                  `json:"reply_to"`
-	Artifacts []agentViewArtifactWire `json:"artifacts,omitempty"`
-}
-
-type agentViewSemanticWire struct {
-	Kind    string `json:"kind"`
-	Payload string `json:"payload"`
-}
-
-type agentViewReferenceWire struct {
-	Facts agentViewReferenceFactsWire `json:"facts"`
-}
-
-type agentViewReferenceFactsWire struct {
-	Key              string                         `json:"key"`
-	Head             string                         `json:"head"`
-	State            string                         `json:"state"`
-	Artifact         *agentViewArtifactWire         `json:"artifact,omitempty"`
-	TerminalOutcomes *agentViewTerminalOutcomesWire `json:"terminal_outcomes,omitempty"`
-}
-
-type agentViewTerminalOutcomesWire struct {
-	Completed  int64 `json:"completed"`
-	Declined   int64 `json:"declined"`
-	Unresolved int64 `json:"unresolved"`
-}
-
-type agentViewArtifactWire struct {
-	Handle string `json:"handle"`
-	Digest string `json:"digest"`
-}
-
-type agentViewIntentShapeWire struct {
-	Consequence string `json:"consequence"`
-	Subject     string `json:"subject"`
-	Successors  string `json:"successors,omitempty"`
-	Reference   string `json:"reference,omitempty"`
-	Artifacts   string `json:"artifacts"`
 }

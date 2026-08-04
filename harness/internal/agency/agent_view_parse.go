@@ -106,6 +106,13 @@ func agentViewCurrentSpecFromWire(wire *agentViewCurrentWire, authority ViewAuth
 	if _, offered := authority.provenance[replyTo.String()]; !offered {
 		return nil, invariant("Agent View current", "reply-to does not match sealed provenance")
 	}
+	replyTarget, err := projectReplyTarget(authority)
+	if err != nil {
+		return nil, err
+	}
+	if wire.Facts.ReplyTarget != replyTarget {
+		return nil, invariant("Agent View current", "reply-target does not match sealed target authority")
+	}
 	kind, err := NewSemanticLabel(wire.Semantic.Kind)
 	if err != nil {
 		return nil, err

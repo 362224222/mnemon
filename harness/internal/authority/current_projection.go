@@ -78,18 +78,19 @@ func projectViewContentTx(ctx context.Context, tx *sql.Tx, principal agency.Agen
 	claim *projectedClaim, references []projectedReference, spec *agency.MachineViewSpec,
 	publicSpec *agency.AgentViewSpec,
 ) error {
-	var focusRoot agency.EventRef
+	var reply currentReplyContext
 	if claim != nil {
 		var err error
-		focusRoot, err = currentReplyRootTx(ctx, tx, claim.head)
+		reply, err = currentReplyContextTx(ctx, tx, claim.head)
 		if err != nil {
 			return err
 		}
-		if err := projectClaim(claim, focusRoot, spec, publicSpec); err != nil {
+		spec.ReplyTarget = reply.target
+		if err := projectClaim(claim, reply.root, spec, publicSpec); err != nil {
 			return err
 		}
 	}
-	related, outstanding, err := loadFocusProjectionTx(ctx, tx, principal, claim, focusRoot)
+	related, outstanding, err := loadFocusProjectionTx(ctx, tx, principal, claim, reply.root)
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,7 @@
 package authority
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,87 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
+
+func TestImportedCurrentProjectsOneAuthenticatedReplyTarget(t *testing.T) {
+	fixture := newPeerRoundTripFixture(t)
+	distractor := peerRouteSpec(t, fixture.receiver.principal, "distractor")
+	mustEnrollPeerRoute(t, fixture.receiver, distractor)
+
+	requestDelivery := fixture.admitOrigin(t)
+	local := decodeFocusView(t, fixture.origin.current(t))
+	if local.Current == nil || local.Current.Facts.ReplyTarget != "" {
+		t.Fatalf("local current reply target = %#v, want omitted", local.Current)
+	}
+	fixture.admitReceiver(t, requestDelivery)
+	operation, err := NewCurrentOperation(mustOperation(t, "operation:authenticated-reply-target"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiverView, err := fixture.receiver.store.Current(fixture.receiver.ctx,
+		fixture.receiver.proof, operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	public := decodeFocusView(t, receiverView)
+	if public.Current == nil ||
+		public.Current.Facts.ReplyTarget != fixture.receiverRoute.PublicAlias.String() {
+		t.Fatalf("imported current reply target = %#v, want %s",
+			public.Current, fixture.receiverRoute.PublicAlias.String())
+	}
+	if !containsString(public.Targets, fixture.receiverRoute.PublicAlias.String()) ||
+		!containsString(public.Targets, distractor.PublicAlias.String()) {
+		t.Fatalf("projected targets = %v, want reply and distractor aliases", public.Targets)
+	}
+	for _, private := range []string{fixture.receiverRoute.RouteID.String(),
+		fixture.receiverRoute.RemotePeerID.String(), fixture.receiverRoute.RemoteTargetAlias.String()} {
+		if bytes.Contains(receiverView.AgentView().CanonicalJSON(), []byte(private)) {
+			t.Fatalf("public reply target projection exposed private route authority %q", private)
+		}
+	}
+
+	mutated := bytes.Replace(receiverView.AgentView().CanonicalJSON(),
+		[]byte(`"reply_target":"`+fixture.receiverRoute.PublicAlias.String()+`"`),
+		[]byte(`"reply_target":"`+distractor.PublicAlias.String()+`"`), 1)
+	if bytes.Equal(mutated, receiverView.AgentView().CanonicalJSON()) {
+		t.Fatal("reply target mutation fixture did not change the public View")
+	}
+	if _, err := agency.ParseAgentViewCanonicalJSON(mutated, receiverView.authority); !errors.Is(err, agency.ErrInvariant) {
+		t.Fatalf("alternate offered reply target error = %v, want ErrInvariant", err)
+	}
+	replayed, err := fixture.receiver.store.ReplayCurrent(fixture.receiver.ctx,
+		fixture.receiver.proof, operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decodeFocusView(t, replayed); got.Current == nil ||
+		got.Current.Facts.ReplyTarget != fixture.receiverRoute.PublicAlias.String() {
+		t.Fatalf("replayed imported reply target = %#v", got.Current)
+	}
+
+	t.Run("revoked route is not offered", func(t *testing.T) {
+		fixture := newPeerRoundTripFixture(t)
+		delivery := fixture.admitOrigin(t)
+		fixture.admitReceiver(t, delivery)
+		if _, err := fixture.receiver.store.RevokePeerRoute(fixture.receiver.ctx,
+			fixture.receiverRoute.RouteID); err != nil {
+			t.Fatal(err)
+		}
+		view := decodeFocusView(t, fixture.receiver.current(t))
+		if view.Current == nil || view.Current.Facts.ReplyTarget != "" ||
+			containsString(view.Targets, fixture.receiverRoute.PublicAlias.String()) {
+			t.Fatalf("revoked route projection = current:%#v targets:%v", view.Current, view.Targets)
+		}
+	})
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
 
 func TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult(t *testing.T) {
 	fixture := newPeerRoundTripFixture(t)
@@ -179,10 +261,11 @@ func admitCorrelatedPeerResponse(t *testing.T, fixture *peerRoundTripFixture,
 	receiverView := fixture.receiver.current(t)
 	receiverPublic := decodeFocusView(t, receiverView)
 	if receiverPublic.Current == nil || receiverPublic.Current.Facts.ReplyTo == "" ||
-		receiverPublic.Current.Facts.ReplyTo == receiverPublic.Current.Facts.Handle {
+		receiverPublic.Current.Facts.ReplyTo == receiverPublic.Current.Facts.Handle ||
+		receiverPublic.Current.Facts.ReplyTarget != fixture.receiverRoute.PublicAlias.String() {
 		t.Fatal("receiver did not claim the imported request")
 	}
-	remote, err := agency.AliasTarget(fixture.receiverRoute.PublicAlias)
+	remote, err := agency.AliasTarget(mustHandle(t, receiverPublic.Current.Facts.ReplyTarget))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,8 +327,9 @@ func admitSignedResponse(t *testing.T, fixture *peerRoundTripFixture, delivery a
 type focusViewWire struct {
 	Current *struct {
 		Facts struct {
-			Handle  string `json:"handle"`
-			ReplyTo string `json:"reply_to"`
+			Handle      string `json:"handle"`
+			ReplyTo     string `json:"reply_to"`
+			ReplyTarget string `json:"reply_target"`
 		} `json:"facts"`
 		Semantic struct {
 			Kind    string `json:"kind"`
@@ -268,6 +352,7 @@ type focusViewWire struct {
 		RelatedProjected int  `json:"related_projected"`
 		Truncated        bool `json:"truncated"`
 	} `json:"outstanding"`
+	Targets []string `json:"targets"`
 }
 
 func decodeFocusView(t *testing.T, view BoundView) focusViewWire {

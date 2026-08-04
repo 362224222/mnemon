@@ -316,11 +316,15 @@ exception to revalidating mutable authority.
 
 An Agent View has at most one writable `current`. Its `reply_to` is a
 provenance-only handle for one machine-derived stable correlation root. A
-bounded `related_open` projection may show locally accepted open Events whose
-correlation equals that root, but it exposes no Handling handle, fence, claim,
-or second writable subject. `outstanding` reports the exact local open and
-related counts, the projected prefix, and whether evidence was truncated.
-Semantic `kind` never changes these projection rules.
+directly imported current may also carry `reply_target`: the machine-derived
+public alias of its authenticated immediate sender, sealed as one exact offered
+remote target. It is absent for local work and unavailable routes, and exposes
+no RouteID, PeerID, remote target alias, or Principal. A bounded `related_open`
+projection may show locally accepted open Events whose correlation equals that
+root, but it exposes no Handling handle, fence, claim, or second writable
+subject. `outstanding` reports the exact local open and related counts, the
+projected prefix, and whether evidence was truncated. Semantic `kind` never
+changes these projection rules.
 
 **P-02 Open labels, closed structure.**
 `kind` and a first-publish `reference_key` are bounded opaque labels with no
@@ -423,10 +427,12 @@ completed.
 An accepted Event's correlation is copied unchanged into PeerDelivery. For an
 imported current Event, the receiving View derives `reply_to` from the
 authenticated origin correlation, or from the origin Event when none exists.
-The next local Intent can therefore preserve one conversation root without a
-transport rewrite. A returning delivery is re-admitted as a new local Event;
-only then may it appear as read-only related evidence beside the origin
-Handling.
+When the immediate inbound route remains active, the same View independently
+derives `reply_target` from that inbox route's public alias. The next local
+Intent can therefore preserve one conversation root and address its
+authenticated sender without a transport rewrite or semantic target inference.
+A returning delivery is re-admitted as a new local Event; only then may it
+appear as read-only related evidence beside the origin Handling.
 
 **P-07 Exactly-once effect.**
 Every attachment-begin request, CurrentRequest, AdmissionRequest, and machine disposition carries a
@@ -449,9 +455,10 @@ ended boundary rejects a later attachment-begin replay rather than reopening
 its authority. A retrying Host reuses one nonce, so response loss cannot create
 a second attachment.
 
-The frozen View includes its exact `current`, `reply_to`, related prefix,
-outstanding counts, and Reference evidence. Later Events never appear in an
-exact Current replay; only a fresh Current operation may project them.
+The frozen View includes its exact `current`, `reply_to`, optional
+`reply_target`, related prefix, outstanding counts, and Reference evidence.
+Later Events never appear in an exact Current replay; only a fresh Current
+operation may project them.
 
 **P-08 CAS lineage.**
 The first `reference.publish` supplies a bounded opaque `reference_key`

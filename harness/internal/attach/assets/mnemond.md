@@ -14,6 +14,14 @@ Use one loop:
 View -> Intent -> Receipt
 ```
 
+One eligible Host turn owns exactly one Attachment and may submit at most one
+Intent. Never invoke `hook attach` or `hook end`; only the installed Runtime
+extension owns those lifecycle commands. Use ordinary local tools before the
+Intent when evidence is needed. After the Intent returns a Receipt, perform no
+further mnemond mutation in that turn. If one semantic request needs several
+participants, express it as one Event with all bounded successors offered by
+the View; leave later actions to later natural turns.
+
 This guide and the current View are the complete Agent-facing protocol surface;
 do not search the filesystem for another guide or discover protocol state
 through setup, peer, status, or help commands. `mnemon-harness` is already on
@@ -30,13 +38,17 @@ printf '%s' "$INTENT_JSON" | mnemon-harness agent submit --json
 Choose meaning, targets, and consequences from the current task and View. The
 commands only transport that decision; they do not prescribe task semantics.
 Targets shown by the View are already usable aliases; no peer discovery or
-enrollment step is needed. These are syntax illustrations only—replace every
+enrollment step is needed. A remote peer cannot invoke your local tools. When
+an Event relies on a local observation, carry only the minimum bounded evidence
+needed to evaluate that claim; merely saying that evidence exists is not
+evidence. These are syntax illustrations only—replace every
 all-capital placeholder with bounded values from the task, current View, or a
 capture Receipt:
 
 ```json
 {"kind":"MEANING","payload":"BRIEF","consequence":"handling.create","successors":[{"self":true},{"alias":"VIEW_TARGET"}]}
 {"kind":"MEANING","payload":"BRIEF","consequence":"handling.advance","subject_handling":"CURRENT_HANDLE"}
+{"kind":"MEANING","payload":"BOUNDED_RESULT","consequence":"handling.advance","subject_handling":"CURRENT_HANDLE","successors":[{"alias":"VIEW_REPLY_TARGET"}],"correlation_handle":"VIEW_REPLY_TO","artifacts":[{"kind":"candidate","handle":"CAPTURE_HANDLE"}]}
 {"kind":"MEANING","payload":"BRIEF","consequence":"reference.publish","reference_key":"NEW_KEY","artifacts":[{"kind":"candidate","handle":"CAPTURE_HANDLE"}]}
 ```
 
@@ -115,6 +127,12 @@ but it is never a second writable subject. mnemond derives it from accepted
 local or authenticated peer provenance and copies the resulting correlation
 unchanged across delivery. A returned Event can therefore appear as related
 evidence beside the origin responsibility without transport rewriting it.
+
+For an imported current, optional `facts.reply_target` is the machine-derived
+public alias of its authenticated sender. When present, it is also a View
+`target`; use that exact alias to respond without guessing. It is absent for
+local work or an unavailable route. `reply_target` chooses a destination;
+`reply_to` preserves correlation. Neither grants remote authority.
 
 Never supply identity, source, time, digest, operation, attachment, fence,
 revision, authority, accepted state, or completion state. Never alter, guess,

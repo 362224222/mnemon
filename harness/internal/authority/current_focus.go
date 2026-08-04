@@ -10,59 +10,90 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
-// currentReplyRootTx freezes one stable correlation root. Local work replies
-// to its current accepted Event. Imported work replies to the authenticated
-// remote correlation, or to the remote origin Event when none was supplied.
-func currentReplyRootTx(ctx context.Context, tx *sql.Tx, current agency.EventRef) (agency.EventRef, error) {
+type currentReplyContext struct {
+	root   agency.EventRef
+	target agency.TargetRef
+}
+
+// currentReplyContextTx freezes the stable correlation root and, for a directly
+// imported current Event on an active route, the exact public alias that can
+// carry a response to its authenticated sender. Route and peer identity remain
+// private authority and never enter the Agent View.
+func currentReplyContextTx(ctx context.Context, tx *sql.Tx,
+	current agency.EventRef,
+) (currentReplyContext, error) {
 	details, err := loadStoredEventDetailsTx(ctx, tx, current.ID().String())
 	if err != nil || details.ref != current {
-		return agency.EventRef{}, errors.New("current View: corrupt current reply root")
+		return currentReplyContext{}, errors.New("current View: corrupt current reply context")
 	}
-	if !details.correlation.IsZero() {
-		return details.correlation, nil
-	}
-	delivery, imported, err := peerDeliveryForLocalEventTx(ctx, tx, current)
+	delivery, route, imported, err := peerDeliveryForLocalEventTx(ctx, tx, current)
 	if err != nil {
-		return agency.EventRef{}, err
+		return currentReplyContext{}, err
 	}
-	if !imported {
-		return current, nil
+	result := currentReplyContext{root: current}
+	if !details.correlation.IsZero() {
+		result.root = details.correlation
+	} else if imported {
+		if correlation, present := delivery.OriginCorrelation(); present {
+			result.root = correlation
+		} else {
+			result.root = delivery.OriginEvent()
+		}
 	}
-	if correlation, present := delivery.OriginCorrelation(); present {
-		return correlation, nil
+	if !imported || !route.Active() {
+		return result, nil
 	}
-	return delivery.OriginEvent(), nil
+	result.target, err = agency.AliasTarget(route.PublicAlias())
+	if err != nil {
+		return currentReplyContext{}, errors.New("current View: corrupt reply target alias")
+	}
+	return result, nil
 }
 
 func peerDeliveryForLocalEventTx(ctx context.Context, tx *sql.Tx,
 	local agency.EventRef,
-) (agency.PeerDelivery, bool, error) {
-	var value string
-	err := tx.QueryRowContext(ctx, `SELECT delivery_id FROM peer_inbox
-		WHERE local_event_id = ?`, local.ID().String()).Scan(&value)
+) (agency.PeerDelivery, PeerRouteProjection, bool, error) {
+	var deliveryValue, routeValue string
+	err := tx.QueryRowContext(ctx, `SELECT delivery_id, route_id FROM peer_inbox
+		WHERE local_event_id = ?`, local.ID().String()).Scan(&deliveryValue, &routeValue)
 	if errors.Is(err, sql.ErrNoRows) {
-		return agency.PeerDelivery{}, false, nil
+		return agency.PeerDelivery{}, PeerRouteProjection{}, false, nil
 	}
 	if err != nil {
-		return agency.PeerDelivery{}, false, fmt.Errorf("current View: inspect imported Event: %w", err)
+		return agency.PeerDelivery{}, PeerRouteProjection{}, false,
+			fmt.Errorf("current View: inspect imported Event: %w", err)
 	}
-	deliveryID, err := agency.ParseDeliveryID(value)
+	deliveryID, err := agency.ParseDeliveryID(deliveryValue)
 	if err != nil {
-		return agency.PeerDelivery{}, false, errors.New("current View: corrupt imported Delivery ID")
+		return agency.PeerDelivery{}, PeerRouteProjection{}, false,
+			errors.New("current View: corrupt imported Delivery ID")
+	}
+	routeID, err := agency.NewRouteID(routeValue)
+	if err != nil {
+		return agency.PeerDelivery{}, PeerRouteProjection{}, false,
+			errors.New("current View: corrupt imported Route ID")
+	}
+	route, found, err := peerRouteByIDTx(ctx, tx, routeID)
+	if err != nil || !found {
+		return agency.PeerDelivery{}, PeerRouteProjection{}, false,
+			errors.New("current View: imported Event route authority is absent")
 	}
 	result, found, err := peerInboxResultTx(ctx, tx, deliveryID)
 	if err != nil || !found || result.State() != PeerAdmissionStateAccepted {
-		return agency.PeerDelivery{}, false, errors.New("current View: corrupt imported Event authority")
+		return agency.PeerDelivery{}, PeerRouteProjection{}, false,
+			errors.New("current View: corrupt imported Event authority")
 	}
 	receipt, present := result.Receipt()
 	if !present {
-		return agency.PeerDelivery{}, false, errors.New("current View: imported Event Receipt is absent")
+		return agency.PeerDelivery{}, PeerRouteProjection{}, false,
+			errors.New("current View: imported Event Receipt is absent")
 	}
 	receiptEvent, accepted := receipt.LocalEvent()
 	if !accepted || receiptEvent != local {
-		return agency.PeerDelivery{}, false, errors.New("current View: imported Event Receipt diverges")
+		return agency.PeerDelivery{}, PeerRouteProjection{}, false,
+			errors.New("current View: imported Event Receipt diverges")
 	}
-	return result.Delivery(), true, nil
+	return result.Delivery(), route, true, nil
 }
 
 type projectedRelated struct {
