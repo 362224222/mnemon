@@ -27,6 +27,7 @@ turn_seconds=${DOMAIN_OPS_TURN_SECONDS:-150}
 rounds=${DOMAIN_OPS_ROUNDS:-3}
 persisted_evidence_max_bytes=$((8 * 1024 * 1024))
 persisted_evidence_max_blocks=$((persisted_evidence_max_bytes / 1024))
+submit_attempts_max=8
 peer_quiescence_seconds=30
 report_path=${DOMAIN_OPS_REPORT:-$repository_root/.testdata/r7-domain-ops-live/last-report.json}
 trace_path=${DOMAIN_OPS_TRACE:-$repository_root/.testdata/r7-domain-ops-live/last.trace}
@@ -425,6 +426,7 @@ write_key_once() {
 sanitize_turn() {
   local role=$1 tag=$2 raw=$3 output=$4
   jq -s -e --arg role "$role" --arg turn "$tag" \
+    --argjson submit_attempts_max "$submit_attempts_max" \
     --arg captured_at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" '
     def command: (.args.command // "");
     def invocation_pattern($verb):
@@ -434,7 +436,30 @@ sanitize_turn() {
     def invokes($verb):
       (invocation_count($verb) > 0);
     def result_objects:
-      [(.result | .. | strings | fromjson? | select(type == "object"))];
+      [(.result | .. | strings | split("\n")[] | fromjson? |
+        select(type == "object"))];
+    def valid_receipt:
+      .schema == "mnemon.agent.receipt" and .version == 1 and
+      (.replayed | type == "boolean") and
+      ((.outcome == "accepted" and
+        (keys | sort) == ["outcome", "replayed", "schema", "version"]) or
+       (.outcome == "rejected" and
+        (keys | sort) == ["diagnostic", "outcome", "replayed", "schema", "version"] and
+        (.diagnostic | type == "string" and utf8bytelength > 0 and
+          utf8bytelength <= 512)));
+    def valid_control_error:
+      (keys | sort) == ["code", "message", "operation_id", "replayed", "retryable",
+        "schema_version", "status"] and
+      .schema_version == 1 and .status == "error" and .operation_id == null and
+      .replayed == false and
+      (.message | type == "string" and utf8bytelength > 0 and utf8bytelength <= 512) and
+      (.code as $code | [
+        "invalid_argument", "content_required", "content_too_large", "artifact_invalid",
+        "artifact_too_large", "authentication_failed", "context_required", "context_stale",
+        "asset_revision_mismatch", "action_not_allowed", "operation_mismatch",
+        "operation_pending", "mnemond_unavailable", "internal"
+      ] | index($code) != null) and
+      (.retryable == (.code == "operation_pending" or .code == "mnemond_unavailable"));
     def belongs($ids):
       (.toolCallId // null) as $id |
       $id != null and (($ids | index($id)) != null);
@@ -462,18 +487,17 @@ sanitize_turn() {
           (.view | type == "string" and length > 0)))] | length),
       submit_attempts: ([$submit_starts[] | invocation_count("submit")] | add // 0),
       intent_submits: ([$stream[] | select(
-        .type == "tool_execution_end" and .toolName == "bash" and belongs($submit_calls) and
-        ([result_objects[] | select(.schema == "mnemon.agent.receipt" and .version == 1 and
-          (.outcome == "accepted" or .outcome == "rejected"))] | length) == 1)] | length),
+        .type == "tool_execution_end" and .toolName == "bash" and belongs($submit_calls)) |
+        result_objects[] | select(valid_receipt)] | length),
       accepted_receipts: ([$stream[] | select(
-        .type == "tool_execution_end" and .toolName == "bash" and .isError == false and
-        belongs($submit_calls) and
-        any(result_objects[]; .schema == "mnemon.agent.receipt" and .version == 1 and
-          .outcome == "accepted"))] | length),
+        .type == "tool_execution_end" and .toolName == "bash" and belongs($submit_calls)) |
+        result_objects[] | select(valid_receipt and .outcome == "accepted")] | length),
       rejected_receipts: ([$stream[] | select(
-        .type == "tool_execution_end" and .toolName == "bash" and belongs($submit_calls) and
-        any(result_objects[]; .schema == "mnemon.agent.receipt" and .version == 1 and
-          .outcome == "rejected"))] | length),
+        .type == "tool_execution_end" and .toolName == "bash" and belongs($submit_calls)) |
+        result_objects[] | select(valid_receipt and .outcome == "rejected")] | length),
+      submit_denials: ([$stream[] | select(
+        .type == "tool_execution_end" and .toolName == "bash" and belongs($submit_calls)) |
+        result_objects[] | select(valid_control_error)] | length),
       private_binding_probes: ([$stream[] | select(.type == "tool_execution_start" and
         .toolName == "bash" and
         (command | test("DEEPSEEK|API_KEY|printenv|auth\\.json|provider-key")))] | length),
@@ -486,9 +510,10 @@ sanitize_turn() {
         (($assistant_ends[-1].message.stopReason // "") != "aborted") and
         .private_binding_probes == 0 and
         .agent_end == true and
-        .submit_attempts <= 1 and
-        .intent_submits == .submit_attempts and
-        (.accepted_receipts + .rejected_receipts) == .submit_attempts)
+        .submit_attempts <= $submit_attempts_max and
+        .accepted_receipts <= 1 and
+        (.accepted_receipts + .rejected_receipts) == .intent_submits and
+        (.intent_submits + .submit_denials) == .submit_attempts)
   ' "$raw" >"$output" || return 1
   jq -s -e '
     all(.[] | select(.type == "tool_execution_start" and .toolName == "bash");
@@ -501,6 +526,22 @@ summarize_partial_turn() {
   jq -s -c '
     def command: (.args.command // "");
     def result_strings: (.result | .. | strings);
+    def result_objects:
+      [(.result | .. | strings | split("\n")[] | fromjson? |
+        select(type == "object"))];
+    def valid_control_error:
+      (keys | sort) == ["code", "message", "operation_id", "replayed", "retryable",
+        "schema_version", "status"] and
+      .schema_version == 1 and .status == "error" and .operation_id == null and
+      .replayed == false and
+      (.message | type == "string" and utf8bytelength > 0 and utf8bytelength <= 512) and
+      (.code as $code | [
+        "invalid_argument", "content_required", "content_too_large", "artifact_invalid",
+        "artifact_too_large", "authentication_failed", "context_required", "context_stale",
+        "asset_revision_mismatch", "action_not_allowed", "operation_mismatch",
+        "operation_pending", "mnemond_unavailable", "internal"
+      ] | index($code) != null) and
+      (.retryable == (.code == "operation_pending" or .code == "mnemond_unavailable"));
     {
       stream_records:length,
       record_types:(reduce .[] as $record ({};
@@ -530,6 +571,8 @@ summarize_partial_turn() {
         .toolName == "bash" and any(result_strings;
           contains("\"schema\":\"mnemon.agent.receipt\"") and
           contains("\"outcome\":\"rejected\"")))] | length),
+      submit_denials:([.[] | select(.type == "tool_execution_end" and
+        .toolName == "bash") | result_objects[] | select(valid_control_error)] | length),
       hook_cues:([.[] | select(
         (.type == "message_start" or .type == "message_end") and
         .message.role == "custom" and .message.customType == "mnemond")] | length),

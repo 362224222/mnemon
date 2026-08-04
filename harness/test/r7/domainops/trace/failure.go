@@ -81,16 +81,18 @@ func validateCompletedTurnSubset(turns []turnSummary) error {
 		seen[turn.Turn] = struct{}{}
 		values := []int{turn.HookCues, turn.BashCalls, turn.CurrentReads, turn.SubmitAttempts,
 			turn.IntentSubmits,
-			turn.AcceptedReceipts, turn.RejectedReceipts, turn.PrivateBindingProbes}
+			turn.AcceptedReceipts, turn.RejectedReceipts, turn.SubmitDenials,
+			turn.PrivateBindingProbes}
 		if _, err := parseReportTime("turn captured_at", turn.CapturedAt); err != nil {
 			return err
 		}
 		if !turn.AgentEnd || turn.HookCues < 1 || slices.ContainsFunc(values,
 			func(value int) bool { return value < 0 || value > 256 }) ||
 			turn.PrivateBindingProbes != 0 || turn.CurrentReads > turn.BashCalls ||
-			turn.SubmitAttempts > 1 || turn.SubmitAttempts > turn.BashCalls ||
-			turn.IntentSubmits != turn.SubmitAttempts ||
-			turn.IntentSubmits != turn.AcceptedReceipts+turn.RejectedReceipts {
+			turn.SubmitAttempts > maxSubmitAttemptsPerTurn ||
+			turn.AcceptedReceipts > 1 ||
+			turn.IntentSubmits != turn.AcceptedReceipts+turn.RejectedReceipts ||
+			turn.SubmitAttempts != turn.IntentSubmits+turn.SubmitDenials {
 			return errors.New("sanitized failure report contains an invalid completed turn")
 		}
 	}

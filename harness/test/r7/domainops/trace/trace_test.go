@@ -232,6 +232,43 @@ func TestValidateReportRequiresAllIndependentGates(t *testing.T) {
 	if err := validateReport(report); err == nil {
 		t.Fatal("validateReport() accepted an unaccounted Intent submission")
 	}
+	report = validReport()
+	report.Turns[0].BashCalls = 1
+	report.Turns[0].SubmitAttempts = 3
+	report.Turns[0].IntentSubmits = 1
+	report.Turns[0].AcceptedReceipts = 1
+	report.Turns[0].SubmitDenials = 2
+	if err := validateReport(report); err != nil {
+		t.Fatalf("validateReport() rejected one Effect plus two closed denials: %v", err)
+	}
+	report.Turns[0].IntentSubmits = 2
+	report.Turns[0].AcceptedReceipts = 2
+	report.Turns[0].SubmitDenials = 1
+	if err := validateReport(report); err == nil {
+		t.Fatal("validateReport() accepted two Effects in one turn")
+	}
+	report = validReport()
+	report.Turns[0].BashCalls = 1
+	report.Turns[0].SubmitAttempts = 1
+	if err := validateReport(report); err == nil {
+		t.Fatal("validateReport() accepted an unaccounted submit attempt")
+	}
+}
+
+func TestValidateFailureReportAccountsClosedSubmitDenials(t *testing.T) {
+	report := validFailureReport()
+	report.Turns[0].BashCalls = 1
+	report.Turns[0].SubmitAttempts = 3
+	report.Turns[0].IntentSubmits = 1
+	report.Turns[0].RejectedReceipts = 1
+	report.Turns[0].SubmitDenials = 2
+	if err := validateFailureReport(report); err != nil {
+		t.Fatalf("validateFailureReport() rejected accounted attempts: %v", err)
+	}
+	report.Turns[0].SubmitDenials = 0
+	if err := validateFailureReport(report); err == nil {
+		t.Fatal("validateFailureReport() accepted an unaccounted submit attempt")
+	}
 }
 
 func TestWriteTraceKeepsRuntimeAndAuthorityEvidenceSeparate(t *testing.T) {

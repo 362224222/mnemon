@@ -68,6 +68,33 @@ write_sanitizer_stream() {
   jq -nc '{type:"agent_end"}' >>"$destination"
 }
 
+write_submit_stream() {
+  local destination=$1
+  shift
+  local index=0 result is_error
+  jq -nc '{type:"message_start",message:{role:"custom",customType:"mnemond"}}' \
+    >"$destination"
+  for result in "$@"; do
+    index=$((index + 1))
+    is_error=false
+    case "$result" in
+      *'"status":"error"'*)
+        is_error=true
+        result="$result"$'\n\nCommand exited with code 3'
+        ;;
+    esac
+    jq -nc --arg id "submit-$index" \
+      '{type:"tool_execution_start",toolCallId:$id,toolName:"bash",
+        args:{command:"mnemon-harness agent submit --json"}}' >>"$destination"
+    jq -nc --arg id "submit-$index" --arg text "$result" --argjson is_error "$is_error" \
+      '{type:"tool_execution_end",toolCallId:$id,toolName:"bash",isError:$is_error,
+        result:{content:[{type:"text",text:$text}]}}' >>"$destination"
+  done
+  jq -nc '{type:"message_end",message:{role:"assistant",stopReason:"stop"}}' \
+    >>"$destination"
+  jq -nc '{type:"agent_end"}' >>"$destination"
+}
+
 write_sanitizer_stream stop "$scratch/stop.jsonl"
 sanitize_turn lead oracle "$scratch/stop.jsonl" "$scratch/stop.json"
 partial=$(summarize_partial_turn "$scratch/stop.jsonl")
@@ -95,6 +122,29 @@ for terminal_reason in error aborted; do
     exit 1
   fi
 done
+
+accepted_receipt='{"schema":"mnemon.agent.receipt","version":1,"outcome":"accepted","replayed":false}'
+closed_denial='{"code":"context_required","message":"a bounded View is required","operation_id":null,"replayed":false,"retryable":false,"schema_version":1,"status":"error"}'
+write_submit_stream "$scratch/accounted.jsonl" "$accepted_receipt" "$closed_denial"
+sanitize_turn lead oracle-accounted "$scratch/accounted.jsonl" "$scratch/accounted.json"
+jq -e '
+  .submit_attempts == 2 and .intent_submits == 1 and
+  .accepted_receipts == 1 and .rejected_receipts == 0 and .submit_denials == 1
+' "$scratch/accounted.json" >/dev/null
+
+write_submit_stream "$scratch/unaccounted.jsonl" 'not a closed protocol result'
+if sanitize_turn lead oracle-unaccounted "$scratch/unaccounted.jsonl" \
+    "$scratch/unaccounted.json"; then
+  printf 'runtime oracle: unaccounted submit attempt was accepted\n' >&2
+  exit 1
+fi
+
+write_submit_stream "$scratch/two-effects.jsonl" "$accepted_receipt" "$accepted_receipt"
+if sanitize_turn lead oracle-two-effects "$scratch/two-effects.jsonl" \
+    "$scratch/two-effects.json"; then
+  printf 'runtime oracle: two accepted Effects in one turn were accepted\n' >&2
+  exit 1
+fi
 
 late_pipeline() {
   sh -c 'sleep 3; printf '\''{"type":"agent_end"}\n'\''; : >"$1"' late "$scratch/late" |
