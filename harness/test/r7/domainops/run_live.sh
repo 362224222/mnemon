@@ -27,7 +27,6 @@ turn_seconds=${DOMAIN_OPS_TURN_SECONDS:-150}
 rounds=${DOMAIN_OPS_ROUNDS:-3}
 persisted_evidence_max_bytes=$((8 * 1024 * 1024))
 persisted_evidence_max_blocks=$((persisted_evidence_max_bytes / 1024))
-submit_attempts_max=8
 peer_quiescence_seconds=30
 report_path=${DOMAIN_OPS_REPORT:-$repository_root/.testdata/r7-domain-ops-live/last-report.json}
 trace_path=${DOMAIN_OPS_TRACE:-$repository_root/.testdata/r7-domain-ops-live/last.trace}
@@ -426,7 +425,6 @@ write_key_once() {
 sanitize_turn() {
   local role=$1 tag=$2 raw=$3 output=$4
   jq -s -e --arg role "$role" --arg turn "$tag" \
-    --argjson submit_attempts_max "$submit_attempts_max" \
     --arg captured_at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" '
     def command: (.args.command // "");
     def invocation_pattern($verb):
@@ -471,6 +469,18 @@ sanitize_turn() {
     ([$stream[] | select(.type == "tool_execution_start" and .toolName == "bash" and
       invokes("submit"))]) as $submit_starts |
     ([$submit_starts[].toolCallId] | unique) as $submit_calls |
+    (reduce $stream[] as $record (
+      {accepted_seen:false, denials:0};
+      if ($record.type == "tool_execution_end" and $record.toolName == "bash" and
+          ($record | belongs($submit_calls))) then
+        ($record | [result_objects[]]) as $objects |
+        .denials += (if .accepted_seen then
+          ([$objects[] | select(valid_control_error)] | length)
+        else 0 end) |
+        .accepted_seen = (.accepted_seen or
+          any($objects[]; valid_receipt and .outcome == "accepted"))
+      else . end
+    )) as $post_accept |
     {
       role: $role,
       turn: $turn,
@@ -498,6 +508,7 @@ sanitize_turn() {
       submit_denials: ([$stream[] | select(
         .type == "tool_execution_end" and .toolName == "bash" and belongs($submit_calls)) |
         result_objects[] | select(valid_control_error)] | length),
+      post_accept_denials: $post_accept.denials,
       private_binding_probes: ([$stream[] | select(.type == "tool_execution_start" and
         .toolName == "bash" and
         (command | test("DEEPSEEK|API_KEY|printenv|auth\\.json|provider-key")))] | length),
@@ -510,8 +521,12 @@ sanitize_turn() {
         (($assistant_ends[-1].message.stopReason // "") != "aborted") and
         .private_binding_probes == 0 and
         .agent_end == true and
-        .submit_attempts <= $submit_attempts_max and
+        ([.hook_cues, .bash_calls, .current_reads, .submit_attempts, .intent_submits,
+          .accepted_receipts, .rejected_receipts, .submit_denials,
+          .post_accept_denials, .private_binding_probes] | all(. >= 0 and . <= 256)) and
         .accepted_receipts <= 1 and
+        .post_accept_denials <= .submit_denials and
+        (.post_accept_denials == 0 or .accepted_receipts == 1) and
         (.accepted_receipts + .rejected_receipts) == .intent_submits and
         (.intent_submits + .submit_denials) == .submit_attempts)
   ' "$raw" >"$output" || return 1

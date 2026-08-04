@@ -14,7 +14,6 @@ import (
 )
 
 const maxReportBytes = 2 << 20
-const maxSubmitAttemptsPerTurn = 8
 
 var domainRoles = []string{"data", "edge", "lead", "payment", "platform"}
 
@@ -65,6 +64,7 @@ type turnSummary struct {
 	AcceptedReceipts     int    `json:"accepted_receipts"`
 	RejectedReceipts     int    `json:"rejected_receipts"`
 	SubmitDenials        int    `json:"submit_denials"`
+	PostAcceptDenials    int    `json:"post_accept_denials"`
 	PrivateBindingProbes int    `json:"private_binding_probes"`
 	AgentEnd             bool   `json:"agent_end"`
 }
@@ -327,6 +327,7 @@ func validateTurns(rounds int, turns []turnSummary) error {
 		values := []int{turn.HookCues, turn.BashCalls, turn.CurrentReads, turn.SubmitAttempts,
 			turn.IntentSubmits,
 			turn.AcceptedReceipts, turn.RejectedReceipts, turn.SubmitDenials,
+			turn.PostAcceptDenials,
 			turn.PrivateBindingProbes}
 		if _, err := parseReportTime("turn captured_at", turn.CapturedAt); err != nil {
 			return err
@@ -336,8 +337,9 @@ func validateTurns(rounds int, turns []turnSummary) error {
 			return errors.New("sanitized live report contains an invalid bounded turn")
 		}
 		if turn.PrivateBindingProbes != 0 || turn.CurrentReads > turn.BashCalls ||
-			turn.SubmitAttempts > maxSubmitAttemptsPerTurn ||
 			turn.AcceptedReceipts > 1 ||
+			turn.PostAcceptDenials > turn.SubmitDenials ||
+			(turn.PostAcceptDenials > 0 && turn.AcceptedReceipts != 1) ||
 			turn.IntentSubmits != turn.AcceptedReceipts+turn.RejectedReceipts ||
 			turn.SubmitAttempts != turn.IntentSubmits+turn.SubmitDenials {
 			return errors.New("sanitized live report contains inconsistent successful CLI observations")

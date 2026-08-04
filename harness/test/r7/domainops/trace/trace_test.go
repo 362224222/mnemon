@@ -238,12 +238,14 @@ func TestValidateReportRequiresAllIndependentGates(t *testing.T) {
 	report.Turns[0].IntentSubmits = 1
 	report.Turns[0].AcceptedReceipts = 1
 	report.Turns[0].SubmitDenials = 2
+	report.Turns[0].PostAcceptDenials = 2
 	if err := validateReport(report); err != nil {
 		t.Fatalf("validateReport() rejected one Effect plus two closed denials: %v", err)
 	}
 	report.Turns[0].IntentSubmits = 2
 	report.Turns[0].AcceptedReceipts = 2
 	report.Turns[0].SubmitDenials = 1
+	report.Turns[0].PostAcceptDenials = 1
 	if err := validateReport(report); err == nil {
 		t.Fatal("validateReport() accepted two Effects in one turn")
 	}
@@ -252,6 +254,26 @@ func TestValidateReportRequiresAllIndependentGates(t *testing.T) {
 	report.Turns[0].SubmitAttempts = 1
 	if err := validateReport(report); err == nil {
 		t.Fatal("validateReport() accepted an unaccounted submit attempt")
+	}
+}
+
+func TestValidateReportAcceptsContainedPostAcceptDenials(t *testing.T) {
+	report := validReport()
+	report.Turns[0].BashCalls = 14
+	report.Turns[0].SubmitAttempts = 14
+	report.Turns[0].IntentSubmits = 1
+	report.Turns[0].AcceptedReceipts = 1
+	report.Turns[0].SubmitDenials = 13
+	report.Turns[0].PostAcceptDenials = 13
+	if err := validateReport(report); err != nil {
+		t.Fatalf("validateReport() rejected contained post-accept denials: %v", err)
+	}
+	report.Turns[0].BashCalls = 257
+	report.Turns[0].SubmitAttempts = 257
+	report.Turns[0].SubmitDenials = 256
+	report.Turns[0].PostAcceptDenials = 256
+	if err := validateReport(report); err == nil {
+		t.Fatal("validateReport() accepted counters above the generic turn bound")
 	}
 }
 
@@ -268,6 +290,19 @@ func TestValidateFailureReportAccountsClosedSubmitDenials(t *testing.T) {
 	report.Turns[0].SubmitDenials = 0
 	if err := validateFailureReport(report); err == nil {
 		t.Fatal("validateFailureReport() accepted an unaccounted submit attempt")
+	}
+}
+
+func TestValidateFailureReportAcceptsContainedPostAcceptDenials(t *testing.T) {
+	report := validFailureReport()
+	report.Turns[0].BashCalls = 14
+	report.Turns[0].SubmitAttempts = 14
+	report.Turns[0].IntentSubmits = 1
+	report.Turns[0].AcceptedReceipts = 1
+	report.Turns[0].SubmitDenials = 13
+	report.Turns[0].PostAcceptDenials = 13
+	if err := validateFailureReport(report); err != nil {
+		t.Fatalf("validateFailureReport() rejected contained post-accept denials: %v", err)
 	}
 }
 

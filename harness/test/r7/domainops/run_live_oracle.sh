@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 
 # Deterministic, zero-provider regression oracle for run_live.sh's Runtime
-# boundary. It exercises only stream filtering, terminal validation, pipeline
-# error propagation, and complete local process-group timeout.
+# boundary. It exercises the controlled role projection, stream filtering,
+# terminal validation, pipeline error propagation, and complete local
+# process-group timeout.
 
 set -euo pipefail
 umask 077
@@ -17,6 +18,72 @@ cleanup_oracle() {
   rm -rf -- "$scratch"
 }
 trap cleanup_oracle EXIT
+
+projection_policy() {
+  local file=$1
+  local protocol_pattern hidden_answer_pattern choreography_pattern
+  protocol_pattern='("(kind|consequence|successors|alias|subject_handling|correlation_handle|reply_target)"[[:space:]]*:|handling\.(create|advance|resolve)|reference\.(publish|supersede|retract)|review\.|contract-net\.|blackboard\.)'
+  hidden_answer_pattern='("route"[[:space:]]*:[[:space:]]*"east"[[:space:]]*}|--latency[[:space:]]+300ms|--timeout[[:space:]]+100ms|--stable-keys=false|callback-east|payment-east|incident-[0-9]|evaluation-[0-9]|stability-[0-9]|root[ -]?cause[[:space:]]+(is|=)|remediation[[:space:]]+(is|=)|fix[[:space:]]+by)'
+  choreography_pattern='(first[[:space:]]+(ask|contact|send)|then[[:space:]]+(ask|contact|send)|send[[:space:]].*[[:space:]]to[[:space:]]+(lead|edge|payment|platform|data))'
+
+  ! grep -Ein -- "$protocol_pattern|$hidden_answer_pattern|$choreography_pattern" "$file" \
+    >/dev/null
+}
+
+assert_domain_projection_boundary() {
+  local pi_source role source projected mode
+  pi_source=$(declare -f pi_process)
+  if printf '%s\n' "$pi_source" | grep -F -- '--no-context-files' >/dev/null; then
+    printf 'runtime oracle: domainops Pi disables its role context projection\n' >&2
+    exit 1
+  fi
+  printf '%s\n' "$pi_source" | grep -F -- 'docker exec -w /workspace' >/dev/null || {
+    printf 'runtime oracle: domainops Pi does not start in the controlled workspace\n' >&2
+    exit 1
+  }
+
+  runtime_root="$scratch/projection-runtime"
+  mkdir -p "$runtime_root/workspaces"
+  for role in $roles; do
+    source="$case_root/domains/$role/AGENTS.md"
+    projection_policy "$source" || {
+      printf 'runtime oracle: %s role projection contains a task answer or Event choreography\n' \
+        "$role" >&2
+      exit 1
+    }
+    prepare_workspace "$role"
+    projected="$runtime_root/workspaces/$role/AGENTS.md"
+    test -f "$projected" && test ! -L "$projected" && cmp -s "$source" "$projected" || {
+      printf 'runtime oracle: %s role projection is not the exact controlled input\n' "$role" >&2
+      exit 1
+    }
+    if mode=$(stat -c '%a' "$projected" 2>/dev/null); then :; else
+      mode=$(stat -f '%Lp' "$projected")
+    fi
+    test "$mode" = 444 || {
+      printf 'runtime oracle: %s role projection mode = %s, want 444\n' "$role" "$mode" >&2
+      exit 1
+    }
+  done
+  test "$(find "$runtime_root/workspaces" -type f -print | wc -l | tr -d '[:space:]')" = 5 || {
+    printf 'runtime oracle: controlled workspaces contain an unexpected projected file\n' >&2
+    exit 1
+  }
+  projection_policy "$mission_file" || {
+    printf 'runtime oracle: mission contains a task answer or Event choreography\n' >&2
+    exit 1
+  }
+
+  printf '%s\n' '{"kind":"repair.force","consequence":"handling.create","successors":[{"alias":"data"}]}' \
+    >"$scratch/forbidden-projection.md"
+  if projection_policy "$scratch/forbidden-projection.md"; then
+    printf 'runtime oracle: projection policy accepted an Event choreography fixture\n' >&2
+    exit 1
+  fi
+  runtime_root=
+}
+
+assert_domain_projection_boundary
 
 stream_mode=valid
 pi_process() {
@@ -129,8 +196,19 @@ write_submit_stream "$scratch/accounted.jsonl" "$accepted_receipt" "$closed_deni
 sanitize_turn lead oracle-accounted "$scratch/accounted.jsonl" "$scratch/accounted.json"
 jq -e '
   .submit_attempts == 2 and .intent_submits == 1 and
-  .accepted_receipts == 1 and .rejected_receipts == 0 and .submit_denials == 1
+  .accepted_receipts == 1 and .rejected_receipts == 0 and
+  .submit_denials == 1 and .post_accept_denials == 1
 ' "$scratch/accounted.json" >/dev/null
+
+contained=("$accepted_receipt")
+for _ in $(seq 1 13); do contained+=("$closed_denial"); done
+write_submit_stream "$scratch/contained.jsonl" "${contained[@]}"
+sanitize_turn lead oracle-contained "$scratch/contained.jsonl" "$scratch/contained.json"
+jq -e '
+  .submit_attempts == 14 and .intent_submits == 1 and
+  .accepted_receipts == 1 and .rejected_receipts == 0 and
+  .submit_denials == 13 and .post_accept_denials == 13
+' "$scratch/contained.json" >/dev/null
 
 write_submit_stream "$scratch/unaccounted.jsonl" 'not a closed protocol result'
 if sanitize_turn lead oracle-unaccounted "$scratch/unaccounted.jsonl" \
