@@ -3,8 +3,15 @@ package world
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	GatewayHistoryLimit     = 32
+	GatewayReceiptSucceeded = "succeeded"
+	GatewayReceiptFailed    = "failed"
 )
 
 type GatewayStatus struct {
@@ -12,6 +19,22 @@ type GatewayStatus struct {
 	Requests  int64  `json:"requests"`
 	Succeeded int64  `json:"succeeded"`
 	Failed    int64  `json:"failed"`
+}
+
+// GatewayReceipt records the bounded observation made at the public gateway
+// boundary. CaptureID is the exact value placed in a successful checkout
+// response; failed requests retain zero rather than guessing downstream state.
+type GatewayReceipt struct {
+	RequestID  int64  `json:"request_id"`
+	BusinessID string `json:"business_id"`
+	CaptureID  int64  `json:"capture_id"`
+	Route      string `json:"route"`
+	Status     string `json:"status"`
+}
+
+type GatewayHistory struct {
+	Limit   int              `json:"limit"`
+	Entries []GatewayReceipt `json:"entries"`
 }
 
 type Gateway struct {
@@ -23,6 +46,7 @@ type Gateway struct {
 	requests  int64
 	succeeded int64
 	failed    int64
+	history   []GatewayReceipt
 }
 
 func NewGateway(route, eastURL, westURL string) *Gateway {
@@ -37,6 +61,7 @@ func (gateway *Gateway) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /checkout", gateway.checkout)
 	mux.HandleFunc("GET /status", gateway.status)
+	mux.HandleFunc("GET /history", gateway.readHistory)
 	mux.HandleFunc("POST /admin/route", gateway.configureRoute)
 	return mux
 }
@@ -49,6 +74,7 @@ func (gateway *Gateway) checkout(writer http.ResponseWriter, request *http.Reque
 	}
 	gateway.mu.Lock()
 	gateway.requests++
+	requestID := gateway.requests
 	route := gateway.route
 	target := gateway.eastURL
 	if route == "west" {
@@ -58,11 +84,16 @@ func (gateway *Gateway) checkout(writer http.ResponseWriter, request *http.Reque
 	var result PayResponse
 	err := PostJSON(context.Background(), gateway.client, target+"/pay", input, &result)
 	gateway.mu.Lock()
+	receipt := GatewayReceipt{RequestID: requestID, BusinessID: input.BusinessID,
+		Route: route, Status: GatewayReceiptFailed}
 	if err == nil {
 		gateway.succeeded++
+		receipt.Status = GatewayReceiptSucceeded
+		receipt.CaptureID = result.CaptureID
 	} else {
 		gateway.failed++
 	}
+	gateway.appendReceiptLocked(receipt)
 	gateway.mu.Unlock()
 	if err != nil {
 		WriteJSON(writer, http.StatusBadGateway, map[string]any{"accepted": false, "route": route})
@@ -70,6 +101,18 @@ func (gateway *Gateway) checkout(writer http.ResponseWriter, request *http.Reque
 	}
 	WriteJSON(writer, http.StatusOK, CheckoutResponse{Accepted: true, Route: route,
 		CaptureID: result.CaptureID})
+}
+
+func (gateway *Gateway) readHistory(writer http.ResponseWriter, request *http.Request) {
+	prefix := request.URL.Query().Get("prefix")
+	if prefix != "" && !ValidToken(prefix) {
+		WriteJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid history prefix"})
+		return
+	}
+	gateway.mu.Lock()
+	history := gateway.historyLocked(prefix)
+	gateway.mu.Unlock()
+	WriteJSON(writer, http.StatusOK, history)
 }
 
 func (gateway *Gateway) status(writer http.ResponseWriter, _ *http.Request) {
@@ -97,4 +140,23 @@ func (gateway *Gateway) configureRoute(writer http.ResponseWriter, request *http
 func (gateway *Gateway) statusLocked() GatewayStatus {
 	return GatewayStatus{Route: gateway.route, Requests: gateway.requests,
 		Succeeded: gateway.succeeded, Failed: gateway.failed}
+}
+
+func (gateway *Gateway) appendReceiptLocked(receipt GatewayReceipt) {
+	if len(gateway.history) < GatewayHistoryLimit {
+		gateway.history = append(gateway.history, receipt)
+		return
+	}
+	copy(gateway.history, gateway.history[1:])
+	gateway.history[len(gateway.history)-1] = receipt
+}
+
+func (gateway *Gateway) historyLocked(prefix string) GatewayHistory {
+	entries := make([]GatewayReceipt, 0, len(gateway.history))
+	for _, receipt := range gateway.history {
+		if strings.HasPrefix(receipt.BusinessID, prefix) {
+			entries = append(entries, receipt)
+		}
+	}
+	return GatewayHistory{Limit: GatewayHistoryLimit, Entries: entries}
 }

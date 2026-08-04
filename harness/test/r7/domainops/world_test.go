@@ -3,8 +3,10 @@ package domainops_test
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,6 +48,80 @@ func TestDefaultEastFaultReturnsSuccessAndDuplicatesCharge(t *testing.T) {
 	}
 	if status.Ledger.ActiveCharges != 2 || status.Ledger.UniqueBusinesses != 1 {
 		t.Fatalf("ledger status = %+v, want two charges for one business", status.Ledger)
+	}
+	history := getGatewayHistory(t, services.gatewayURL, prefix)
+	if len(history.Entries) != 1 || history.Entries[0].BusinessID != prefix+"-order-1" ||
+		history.Entries[0].CaptureID != result.CaptureID ||
+		history.Entries[0].Route != "east" ||
+		history.Entries[0].Status != world.GatewayReceiptSucceeded {
+		t.Fatalf("gateway history = %+v, want exact returned receipt", history)
+	}
+}
+
+func TestGatewayHistoryIsReadOnlyAndBounded(t *testing.T) {
+	var nextCapture atomic.Int64
+	payment := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var input world.PayRequest
+		if err := world.DecodeJSON(request, &input); err != nil {
+			world.WriteJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid payment"})
+			return
+		}
+		if input.BusinessID == "history-failed" {
+			world.WriteJSON(writer, http.StatusBadGateway, map[string]bool{"paid": false})
+			return
+		}
+		captureID := nextCapture.Add(1)
+		world.WriteJSON(writer, http.StatusOK, world.PayResponse{Paid: true, Attempts: 1,
+			CaptureID: captureID})
+	}))
+	t.Cleanup(payment.Close)
+
+	gateway := httptest.NewServer(world.NewGateway("east", payment.URL, payment.URL).Handler())
+	t.Cleanup(gateway.Close)
+
+	succeeded, err := checkout(gateway.URL, "history-succeeded")
+	if err != nil {
+		t.Fatalf("successful checkout: %v", err)
+	}
+	if _, err := checkout(gateway.URL, "history-failed"); err == nil {
+		t.Fatal("failed downstream checkout unexpectedly succeeded")
+	}
+	history := getGatewayHistory(t, gateway.URL, "history-")
+	if history.Limit != world.GatewayHistoryLimit || len(history.Entries) != 2 {
+		t.Fatalf("gateway history = %+v", history)
+	}
+	if history.Entries[0].Status != world.GatewayReceiptSucceeded ||
+		history.Entries[0].CaptureID != succeeded.CaptureID ||
+		history.Entries[0].Route != "east" {
+		t.Fatalf("successful receipt = %+v", history.Entries[0])
+	}
+	if history.Entries[1].Status != world.GatewayReceiptFailed ||
+		history.Entries[1].CaptureID != 0 || history.Entries[1].Route != "east" {
+		t.Fatalf("failed receipt = %+v", history.Entries[1])
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+	if err := world.PostJSON(ctx, world.DefaultClient(requestTimeout), gateway.URL+"/history",
+		map[string]string{}, nil); err == nil {
+		t.Fatal("gateway history accepted a mutation")
+	}
+
+	for index := 1; index <= world.GatewayHistoryLimit+3; index++ {
+		businessID := fmt.Sprintf("bounded-%03d", index)
+		if _, err := checkout(gateway.URL, businessID); err != nil {
+			t.Fatalf("bounded checkout %q: %v", businessID, err)
+		}
+	}
+	history = getGatewayHistory(t, gateway.URL, "")
+	if len(history.Entries) != world.GatewayHistoryLimit {
+		t.Fatalf("history entries = %d, want hard limit %d", len(history.Entries),
+			world.GatewayHistoryLimit)
+	}
+	if history.Entries[0].BusinessID != "bounded-004" ||
+		history.Entries[len(history.Entries)-1].BusinessID != "bounded-035" {
+		t.Fatalf("bounded history retained wrong window: first=%q last=%q",
+			history.Entries[0].BusinessID,
+			history.Entries[len(history.Entries)-1].BusinessID)
 	}
 }
 
@@ -128,14 +204,21 @@ func newServiceWorld(t *testing.T) serviceWorld {
 
 func induceIncident(t *testing.T, services serviceWorld, prefix string) int64 {
 	t.Helper()
-	result, err := checkout(services.gatewayURL, prefix+"-original")
+	businessID := prefix + "-original"
+	result, err := checkout(services.gatewayURL, businessID)
 	if err != nil {
 		t.Fatalf("incident checkout failed before remediation: %v", err)
 	}
 	waitForMonitor(t, services.monitorURL, prefix, func(status world.MonitorStatus) bool {
 		return status.Gateway.Succeeded == 1 && status.Ledger.DuplicateBusinesses == 1
 	})
-	return result.CaptureID
+	history := getGatewayHistory(t, services.gatewayURL, businessID)
+	if len(history.Entries) != 1 || history.Entries[0].BusinessID != businessID ||
+		history.Entries[0].CaptureID != result.CaptureID ||
+		history.Entries[0].Status != world.GatewayReceiptSucceeded {
+		t.Fatalf("gateway did not retain the returned customer receipt: %+v", history)
+	}
+	return history.Entries[0].CaptureID
 }
 
 func voidDuplicateCharges(t *testing.T, ledgerURL, prefix string, preserve int64) {
@@ -184,6 +267,7 @@ func assertRecoveredOutcome(t *testing.T, services serviceWorld, prefix string, 
 	if status.Ledger.Charges != evaluations+2 {
 		t.Fatalf("ledger charges = %d, want audit history retained", status.Ledger.Charges)
 	}
+	assertGatewayReceiptsMatchActiveCharges(t, services, prefix, evaluations+1)
 }
 
 func checkout(gatewayURL, businessID string) (world.CheckoutResponse, error) {
@@ -227,6 +311,43 @@ func getCharges(t *testing.T, ledgerURL, prefix string) []world.Charge {
 		t.Fatalf("GET ledger charges failed: %v", err)
 	}
 	return charges
+}
+
+func getGatewayHistory(t *testing.T, gatewayURL, prefix string) world.GatewayHistory {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+	var history world.GatewayHistory
+	target := gatewayURL + "/history?prefix=" + url.QueryEscape(prefix)
+	if err := world.GetJSON(ctx, world.DefaultClient(requestTimeout), target, &history); err != nil {
+		t.Fatalf("GET gateway history failed: %v", err)
+	}
+	return history
+}
+
+func assertGatewayReceiptsMatchActiveCharges(
+	t *testing.T,
+	services serviceWorld,
+	prefix string,
+	want int,
+) {
+	t.Helper()
+	history := getGatewayHistory(t, services.gatewayURL, prefix)
+	if len(history.Entries) != want {
+		t.Fatalf("gateway receipts = %d, want %d", len(history.Entries), want)
+	}
+	active := make(map[string]int64)
+	for _, charge := range getCharges(t, services.ledgerURL, prefix) {
+		if charge.State == world.ChargeActive {
+			active[charge.BusinessID] = charge.Sequence
+		}
+	}
+	for _, receipt := range history.Entries {
+		if receipt.Status != world.GatewayReceiptSucceeded || receipt.CaptureID <= 0 ||
+			active[receipt.BusinessID] != receipt.CaptureID {
+			t.Fatalf("gateway receipt %+v does not identify the retained active capture", receipt)
+		}
+	}
 }
 
 func waitForMonitor(

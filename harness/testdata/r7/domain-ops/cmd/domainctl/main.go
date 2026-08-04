@@ -164,16 +164,16 @@ func resolve(endpoint, path string) (string, error) {
 	if err != nil || !strings.HasPrefix(path, "/") || reference.IsAbs() || reference.Host != "" {
 		return "", errors.New("path must be an absolute-path reference")
 	}
-	if reference.Path != "/status" && !strings.HasPrefix(reference.Path, "/admin/") &&
-		reference.Path != "/charges" {
-		return "", errors.New("path is outside the status, charges, and admin surfaces")
+	if reference.Path != "/status" && reference.Path != "/history" &&
+		!strings.HasPrefix(reference.Path, "/admin/") && reference.Path != "/charges" {
+		return "", errors.New("path is outside the status, history, charges, and admin surfaces")
 	}
 	return base.ResolveReference(reference).String(), nil
 }
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: domainctl [flags] status [prefix]")
-	fmt.Fprintln(os.Stderr, "       domainctl [flags] read /status|/charges[?query]")
+	fmt.Fprintln(os.Stderr, "       domainctl [flags] read /status|/history[?query]|/charges[?query]")
 	fmt.Fprintln(os.Stderr, "       domainctl [flags] action /admin/<action> '<json>'")
 	os.Exit(2)
 }

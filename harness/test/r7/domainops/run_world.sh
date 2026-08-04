@@ -77,6 +77,8 @@ assert_networks ledger 'callback-ledger,data-ops,monitor-data'
 assert_networks monitor 'lead-ops,monitor-data,monitor-gateway'
 
 compose --profile tools run --rm --no-deps edge-tool status >"$runtime_dir/edge.json"
+compose --profile tools run --rm --no-deps edge-tool \
+  read "/history?prefix=$prefix-" >"$runtime_dir/edge-history.json"
 compose --profile tools run --rm --no-deps payment-tool \
   --endpoint http://payment-east:8080 status >"$runtime_dir/payment.json"
 compose --profile tools run --rm --no-deps platform-tool \
@@ -90,4 +92,14 @@ for report in edge payment platform data lead; do
     fail "$report domain could not inspect its own bounded surface"
 done
 
-printf 'r7 domain ops world: PASS (real services, hidden incident, five isolated domain surfaces)\n'
+jq -e --slurpfile incident "$runtime_dir/incident.json" '
+  .role == "edge" and .result.limit == 32 and
+  (.result.entries | length) == 4 and
+  all(.result.entries[];
+    .route == "east" and .status == "succeeded" and .capture_id > 0) and
+  ([.result.entries[] | {business_id, capture_id}] | sort_by(.business_id)) ==
+  ($incident[0].receipts | sort_by(.business_id))
+' "$runtime_dir/edge-history.json" >/dev/null ||
+  fail 'edge history does not preserve the exact receipts returned to callers'
+
+printf 'r7 domain ops world: PASS (real services, bounded receipt history, five isolated domain surfaces)\n'

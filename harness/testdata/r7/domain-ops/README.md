@@ -45,7 +45,7 @@ reasons. Each has different local knowledge, credentials, and tools:
 | Domain | Knows and owns |
 | --- | --- |
 | `lead` | End-to-end symptoms and the incident outcome; no service mutation |
-| `edge` | Gateway routing and gateway observations |
+| `edge` | Gateway routing, counters, and a bounded read-only request/receipt history |
 | `payment` | Payment behavior and bounded payment configuration |
 | `platform` | Callback delivery behavior and bounded callback configuration |
 | `data` | Ledger captures and explicitly audited void operations |
@@ -72,6 +72,11 @@ two fresh evaluation batches complete without duplicate active captures, and
 accepted collaboration effects retain their R7 causality and receipt. The
 oracle does not inspect the wording of a diagnosis or demand a particular
 configuration.
+
+The gateway retains only its 32 most recent completed request observations.
+This edge-owned surface records the business ID, selected route, outcome, and
+the capture ID actually returned to the caller. It does not expose downstream
+attempts, infer a root cause, prescribe a repair, or grant ledger authority.
 
 ## Fixture boundary
 

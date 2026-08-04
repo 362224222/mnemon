@@ -14,6 +14,10 @@ downstream cause.
 ## Local tools and authority
 
 - `domainctl status` inspects gateway route and counters.
+- `domainctl read /history` reads the most recent 32 bounded gateway outcomes;
+  append a URL-escaped `?prefix=` query to narrow them. Each entry identifies
+  the business request, selected route, outcome status, and the exact capture
+  ID returned to the caller (`0` when no successful receipt was returned).
 - `domainctl action /admin/route '{"route":"east|west"}'` selects an allowed
   regional payment target; replace the illustrative alternatives with one
   exact value.
