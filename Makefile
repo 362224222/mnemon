@@ -16,7 +16,7 @@ endif
 
 .PHONY: deps build harness-build install uninstall test unit vet harness-validate harness-quality harness-verify
 .PHONY: harness-contract harness-static harness-docker harness-docker-case harness-live-pi
-.PHONY: harness-r8 harness-r8-docker harness-domain-ops
+.PHONY: harness-r8 harness-r8-docker harness-domain-ops harness-domain-ops-live
 .PHONY: docker-build docker-run compose-up compose-down compose-dev release-snapshot clean help
 
 .DEFAULT_GOAL := help
@@ -93,6 +93,11 @@ harness-r8-docker: harness-r8 ## Run the isolated five-peer R8 network proof
 
 harness-domain-ops: ## Run the opt-in real-service federated operations world
 	harness/test/r7/domainops/run_world.sh
+
+harness-domain-ops-live: ## Run the paid autonomous Pi/DeepSeek operations case
+	@test "$${LIVE_DOMAIN_OPS:-}" = 1 || { echo "error: set LIVE_DOMAIN_OPS=1" >&2; exit 2; }
+	@test -n "$${DEEPSEEK_API_KEY:-}" || { echo "error: DEEPSEEK_API_KEY is required" >&2; exit 2; }
+	harness/test/r7/domainops/run_live.sh
 
 harness-verify: harness-quality ## Run the complete exact-tree R7 merge gate and write its report
 	$(HARNESS_GO) run ./tools/corecontract/cmd/core-gate --root ..
