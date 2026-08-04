@@ -25,8 +25,8 @@ pi_version=0.83.0
 pi_model=${DOMAIN_OPS_PI_MODEL:-deepseek-v4-flash}
 turn_seconds=${DOMAIN_OPS_TURN_SECONDS:-150}
 rounds=${DOMAIN_OPS_ROUNDS:-3}
-raw_stream_max_bytes=$((8 * 1024 * 1024))
-raw_stream_max_blocks=$((raw_stream_max_bytes / 1024))
+persisted_evidence_max_bytes=$((8 * 1024 * 1024))
+persisted_evidence_max_blocks=$((persisted_evidence_max_bytes / 1024))
 peer_quiescence_seconds=30
 report_path=${DOMAIN_OPS_REPORT:-$repository_root/.testdata/r7-domain-ops-live/last-report.json}
 trace_path=${DOMAIN_OPS_TRACE:-$repository_root/.testdata/r7-domain-ops-live/last.trace}
@@ -319,53 +319,93 @@ prepare_agents() {
 }
 
 with_deadline() {
-  local seconds=$1 marker=$2 pid watchdog status elapsed
+  local seconds=$1 marker=$2 pipeline_pid pipeline_status elapsed
   shift 2
   rm -f -- "$marker"
+  # Job control gives this asynchronous function and every local pipeline child
+  # (docker exec and jq included) one fresh process group on macOS and Linux.
+  # The synchronous owner never returns until that entire group is gone.
+  set -m
   "$@" &
-  pid=$!
-  (
-    elapsed=0
-    while test "$elapsed" -lt "$seconds"; do
-      sleep 1
-      kill -0 "$pid" 2>/dev/null || exit 0
-      elapsed=$((elapsed + 1))
-    done
-    : >"$marker"
-    kill -TERM "$pid" >/dev/null 2>&1 || exit 0
-    sleep 5
-    kill -KILL "$pid" >/dev/null 2>&1 || true
-  ) &
-  watchdog=$!
-  if wait "$pid"; then status=0; else status=$?; fi
-  kill -TERM "$watchdog" >/dev/null 2>&1 || true
-  wait "$watchdog" >/dev/null 2>&1 || true
-  test ! -f "$marker" || return 124
-  return "$status"
+  pipeline_pid=$!
+  elapsed=0
+  while kill -0 "$pipeline_pid" 2>/dev/null; do
+    if test "$elapsed" -ge "$seconds"; then
+      : >"$marker"
+      kill -TERM -- "-$pipeline_pid" >/dev/null 2>&1 || true
+      local shutdown_elapsed=0
+      while kill -0 -- "-$pipeline_pid" 2>/dev/null &&
+          test "$shutdown_elapsed" -lt 5; do
+        sleep 1
+        shutdown_elapsed=$((shutdown_elapsed + 1))
+      done
+      kill -KILL -- "-$pipeline_pid" >/dev/null 2>&1 || true
+      wait "$pipeline_pid" >/dev/null 2>&1 || true
+      set +m
+      kill -0 -- "-$pipeline_pid" >/dev/null 2>&1 && return 125
+      return 124
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  if wait "$pipeline_pid"; then pipeline_status=0; else pipeline_status=$?; fi
+  set +m
+  return "$pipeline_status"
 }
 
 pi_process() {
-  local container=$1
+  local container=$1 tag=$2 pid_file="/workspace/.mnemon/live/pi-$2.pid"
   docker exec -w /workspace "$container" env \
     PI_CODING_AGENT_DIR=/runtime/pi-state PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0 \
-    pi --mode json --print --no-session --approve --no-prompt-templates --no-themes \
-      --provider deepseek --model "$pi_model" --thinking off --tools bash \
-      @/workspace/.mnemon/live/turn-prompt.md
+    setsid sh -c '
+      umask 077
+      pid_file=$1
+      trap '\''rm -f "$pid_file"'\'' EXIT
+      printf "%s\n" "$$" >"$pid_file"
+      pi --mode json --print --no-session --approve --no-prompt-templates --no-themes \
+        --provider deepseek --model "$2" --thinking off --tools bash \
+        @/workspace/.mnemon/live/turn-prompt.md
+    ' pi-turn "$pid_file" "$pi_model"
 }
 
 bounded_pi_process() {
-  local container=$1
+  local container=$1 tag=$2
   # Bash defines -f in 1024-byte blocks on both the pinned macOS shell and
   # Linux runner. The limit is inherited by docker, the process writing both
-  # redirected evidence streams. Pi's message_update carries a growing full
-  # message snapshot and tool_execution_update is transient progress; neither
-  # participates in an oracle, so retaining them creates quadratic output with
-  # no additional evidence. Keep final boundaries and results, and fail if any
-  # remaining record is malformed. A post-run byte check below turns SIGXFSZ
-  # into an explicit boundary failure and deletes both streams.
-  ulimit -f "$raw_stream_max_blocks"
-  pi_process "$container" |
+  # redirected persisted evidence streams. Pi's message_update carries a
+  # growing full message snapshot, while tool_execution_update is transient
+  # progress. Neither participates in an oracle, so retaining them creates
+  # quadratic output with no additional evidence. Keep final boundaries and
+  # results, and fail if any
+  # remaining record is malformed. The pre-filter provider stream is never
+  # materialized: the kernel pipe applies backpressure and the turn deadline
+  # bounds its lifetime. A separate transient byte meter would add another
+  # buffering process without strengthening retained evidence. The 8 MiB file
+  # limit below applies only to persisted, filtered evidence and stderr.
+  ulimit -f "$persisted_evidence_max_blocks"
+  pi_process "$container" "$tag" |
     jq -c 'select(.type != "message_update" and .type != "tool_execution_update")'
+}
+
+stop_remote_pi_pipeline() {
+  local container=$1 tag=$2 pid_file="/workspace/.mnemon/live/pi-$2.pid"
+  docker exec "$container" sh -c '
+    pid_file=$1
+    test -f "$pid_file" || exit 0
+    IFS= read -r pid <"$pid_file"
+    case "$pid" in ""|*[!0-9]*) exit 1 ;; esac
+    if kill -0 -$pid 2>/dev/null; then
+      kill -TERM -$pid 2>/dev/null || true
+      elapsed=0
+      while kill -0 -$pid 2>/dev/null && test "$elapsed" -lt 50; do
+        sleep 0.1
+        elapsed=$((elapsed + 1))
+      done
+      kill -KILL -$pid 2>/dev/null || true
+    fi
+    rm -f "$pid_file"
+    ! kill -0 -$pid 2>/dev/null
+  ' pi-turn-cleanup "$pid_file"
 }
 
 write_key_once() {
@@ -391,6 +431,8 @@ sanitize_turn() {
       (.toolCallId // null) as $id |
       $id != null and (($ids | index($id)) != null);
     . as $stream |
+    ([$stream[] | select(.type == "message_end" and .message.role == "assistant")]) as
+      $assistant_ends |
     ([$stream[] | select(.type == "tool_execution_start" and .toolName == "bash" and
       invokes("current")) | .toolCallId] | unique) as $current_calls |
     ([$stream[] | select(.type == "tool_execution_start" and .toolName == "bash" and
@@ -431,6 +473,9 @@ sanitize_turn() {
     }
     | select(
         .hook_cues >= 1 and
+        ($assistant_ends | length) >= 1 and
+        (($assistant_ends[-1].message.stopReason // "") != "error") and
+        (($assistant_ends[-1].message.stopReason // "") != "aborted") and
         .private_binding_probes == 0 and
         .agent_end == true and
         .submit_attempts <= 1 and
@@ -495,11 +540,15 @@ run_turn() {
     'rm -f /runtime/pi-state/provider-key.pipe /runtime/pi-state/auth.json && mkfifo /runtime/pi-state/provider-key.pipe && chmod 600 /runtime/pi-state/provider-key.pipe && jq -cn --arg command "!cat /runtime/pi-state/provider-key.pipe" '\''{deepseek:{type:"api_key",key:$command}}'\'' > /runtime/pi-state/auth.json && chmod 600 /runtime/pi-state/auth.json'
   write_key_once "$container" &
   writer=$!
-  if with_deadline "$turn_seconds" "$marker" bounded_pi_process "$container" \
+  if with_deadline "$turn_seconds" "$marker" bounded_pi_process "$container" "$tag" \
       >"$raw" 2>"$errors"; then
     status=0
   else
     status=$?
+  fi
+  if ! stop_remote_pi_pipeline "$container" "$tag"; then
+    rm -f -- "$raw" "$errors" "$marker"
+    fail "$role turn $tag did not terminate its complete Pi process group"
   fi
   if kill -0 "$writer" 2>/dev/null; then
     kill -TERM "$writer" >/dev/null 2>&1 || true
@@ -516,10 +565,10 @@ run_turn() {
   docker exec "$container" rm -f /workspace/.mnemon/live/turn-prompt.md
   raw_bytes=$(wc -c <"$raw" | tr -d '[:space:]')
   error_bytes=$(wc -c <"$errors" | tr -d '[:space:]')
-  if test "$raw_bytes" -ge "$raw_stream_max_bytes" ||
-      test "$error_bytes" -ge "$raw_stream_max_bytes"; then
+  if test "$raw_bytes" -ge "$persisted_evidence_max_bytes" ||
+      test "$error_bytes" -ge "$persisted_evidence_max_bytes"; then
     rm -f -- "$raw" "$errors" "$marker"
-    fail "$role turn $tag exceeded the ${raw_stream_max_bytes}-byte provider-stream bound; raw provider output was deleted"
+    fail "$role turn $tag exceeded the ${persisted_evidence_max_bytes}-byte persisted-evidence bound; retained output was deleted"
   fi
   if test "$status" -ne 0; then
     local reason='provider turn failed' partial
@@ -898,47 +947,53 @@ finalize_failure_evidence() {
     "$failure_report_path" "$failure_trace_path" >&2
 }
 
-require_prerequisites
-rm -f -- "$failure_report_path" "$failure_trace_path"
-runtime_root=$(mktemp -d /tmp/mnr7-domain-live.XXXXXX)
-trap on_exit EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-runtime_root=$(cd "$runtime_root" && pwd -P)
-chmod 0700 "$runtime_root"
-project="mnr7-domain-live-$$"
-control_network="$project-mnemon-control"
-agent_image="mnemon-domain-ops-agent:live-$$"
-run_started_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-mkdir -p "$runtime_root/cards" "$runtime_root/workspaces" "$runtime_root/raw" \
-  "$runtime_root/sanitized" "$runtime_root/authority"
+main() {
+  require_prerequisites
+  rm -f -- "$failure_report_path" "$failure_trace_path"
+  runtime_root=$(mktemp -d /tmp/mnr7-domain-live.XXXXXX)
+  trap on_exit EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  runtime_root=$(cd "$runtime_root" && pwd -P)
+  chmod 0700 "$runtime_root"
+  project="mnr7-domain-live-$$"
+  control_network="$project-mnemon-control"
+  agent_image="mnemon-domain-ops-agent:live-$$"
+  run_started_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  mkdir -p "$runtime_root/cards" "$runtime_root/workspaces" "$runtime_root/raw" \
+    "$runtime_root/sanitized" "$runtime_root/authority"
 
-incident_prefix="incident-$$"
-evaluation_prefix="evaluation-$$"
-stability_prefix="stability-$$"
-failure_stage=runner.world-start
-build_and_start_world
-failure_stage=scenario.incident-seed
-seed_incident "$incident_prefix"
-failure_stage=runner.authority-start
-prepare_agents
-failure_stage=scenario.agent-turns
-run_agents
-failure_stage=scenario.recovery
-assert_recovery "$incident_prefix" "$evaluation_prefix" "$stability_prefix"
-failure_stage=runner.authority-capture
-stop_and_capture_authority
-failure_stage=r7.peer-effect
-assert_peer_effect
-failure_stage=runner.pass-report
-write_report
-failure_stage=runner.pass-trace
-write_trace
-failure_stage=runner.pass-publish
-publish_evidence
-failure_stage=runner.complete
+  local incident_prefix="incident-$$"
+  local evaluation_prefix="evaluation-$$"
+  local stability_prefix="stability-$$"
+  failure_stage=runner.world-start
+  build_and_start_world
+  failure_stage=scenario.incident-seed
+  seed_incident "$incident_prefix"
+  failure_stage=runner.authority-start
+  prepare_agents
+  failure_stage=scenario.agent-turns
+  run_agents
+  failure_stage=scenario.recovery
+  assert_recovery "$incident_prefix" "$evaluation_prefix" "$stability_prefix"
+  failure_stage=runner.authority-capture
+  stop_and_capture_authority
+  failure_stage=r7.peer-effect
+  assert_peer_effect
+  failure_stage=runner.pass-report
+  write_report
+  failure_stage=runner.pass-trace
+  write_trace
+  failure_stage=runner.pass-publish
+  publish_evidence
+  failure_stage=runner.complete
 
-printf 'r7 domain ops live: PASS (real services, autonomous domain Agents, external recovery oracle, authenticated peer effect)\n'
-printf 'sanitized report: %s\n' "$report_path"
-printf 'observer trace: %s\n' "$trace_path"
+  printf 'r7 domain ops live: PASS (real services, autonomous domain Agents, external recovery oracle, authenticated peer effect)\n'
+  printf 'sanitized report: %s\n' "$report_path"
+  printf 'observer trace: %s\n' "$trace_path"
+}
+
+if test "${BASH_SOURCE[0]}" = "$0"; then
+  main "$@"
+fi
