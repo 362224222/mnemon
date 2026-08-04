@@ -16,7 +16,7 @@ endif
 
 .PHONY: deps build harness-build install uninstall test unit vet harness-validate harness-quality harness-verify
 .PHONY: harness-contract harness-static harness-docker harness-docker-case harness-live-pi
-.PHONY: harness-r8 harness-r8-docker
+.PHONY: harness-r8 harness-r8-docker harness-domain-ops
 .PHONY: docker-build docker-run compose-up compose-down compose-dev release-snapshot clean help
 
 .DEFAULT_GOAL := help
@@ -90,6 +90,9 @@ harness-r8: ## Test the optional, removable R8 selector and its proof adapters
 
 harness-r8-docker: harness-r8 ## Run the isolated five-peer R8 network proof
 	harness/test/r8/network/runner/run_docker.sh
+
+harness-domain-ops: ## Run the opt-in real-service federated operations world
+	harness/test/r7/domainops/run_world.sh
 
 harness-verify: harness-quality ## Run the complete exact-tree R7 merge gate and write its report
 	$(HARNESS_GO) run ./tools/corecontract/cmd/core-gate --root ..
