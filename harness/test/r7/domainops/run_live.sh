@@ -357,10 +357,15 @@ bounded_pi_process() {
   local container=$1
   # Bash defines -f in 1024-byte blocks on both the pinned macOS shell and
   # Linux runner. The limit is inherited by docker, the process writing both
-  # redirected provider streams. A post-run byte check below turns SIGXFSZ
+  # redirected evidence streams. Pi's message_update carries a growing full
+  # message snapshot and tool_execution_update is transient progress; neither
+  # participates in an oracle, so retaining them creates quadratic output with
+  # no additional evidence. Keep final boundaries and results, and fail if any
+  # remaining record is malformed. A post-run byte check below turns SIGXFSZ
   # into an explicit boundary failure and deletes both streams.
   ulimit -f "$raw_stream_max_blocks"
-  pi_process "$container"
+  pi_process "$container" |
+    jq -c 'select(.type != "message_update" and .type != "tool_execution_update")'
 }
 
 write_key_once() {
