@@ -173,9 +173,11 @@ type openHead struct{ handlingID, eventID string }
 func loadOpenHeadsTx(ctx context.Context, tx *sql.Tx,
 	principal agency.AgentPrincipalID,
 ) ([]openHead, error) {
+	// Keep bounded focus enumeration aligned with fresh Current selection so
+	// projections and writable attention share one deterministic order.
 	rows, err := tx.QueryContext(ctx, `SELECT handling_id, head_event_id FROM handlings
 		WHERE target_principal_id = ? AND state = 'open'
-		ORDER BY created_sequence, handling_id LIMIT ?`, principal.String(),
+		ORDER BY claim_fence, created_sequence, handling_id LIMIT ?`, principal.String(),
 		MaxOpenHandlingsPerPrincipal+1)
 	if err != nil {
 		return nil, fmt.Errorf("current View: load open Handlings: %w", err)

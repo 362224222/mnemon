@@ -175,7 +175,7 @@ CREATE TABLE handlings (
 ) STRICT;
 
 CREATE INDEX handlings_claimable
-ON handlings(target_principal_id, state, created_sequence);
+ON handlings(target_principal_id, state, claim_fence, created_sequence, handling_id);
 
 CREATE UNIQUE INDEX handlings_attachment_slot
 ON handlings(claim_attachment_id)

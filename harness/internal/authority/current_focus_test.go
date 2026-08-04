@@ -136,6 +136,66 @@ func TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult(t *test
 	}
 }
 
+func TestCurrentSelectsCorrelatedResponseAfterAnchorAdvance(t *testing.T) {
+	fixture := newPeerRoundTripFixture(t)
+	requestDelivery := fixture.admitOrigin(t)
+	fixture.admitReceiver(t, requestDelivery)
+	admitCorrelatedPeerResponse(t, &fixture, requestDelivery)
+
+	fresh := fixture.origin.current(t)
+	advance := subjectRequest(t, fresh, "operation:focus-advance-anchor",
+		agency.ConsequenceAdvanceHandling, "anchor progress is durably recorded", nil)
+	result, err := fixture.origin.store.Admit(fixture.origin.ctx, fixture.origin.proof, advance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+	next := decodeFocusView(t, fixture.origin.current(t))
+	if next.Current == nil || next.Current.Semantic.Kind != "review.response" ||
+		next.Current.Semantic.Payload != "the bounded request was reviewed" {
+		t.Fatalf("advanced anchor starved correlated response: %#v", next.Current)
+	}
+}
+
+func TestCurrentLeastAttendedSelectionSurvivesBoundaryWithoutAdvance(t *testing.T) {
+	fixture := newPeerRoundTripFixture(t)
+	requestDelivery := fixture.admitOrigin(t)
+	fixture.admitReceiver(t, requestDelivery)
+	admitCorrelatedPeerResponse(t, &fixture, requestDelivery)
+
+	first := decodeFocusView(t, fixture.origin.current(t))
+	if first.Current == nil || first.Current.Semantic.Payload != "consider the bounded request" {
+		t.Fatalf("first Current = %#v, want original local anchor", first.Current)
+	}
+	replaceInteractiveBoundary(t, fixture.origin)
+
+	second := decodeFocusView(t, fixture.origin.current(t))
+	if second.Current == nil || second.Current.Semantic.Kind != "review.response" ||
+		second.Current.Semantic.Payload != "the bounded request was reviewed" {
+		t.Fatalf("unadvanced anchor starved peer response: %#v", second.Current)
+	}
+	replaceInteractiveBoundary(t, fixture.origin)
+
+	third := decodeFocusView(t, fixture.origin.current(t))
+	if third.Current == nil || third.Current.Semantic.Payload != "consider the bounded request" {
+		t.Fatalf("least-attended tie did not return to older anchor: %#v", third.Current)
+	}
+}
+
+func replaceInteractiveBoundary(t *testing.T, fixture *authorityFixture) {
+	t.Helper()
+	ended, err := fixture.store.EndInteractiveAttachment(fixture.ctx, fixture.proof)
+	if err != nil || ended.Replayed() || !ended.ReleasedClaim() {
+		t.Fatalf("end current boundary = (replayed=%t released=%t, %v)",
+			ended.Replayed(), ended.ReleasedClaim(), err)
+	}
+	fixture.proof, err = fixture.store.IssueInteractiveAttachment(fixture.ctx,
+		fixture.principal, nextAttachmentBoundary(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFocusProjectionUsesDeterministicBoundedPrefixAndPayloadBudget(t *testing.T) {
 	root := focusEventRef(t, "event:focus-budget-root", "root")
 	first := focusStoredEvent(t, "event:focus-budget-first", root,

@@ -136,6 +136,10 @@
           "test": "./internal/authority::TestFreshCurrentDurablySettlesExpiredClaimWithoutDomainEffect"
         },
         {
+          "id": "fresh-boundaries-prevent-handling-attention-starvation",
+          "test": "./internal/authority::TestCurrentLeastAttendedSelectionSurvivesBoundaryWithoutAdvance"
+        },
+        {
           "id": "fresh-boundary-replacement-clears-only-occupancy",
           "test": "./internal/authority::TestFreshBoundaryAtomicallyReplacesPredecessorWithoutDomainEffect"
         },
@@ -496,6 +500,7 @@
             "test:./internal/authority::TestConcurrentReferenceCASAcceptsExactlyOneCandidate",
             "test:./internal/authority::TestCurrentKeepsEscapedCurrentAndOmitsRelatedBeyondEncodedBudget",
             "test:./internal/authority::TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult",
+            "test:./internal/authority::TestCurrentLeastAttendedSelectionSurvivesBoundaryWithoutAdvance",
             "test:./internal/authority::TestCurrentNeverClaimsAnotherPrincipalsHandling",
             "test:./internal/authority::TestCurrentOperationReplaysFrozenViewAfterRestartAndExpiry",
             "test:./internal/authority::TestCurrentRejectsExpiredAndWrongAttachmentProof",

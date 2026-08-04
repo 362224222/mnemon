@@ -75,7 +75,7 @@ type projectedReference struct {
 }
 
 // Current authenticates one eligible boundary, atomically acquires at most
-// one oldest local responsibility, and returns a bounded View. It is a
+// one least-attended local responsibility, and returns a bounded View. It is a
 // durable operation even when no Handling is available. Only a fresh call may
 // claim; replay returns its frozen View without renewing or recomputing it.
 func (s *Store) Current(ctx context.Context, proof AttachmentProof,
@@ -117,7 +117,7 @@ func (s *Store) Current(ctx context.Context, proof AttachmentProof,
 	}
 	claim, err := existingClaimTx(ctx, tx, authenticated.value)
 	if errors.Is(err, sql.ErrNoRows) {
-		claim, err = claimOldestTx(ctx, tx, authenticated.value)
+		claim, err = claimNextTx(ctx, tx, authenticated.value)
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return BoundView{}, err
@@ -311,13 +311,19 @@ func existingClaimTx(ctx context.Context, tx *sql.Tx,
 	return scanProjectedClaim(ctx, tx, row)
 }
 
-func claimOldestTx(ctx context.Context, tx *sql.Tx,
+// claimNextTx treats the monotonically increasing claim fence as the count of
+// prior successful attention opportunities. Creation order is only a stable
+// tie-break, so one old Handling cannot monopolize every fresh Host boundary.
+// The fence remains authoritative for stale-writer rejection; scheduling never
+// mutates or resets it outside the existing successful-claim update below.
+func claimNextTx(ctx context.Context, tx *sql.Tx,
 	attachment agency.Attachment,
 ) (*projectedClaim, error) {
 	var handlingValue string
 	err := tx.QueryRowContext(ctx, `SELECT handling_id FROM handlings
 		WHERE target_principal_id = ? AND state = 'open' AND claim_attachment_id IS NULL
-		ORDER BY created_sequence, handling_id LIMIT 1`, attachment.Principal().String()).Scan(&handlingValue)
+		ORDER BY claim_fence, created_sequence, handling_id LIMIT 1`,
+		attachment.Principal().String()).Scan(&handlingValue)
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +332,7 @@ func claimOldestTx(ctx context.Context, tx *sql.Tx,
 		WHERE handling_id = ? AND state = 'open' AND claim_attachment_id IS NULL`,
 		attachment.ID().String(), formatTime(attachment.ExpiresAt()), handlingValue)
 	if err != nil {
-		return nil, fmt.Errorf("current View: claim oldest: %w", err)
+		return nil, fmt.Errorf("current View: claim next: %w", err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
