@@ -139,6 +139,7 @@ require_prerequisites() {
   esac
   command -v docker >/dev/null 2>&1 || fail 'docker is required'
   command -v jq >/dev/null 2>&1 || fail 'jq is required'
+  command -v tar >/dev/null 2>&1 || fail 'tar is required'
   command -v sqlite3 >/dev/null 2>&1 ||
     fail 'sqlite3 is required for the authority-state oracle'
   docker info >/dev/null 2>&1 || fail 'Docker Engine is unavailable'
@@ -191,9 +192,27 @@ seed_incident() {
 }
 
 prepare_workspace() {
-  local role=$1
+  local role=$1 projection_dir="$runtime_root/workspaces/$1"
   test -s "$case_root/domains/$role/AGENTS.md" ||
     fail "$role domain projection is missing or empty"
+  mkdir -p "$projection_dir"
+  cp "$case_root/domains/$role/AGENTS.md" "$projection_dir/AGENTS.md"
+  chmod 0444 "$projection_dir/AGENTS.md"
+}
+
+copy_immutable_projection() {
+  local role=$1 container=$2 projection_dir="$runtime_root/workspaces/$1"
+  # docker cp from a host path preserves the host UID on Docker Desktop.  Feed
+  # an explicit root-owned archive instead so a capability-free Runtime cannot
+  # rewrite its instructions.  bsdtar and GNU tar spell owner overrides
+  # differently; both paths emit the same ustar ownership and mode.
+  if tar --version 2>&1 | grep -q bsdtar; then
+    COPYFILE_DISABLE=1 tar -cf - --format ustar --no-xattrs --uid 0 --gid 0 \
+      -C "$projection_dir" AGENTS.md | docker cp - "$container:/workspace"
+  else
+    tar -cf - --format=ustar --no-xattrs --owner=0 --group=0 \
+      -C "$projection_dir" AGENTS.md | docker cp - "$container:/workspace"
+  fi
 }
 
 start_agent_container() {
@@ -206,20 +225,21 @@ start_agent_container() {
     --security-opt no-new-privileges:true --cap-drop ALL \
     --env "DOMAIN_ROLE=$role" --env "DOMAIN_ENDPOINT=$endpoint" \
     "$agent_image" >/dev/null
+  # Register immediately: every later initialization failure must still remove
+  # the container rather than leaving a partially prepared Runtime behind.
+  agent_containers="$agent_containers $container"
   # Root creates only the non-secret parent. It is writable just long enough
   # for the unprivileged Runtime to create its owned 0700 state below; setup
   # tightens the parent again before any Agent turn.
   docker exec -u 0 "$container" sh -c \
     'test ! -e /runtime || test -d /runtime; mkdir -p /runtime; chmod 0733 /runtime'
-  docker cp "$case_root/domains/$role/AGENTS.md" "$container:/workspace/AGENTS.md"
-  docker exec -u 0 "$container" chmod 0444 /workspace/AGENTS.md
+  copy_immutable_projection "$role" "$container"
   docker network connect "${project}_${role}-ops" "$container"
   test "$(docker inspect --format '{{.Image}}' "$container")" = "$agent_image_id" ||
     fail "$role does not run the candidate Agent image"
   test "$(docker exec "$container" sha256sum /usr/local/bin/mnemon-harness \
     /usr/local/bin/mnemond /usr/local/bin/domainctl)" = "$agent_binary_digests" ||
     fail "$role does not run the candidate Agent binaries"
-  agent_containers="$agent_containers $container"
 }
 
 assert_agent_boundary() {
