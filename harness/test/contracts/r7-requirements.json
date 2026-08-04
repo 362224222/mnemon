@@ -39,6 +39,10 @@
       "id": "P-03",
       "oracles": [
         {
+          "id": "accepted-reference-ends-agent-facing-boundary",
+          "test": "./internal/cli::TestAcceptedReferenceEndsAttachmentAndRejectsFurtherMutation"
+        },
+        {
           "id": "attachment-begin-replays-exactly-across-restart",
           "test": "./internal/authority::TestInteractiveAttachmentBeginExactlyReplaysAcrossRestart"
         },
@@ -93,6 +97,10 @@
         {
           "id": "pi-host-retries-one-private-boundary",
           "test": "./internal/attach::TestPiHookRetriesOnePrivateBoundaryAndEmitsNoCueOnFailure"
+        },
+        {
+          "id": "presented-terminal-cannot-reactivate-after-end-failure",
+          "test": "./internal/cli::TestPresentedTerminalCannotReactivateAfterBoundaryEndFailure"
         },
         {
           "id": "private-host-boundary-controls-attachment-lifecycle",
@@ -530,12 +538,14 @@
             "test:./internal/authority::TestVerifiedPeerDeliveryFaultMatrixCommitsWholeReceiverOutcomeOrNone",
             "test:./internal/authority::TestVerifyArtifactEnforcesExistingCASObjectBound",
             "test:./internal/cli::TestAcceptedHandlingReceiptRetainsReplayUntilBoundaryEndCommits",
+            "test:./internal/cli::TestAcceptedReferenceEndsAttachmentAndRejectsFurtherMutation",
             "test:./internal/cli::TestHookAttachMissingJournalDelegatesNewBoundaryReplacementToAuthority",
             "test:./internal/cli::TestHookAttachNewBoundaryEndsPredecessorAndRotatesEmptyCurrent",
             "test:./internal/cli::TestHookAttachRejectsExpiredAuthorityOutcomeBeforeJournalCommit",
             "test:./internal/cli::TestHookAttachSameBoundaryRejectsDivergentAuthorityReplay",
             "test:./internal/cli::TestHookEndCannotDestroyUnpresentedReceiptReplay",
             "test:./internal/cli::TestHookEndFinishesPresentedHandlingWithoutIntentReplay",
+            "test:./internal/cli::TestPresentedTerminalCannotReactivateAfterBoundaryEndFailure",
             "test:./internal/cli::TestSameHookAttachFinishesPresentedHandlingButNeverReturnsReady",
             "test:./internal/daemon::TestAttachmentBeginResponseExactlyReplaysAcrossDaemonRestart"
           ]

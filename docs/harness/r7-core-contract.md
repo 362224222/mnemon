@@ -361,11 +361,11 @@ journal does exist, the CLI must replay attachment begin against authority and
 compare the returned ID, credential, and expiry exactly before reporting ready;
 the journal alone is never proof of live authority. The Pi Host retries attach
 a fixed small number of times with the same nonce and emits no cue unless one
-attempt succeeds. Once an accepted non-Reference Receipt reaches stdout, the
-journal durably removes its
-replay-only Intent material before attempting boundary end. A later Hook end or
-different boundary can therefore finish End and clear that presented terminal
-phase without replaying the old Intent. Before presentation, Hook end fails
+attempt succeeds. Once any accepted Receipt reaches stdout, the journal
+durably removes its replay-only Intent material before attempting boundary end.
+Agent commands can never reactivate that presented terminal phase. A later
+Hook end or different boundary can therefore finish End and clear it without
+replaying the old Intent. Before presentation, Hook end fails
 closed and preserves the exact Receipt replay rather than ending the attachment
 beneath it. Host shutdown may end the current boundary eagerly; after crash or
 hard timeout, the next interactive boundary performs the same deterministic

@@ -249,41 +249,6 @@ func (directory *lockedJournalDirectory) markPresented(expected clientJournal) (
 	return presented, nil
 }
 
-// activatePresented finishes a crash-recoverable presentation transition.
-// The preceding terminal name remains the durable phase marker until this
-// atomic rename; an unpresented terminal can never enter the active path.
-func (directory *lockedJournalDirectory) activatePresented(expected clientJournal) (
-	clientJournal, error,
-) {
-	if !validTerminalName(expected.fileName) || !expected.CurrentOperation.IsZero() ||
-		expected.CurrentProjection != "" || len(expected.Candidates) != 0 {
-		return clientJournal{}, errors.New("R7 presented journal activation is invalid")
-	}
-	current, err := directory.load()
-	if err != nil {
-		return clientJournal{}, err
-	}
-	defer current.clear()
-	if current.fileName != expected.fileName || current.fileDigest != expected.fileDigest ||
-		!current.CurrentOperation.IsZero() || current.CurrentProjection != "" ||
-		len(current.Candidates) != 0 {
-		return clientJournal{}, errors.New("R7 presented journal changed before activation")
-	}
-	if err := unix.Renameat(int(directory.dir.Fd()), current.fileName,
-		int(directory.dir.Fd()), journalActiveName); err != nil {
-		return clientJournal{}, fmt.Errorf("activate presented R7 client journal: %w", err)
-	}
-	if err := directory.dir.Sync(); err != nil {
-		return clientJournal{}, fmt.Errorf("persist presented R7 client journal: %w", err)
-	}
-	active, err := directory.load()
-	if err != nil || active.fileName != journalActiveName || active.fileDigest != expected.fileDigest {
-		active.clear()
-		return clientJournal{}, errors.New("activated R7 client journal differs")
-	}
-	return active, nil
-}
-
 func (directory *lockedJournalDirectory) remove(expected clientJournal) error {
 	if expected.fileName == "" {
 		return errors.New("R7 client journal removal lacks identity")

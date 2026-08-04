@@ -25,17 +25,13 @@ func (app *App) runCurrent(ctx context.Context, store *journalStore, client agen
 			return err
 		}
 		if validTerminalName(journal.fileName) {
+			journal.clear()
 			if !journal.CurrentOperation.IsZero() {
-				journal.clear()
 				return newControlError(codeOperationPending,
 					"an accepted R7 receipt is awaiting presentation")
 			}
-			active, err := directory.activatePresented(journal)
-			journal.clear()
-			if err != nil {
-				return err
-			}
-			journal = active
+			return newControlError(codeOperationPending,
+				"an accepted R7 receipt is awaiting Host-boundary reconciliation")
 		}
 		defer journal.clear()
 		if journal.CurrentOperation.IsZero() {
@@ -231,12 +227,12 @@ func (app *App) runSubmit(ctx context.Context, store *journalStore, client agenc
 		return 0 // Rejected receipts retain the same View for an amended Intent.
 	}
 	defer terminal.clear()
-	app.finishPresentedReceipt(ctx, store, client, intent, terminal)
+	app.finishPresentedReceipt(ctx, store, client, terminal)
 	return 0
 }
 
 func (app *App) finishPresentedReceipt(ctx context.Context, store *journalStore,
-	client agencyClient, intent agency.AgentIntent, terminal clientJournal,
+	client agencyClient, terminal clientJournal,
 ) {
 	var presented clientJournal
 	if err := store.withLock(false, func(directory *lockedJournalDirectory) error {
@@ -250,18 +246,6 @@ func (app *App) finishPresentedReceipt(ctx context.Context, store *journalStore,
 		return
 	}
 	defer presented.clear()
-	if referenceConsequence(intent.Consequence()) {
-		if err := store.withLock(false, func(directory *lockedJournalDirectory) error {
-			active, err := directory.activatePresented(presented)
-			active.clear()
-			return err
-		}); err != nil {
-			// The Receipt was already presented. The presented terminal phase
-			// remains recoverable without replaying the prior Intent.
-			return
-		}
-		return
-	}
 	if apiErr := client.End(ctx, presented.Attachment); apiErr != nil {
 		// The accepted Receipt was already presented. The terminal journal
 		// preserves an idempotent End retry without retaining the Intent.
@@ -274,12 +258,6 @@ func (app *App) finishPresentedReceipt(ctx context.Context, store *journalStore,
 		// End and remove the presented terminal phase.
 		return
 	}
-}
-
-func referenceConsequence(consequence agency.Consequence) bool {
-	return consequence == agency.ConsequencePublishReference ||
-		consequence == agency.ConsequenceSupersedeReference ||
-		consequence == agency.ConsequenceRetractReference
 }
 
 func readBoundedInput(reader io.Reader, maximum int, code controlErrorCode,

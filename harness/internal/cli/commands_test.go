@@ -215,7 +215,7 @@ func TestHookEndCannotDestroyUnpresentedReceiptReplay(t *testing.T) {
 	}
 }
 
-func TestAcceptedReferenceKeepsAttachmentAndRefreshesCurrent(t *testing.T) {
+func TestAcceptedReferenceEndsAttachmentAndRejectsFurtherMutation(t *testing.T) {
 	fixture := newAppFixture(t)
 	intent := prepareReferenceSubmit(t, fixture)
 	var receipt bytes.Buffer
@@ -223,37 +223,35 @@ func TestAcceptedReferenceKeepsAttachmentAndRefreshesCurrent(t *testing.T) {
 		Run(context.Background(), []string{"agent", "submit", "--json"}); exit != 0 {
 		t.Fatalf("Reference submit exit = %d output %q", exit, receipt.String())
 	}
-
-	journal := loadJournalForTest(t, fixture.nodeState)
-	if journal.fileName != journalActiveName || !journal.CurrentOperation.IsZero() ||
-		journal.CurrentProjection != "" || len(journal.Candidates) != 0 ||
-		journal.Attachment.ID != "attachment:test" {
-		journal.clear()
-		t.Fatalf("post-Reference journal = file %q current %q projection %q candidates %d attachment %q",
-			journal.fileName, journal.CurrentOperation.String(), journal.CurrentProjection,
-			len(journal.Candidates), journal.Attachment.ID)
+	store := newJournalStore(fixture.nodeState, bytes.NewReader(make([]byte, 64)))
+	if exists, err := store.exists(); err != nil || exists {
+		t.Fatalf("accepted Reference journal exists = %t, %v", exists, err)
 	}
-	journal.clear()
-
 	var next bytes.Buffer
-	nextApp := fixture.app(strings.NewReader(""), &next)
-	nextApp.deps.random = bytes.NewReader(bytes.Repeat([]byte{0x43}, 64))
-	if exit := nextApp.Run(context.Background(),
-		[]string{"agent", "current", "--json"}); exit != 0 {
-		t.Fatalf("next Current exit = %d output %q", exit, next.String())
+	if exit := fixture.app(strings.NewReader(""), &next).
+		Run(context.Background(), []string{"agent", "current", "--json"}); exit != codeContextRequired.exitStatus() ||
+		!strings.Contains(next.String(), string(codeContextRequired)) {
+		t.Fatalf("post-Reference Current = exit %d output %q", exit, next.String())
+	}
+	var submit bytes.Buffer
+	if exit := fixture.app(bytes.NewReader(intent), &submit).
+		Run(context.Background(), []string{"agent", "submit", "--json"}); exit != codeContextRequired.exitStatus() ||
+		!strings.Contains(submit.String(), string(codeContextRequired)) {
+		t.Fatalf("post-Reference submit = exit %d output %q", exit, submit.String())
 	}
 	fixture.client.mu.Lock()
 	attachCalls := fixture.client.attachCalls
 	endCalls := fixture.client.endCalls
 	operations := append([]string(nil), fixture.client.currentOperations...)
+	submitCalls := len(fixture.client.submitOperations)
 	fixture.client.mu.Unlock()
-	if attachCalls != 1 || endCalls != 0 || len(operations) != 2 || operations[0] == operations[1] {
-		t.Fatalf("continued attachment = attaches %d ends %d operations %#v",
-			attachCalls, endCalls, operations)
+	if attachCalls != 1 || endCalls != 1 || len(operations) != 1 || submitCalls != 1 {
+		t.Fatalf("closed Reference boundary = attaches %d ends %d currents %#v submits %d",
+			attachCalls, endCalls, operations, submitCalls)
 	}
 }
 
-func TestReferencePresentationLossRetainsExactReplayBeforeRefresh(t *testing.T) {
+func TestReferencePresentationLossRetainsExactReplayBeforeBoundaryEnd(t *testing.T) {
 	fixture := newAppFixture(t)
 	intent := leaveUnpresentedReference(t, fixture)
 	terminal := loadJournalForTest(t, fixture.nodeState)
@@ -277,32 +275,24 @@ func TestReferencePresentationLossRetainsExactReplayBeforeRefresh(t *testing.T) 
 	if len(operations) != 2 || operations[0] != operations[1] {
 		t.Fatalf("Reference replay operations = %#v", operations)
 	}
-	active := loadJournalForTest(t, fixture.nodeState)
-	if active.fileName != journalActiveName || !active.CurrentOperation.IsZero() ||
-		len(active.Candidates) != 0 {
-		active.clear()
-		t.Fatalf("replayed Reference reset = file %q current %q candidates %d",
-			active.fileName, active.CurrentOperation.String(), len(active.Candidates))
+	store := newJournalStore(fixture.nodeState, bytes.NewReader(make([]byte, 64)))
+	if exists, err := store.exists(); err != nil || exists {
+		t.Fatalf("replayed Reference journal exists = %t, %v", exists, err)
 	}
-	active.clear()
 }
 
-func TestCurrentRecoversPresentedReferencePhase(t *testing.T) {
+func TestPresentedTerminalCannotReactivateAfterBoundaryEndFailure(t *testing.T) {
 	fixture := newAppFixture(t)
-	_ = leaveUnpresentedReference(t, fixture)
-
-	store := newJournalStore(fixture.nodeState, bytes.NewReader(make([]byte, 64)))
-	if err := store.withLock(false, func(directory *lockedJournalDirectory) error {
-		terminal, err := directory.load()
-		if err != nil {
-			return err
-		}
-		defer terminal.clear()
-		presented, err := directory.markPresented(terminal)
-		presented.clear()
-		return err
-	}); err != nil {
-		t.Fatal(err)
+	fixture.attach(t)
+	if exit := fixture.app(strings.NewReader(""), io.Discard).
+		Run(context.Background(), []string{"agent", "current", "--json"}); exit != 0 {
+		t.Fatalf("Current exit = %d", exit)
+	}
+	fixture.client.endFailures = 1
+	intent := candidateFreeRootIntent(t, "end failure stays terminal")
+	if exit := fixture.app(bytes.NewReader(intent), io.Discard).
+		Run(context.Background(), []string{"agent", "submit", "--json"}); exit != 0 {
+		t.Fatalf("accepted submit exit = %d", exit)
 	}
 	presented := loadJournalForTest(t, fixture.nodeState)
 	if !validTerminalName(presented.fileName) || !presented.CurrentOperation.IsZero() {
@@ -314,16 +304,25 @@ func TestCurrentRecoversPresentedReferencePhase(t *testing.T) {
 
 	var output bytes.Buffer
 	if exit := fixture.app(strings.NewReader(""), &output).
-		Run(context.Background(), []string{"agent", "current", "--json"}); exit != 0 {
-		t.Fatalf("recovering Current exit/output = %d / %q", exit, output.String())
+		Run(context.Background(), []string{"agent", "current", "--json"}); exit != codeOperationPending.exitStatus() ||
+		!strings.Contains(output.String(), string(codeOperationPending)) {
+		t.Fatalf("presented terminal Current = exit %d output %q", exit, output.String())
 	}
-	active := loadJournalForTest(t, fixture.nodeState)
-	if active.fileName != journalActiveName || active.CurrentOperation.IsZero() {
-		active.clear()
-		t.Fatalf("recovered active journal = file %q current %q",
-			active.fileName, active.CurrentOperation.String())
+	var submit bytes.Buffer
+	if exit := fixture.app(bytes.NewReader(intent), &submit).
+		Run(context.Background(), []string{"agent", "submit", "--json"}); exit != codeContextRequired.exitStatus() ||
+		!strings.Contains(submit.String(), string(codeContextRequired)) {
+		t.Fatalf("presented terminal submit = exit %d output %q", exit, submit.String())
 	}
-	active.clear()
+	fixture.client.mu.Lock()
+	currentCalls := len(fixture.client.currentOperations)
+	submitCalls := len(fixture.client.submitOperations)
+	endCalls := fixture.client.endCalls
+	fixture.client.mu.Unlock()
+	if currentCalls != 1 || submitCalls != 1 || endCalls != 1 {
+		t.Fatalf("presented terminal calls = current %d submit %d end %d, want 1/1/1",
+			currentCalls, submitCalls, endCalls)
+	}
 }
 
 func TestTerminalReplayRejectsChangedIntentLocally(t *testing.T) {

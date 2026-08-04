@@ -14,13 +14,14 @@ Use one loop:
 View -> Intent -> Receipt
 ```
 
-One eligible Host turn owns exactly one Attachment and may submit at most one
-Intent. Never invoke `hook attach` or `hook end`; only the installed Runtime
-extension owns those lifecycle commands. Use ordinary local tools before the
-Intent when evidence is needed. After the Intent returns a Receipt, perform no
-further mnemond mutation in that turn. If one semantic request needs several
-participants, express it as one Event with all bounded successors offered by
-the View; leave later actions to later natural turns.
+One eligible Host turn owns exactly one Attachment and can commit at most one
+accepted Intent. Never invoke `hook attach` or `hook end`; only the installed
+Runtime extension owns those lifecycle commands. Use ordinary local tools
+before the Intent when evidence is needed. A rejected Receipt creates no
+Effect; amend from its bounded diagnostic or defer. After an accepted Receipt,
+perform no further mnemond mutation in that turn. If one semantic request needs
+several participants, express it as one Event with all bounded successors
+offered by the View; leave later actions to later natural turns.
 
 This guide and the current View are the complete Agent-facing protocol surface;
 do not search the filesystem for another guide or discover protocol state
