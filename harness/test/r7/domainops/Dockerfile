@@ -26,7 +26,8 @@ ARG PI_VERSION=0.83.0
 RUN apk add --no-cache bash ca-certificates jq && \
     npm install -g --ignore-scripts --no-audit --no-fund \
       "@earendil-works/pi-coding-agent@${PI_VERSION}" && \
-    adduser -D -u 10001 agent && mkdir -p /workspace && chown agent:agent /workspace
+    adduser -D -u 10001 agent && mkdir -p /workspace && \
+    chown root:root /workspace && chmod 1777 /workspace
 COPY --from=build --chown=10001:10001 /out/domainctl /usr/local/bin/domainctl
 COPY --from=build --chown=10001:10001 /out/mnemon-harness /usr/local/bin/mnemon-harness
 COPY --from=build --chown=10001:10001 /out/mnemond /usr/local/bin/mnemond

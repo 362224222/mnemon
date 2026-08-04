@@ -43,6 +43,7 @@ agent_image=
 agent_image_id=
 agent_binary_digests=
 agent_containers=
+tar_flavor=
 turn_pids=()
 run_started_at=
 run_finished_at=
@@ -140,6 +141,11 @@ require_prerequisites() {
   command -v docker >/dev/null 2>&1 || fail 'docker is required'
   command -v jq >/dev/null 2>&1 || fail 'jq is required'
   command -v tar >/dev/null 2>&1 || fail 'tar is required'
+  case "$(tar --version 2>&1)" in
+    *bsdtar*) tar_flavor=bsd ;;
+    *GNU\ tar*) tar_flavor=gnu ;;
+    *) fail 'BSD tar or GNU tar is required for immutable projections' ;;
+  esac
   command -v sqlite3 >/dev/null 2>&1 ||
     fail 'sqlite3 is required for the authority-state oracle'
   docker info >/dev/null 2>&1 || fail 'Docker Engine is unavailable'
@@ -206,7 +212,7 @@ copy_immutable_projection() {
   # an explicit root-owned archive instead so a capability-free Runtime cannot
   # rewrite its instructions.  bsdtar and GNU tar spell owner overrides
   # differently; both paths emit the same ustar ownership and mode.
-  if tar --version 2>&1 | grep -q bsdtar; then
+  if test "$tar_flavor" = bsd; then
     COPYFILE_DISABLE=1 tar -cf - --format ustar --no-xattrs --uid 0 --gid 0 \
       -C "$projection_dir" AGENTS.md | docker cp - "$container:/workspace"
   else
@@ -219,15 +225,15 @@ start_agent_container() {
   local role=$1 container endpoint
   container=$(container_for "$role")
   endpoint=$(endpoint_for "$role")
+  # The name is deterministic and unique to this run. Register it before
+  # creation so even a partially created container is covered by cleanup.
+  agent_containers="$agent_containers $container"
   docker run -d --name "$container" --hostname "$role" \
     --network "$control_network" --network-alias "$role" \
     --memory 1g --memory-swap 1g --cpus 1 --pids-limit 256 \
     --security-opt no-new-privileges:true --cap-drop ALL \
     --env "DOMAIN_ROLE=$role" --env "DOMAIN_ENDPOINT=$endpoint" \
     "$agent_image" >/dev/null
-  # Register immediately: every later initialization failure must still remove
-  # the container rather than leaving a partially prepared Runtime behind.
-  agent_containers="$agent_containers $container"
   # Root creates only the non-secret parent. It is writable just long enough
   # for the unprivileged Runtime to create its owned 0700 state below; setup
   # tightens the parent again before any Agent turn.
@@ -263,10 +269,17 @@ assert_agent_boundary() {
     (.[0].HostConfig.SecurityOpt | index("no-new-privileges:true")) != null
   ' >/dev/null || fail "$role Agent received an unexpected mount or resource/security profile"
   docker exec "$container" sh -c '
-    test "$(stat -c %u /workspace)" = "$(id -u)" &&
+    probe=/workspace/.projection-replace-probe
+    test "$(stat -c %u /workspace)" = 0 &&
+    test "$(stat -c %a /workspace)" = 1777 &&
+    test "$(stat -c %u /workspace/AGENTS.md)" = 0 &&
+    test "$(stat -c %a /workspace/AGENTS.md)" = 444 &&
+    printf probe >"$probe" &&
+    ! mv -f "$probe" /workspace/AGENTS.md 2>/dev/null &&
+    rm -f "$probe" &&
     test "$(stat -c %u /workspace/AGENTS.md)" = 0 &&
     test "$(stat -c %a /workspace/AGENTS.md)" = 444
-  ' || fail "$role Agent does not own an isolated workspace projection"
+  ' || fail "$role Agent can replace its immutable workspace projection"
   leaked=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container" |
     grep -E 'DEEPSEEK|API_KEY' || true)
   test -z "$leaked" || fail "$role Agent container received a provider credential"
@@ -901,6 +914,10 @@ finalize_failure_evidence() {
 require_prerequisites
 rm -f -- "$failure_report_path" "$failure_trace_path"
 runtime_root=$(mktemp -d /tmp/mnr7-domain-live.XXXXXX)
+trap on_exit EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 runtime_root=$(cd "$runtime_root" && pwd -P)
 chmod 0700 "$runtime_root"
 project="mnr7-domain-live-$$"
@@ -909,10 +926,6 @@ agent_image="mnemon-domain-ops-agent:live-$$"
 run_started_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 mkdir -p "$runtime_root/cards" "$runtime_root/workspaces" "$runtime_root/raw" \
   "$runtime_root/sanitized" "$runtime_root/authority"
-trap on_exit EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
 
 incident_prefix="incident-$$"
 evaluation_prefix="evaluation-$$"
