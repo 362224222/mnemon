@@ -10,31 +10,18 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
-const (
-	traceSchema   = "mnemon.test.trace"
-	traceVersion  = 1
-	maxTraceLine  = 16 << 10
-	maxTraceFacts = 100000
-)
-
 var (
-	tokenPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
-	digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-	tracePattern  = regexp.MustCompile(`^trace:[A-Za-z0-9][A-Za-z0-9._:-]{0,121}$`)
 	dangerousKeys = []string{
 		"api_key", "args", "artifact_bytes", "attachment_credential", "chain_of_thought",
 		"command", "credential", "environment", "message", "operation_key", "payload",
 		"private_key", "prompt", "reasoning", "signature", "tool_result", "transcript",
 	}
-	sourceClasses = []string{"runtime", "r7_authority", "transport", "r8_selector", "oracle", "runner"}
-	truthClasses  = []string{"observation", "accepted_local_fact", "derived_projection", "local_preference", "assertion"}
 )
 
 type envelope struct {
@@ -183,6 +170,14 @@ func TestObserverIsSingleFileLocalOnlyAndMarkupSafe(t *testing.T) {
 		if !strings.Contains(text, required) {
 			t.Fatalf("observer HTML is missing %q", required)
 		}
+	}
+}
+
+func TestObserverFilePickerAcceptsDocumentedTraceExtension(t *testing.T) {
+	html := string(readFile(t, "index.html"))
+	const picker = `<input id="traceFiles" type="file" multiple accept=".trace,.jsonl,.ndjson,application/x-ndjson">`
+	if count := strings.Count(html, picker); count != 1 {
+		t.Fatalf("observer trace file picker count = %d, want exactly one documented picker", count)
 	}
 }
 

@@ -118,6 +118,15 @@ Trace capture failure makes the test report `incomplete`. It does not roll back
 or manufacture Event, Handling, Reference, Receipt, Delivery, or
 PreferenceObservation state.
 
+Test-only exporters can use the small Go `Writer` in this package after they
+have independently sanitized their source evidence. The caller supplies a
+typed run header, typed metadata-only facts with explicit backward causes, and
+terminal gate results. The writer assigns contiguous sequence numbers, rejects
+dangling or duplicate causes, enforces the observer bounds and evidence
+classification, and writes the deterministic SHA-256 footer. It deliberately
+does not read authority databases, parse Runtime transcripts, infer causality,
+or understand scenario-specific Event kinds.
+
 ## Validation
 
 Run the focused observer checks with:
