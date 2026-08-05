@@ -1,0 +1,2 @@
+winner=bidder-b
+cost=4

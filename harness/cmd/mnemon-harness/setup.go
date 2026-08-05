@@ -1,102 +1,147 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io"
+	"os"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/app"
-	"github.com/spf13/cobra"
+	"github.com/mnemon-dev/mnemon/harness/internal/attach"
+	"github.com/mnemon-dev/mnemon/harness/internal/daemon"
 )
 
-var (
-	setupRoot        string
-	setupProjectRoot string
-	setupHost        string
-	setupLoops       []string
-	setupPrincipal   string
-	setupControlURL  string
-	setupActorKind   string
-	setupUseToken    bool
-	setupDryRun      bool
-)
+const setupRuntimePi = "pi"
 
-// setup is the everyday install front door: it installs generic lifecycle hooks plus managed GUIDE and
-// skill surfaces, then wires the Local Mnemon channel artifacts a host agent uses. --loop enables
-// optional event package scope; it does not project host assets on the R1 path.
-var setupCmd = &cobra.Command{
-	Use:   "setup --host HOST [--loop LOOP ...]",
-	Short: "Install Agent Integration for a host",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		_, err := app.New(setupRoot).Setup(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), app.SetupOptions{
-			Host:          setupHost,
-			Loops:         selectedSetupLoops(),
-			ControlURL:    setupControlURL,
-			Principal:     setupPrincipal,
-			ActorKind:     setupActorKind,
-			UseToken:      setupUseToken,
-			TokenExplicit: cmd.Flags().Changed("token"),
-			ProjectRoot:   setupProjectRoot,
-			DryRun:        setupDryRun,
-		})
-		return err
-	},
+type setupOptions struct {
+	projectRoot string
+	runtime     string
 }
 
-var setupStatusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Report Agent Integration setup health",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		lines, err := app.New(setupRoot).SetupStatus(setupProjectRoot, setupPrincipal)
-		if err != nil {
+type setupDependencies struct {
+	workingDirectory func() (string, error)
+	resolveState     func(string) (string, string, error)
+	ensure           func(context.Context, string) error
+	provision        func(context.Context, string) (string, error)
+	install          func(string) error
+}
+
+func productionSetupDependencies() setupDependencies {
+	return setupDependencies{
+		workingDirectory: os.Getwd,
+		resolveState:     daemon.ResolveProjectState,
+		ensure:           daemon.Ensure,
+		provision: func(ctx context.Context, projectRoot string) (string, error) {
+			result, err := daemon.Provision(ctx, projectRoot)
+			return result.StateDirectory(), err
+		},
+		install: func(projectRoot string) error {
+			_, err := attach.InstallPi(projectRoot)
 			return err
-		}
-		for _, l := range lines {
-			fmt.Fprintln(cmd.OutOrStdout(), l)
-		}
-		return nil
-	},
-}
-
-var setupUninstallCmd = &cobra.Command{
-	Use:   "uninstall --host HOST --loop LOOP [--loop LOOP ...] --principal PRINCIPAL",
-	Short: "Uninstall Agent Integration assets for a principal",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return app.New(setupRoot).SetupUninstall(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), app.SetupOptions{
-			Host:        setupHost,
-			Loops:       selectedSetupLoops(),
-			Principal:   setupPrincipal,
-			ProjectRoot: setupProjectRoot,
-		})
-	},
-}
-
-func init() {
-	setupCmd.PersistentFlags().StringVar(&setupRoot, "root", ".", "repository root containing harness declarations")
-	setupCmd.PersistentFlags().StringVar(&setupProjectRoot, "project-root", "", "project root for Agent Integration artifacts (defaults to root)")
-	setupCmd.PersistentFlags().StringVar(&setupHost, "host", "", "Agent Integration host id")
-	setupCmd.PersistentFlags().StringArrayVar(&setupLoops, "loop", nil, "event package id to enable (e.g. assignment or an external package); may be repeated")
-	setupCmd.PersistentFlags().StringVar(&setupPrincipal, "principal", "", "Agent Integration principal")
-
-	setupCmd.Flags().StringVar(&setupControlURL, "control-url", "", "Local Mnemon endpoint URL")
-	setupCmd.Flags().StringVar(&setupActorKind, "actor-kind", "host-agent", "agent kind: host-agent or control-agent")
-	_ = setupCmd.Flags().MarkHidden("actor-kind")
-	setupCmd.Flags().BoolVar(&setupUseToken, "token", true, "generate a local access token")
-	setupCmd.Flags().BoolVar(&setupDryRun, "dry-run", false, "print changes without writing")
-
-	setupCmd.AddCommand(setupStatusCmd, setupUninstallCmd)
-	setupCmd.GroupID = groupSpine
-	rootCmd.AddCommand(setupCmd)
-}
-
-// selectedSetupLoops dedupes the repeated --loop flag.
-func selectedSetupLoops() []string {
-	seen := map[string]bool{}
-	var loops []string
-	for _, loop := range setupLoops {
-		if loop == "" || seen[loop] {
-			continue
-		}
-		seen[loop] = true
-		loops = append(loops, loop)
+		},
 	}
-	return loops
+}
+
+func runSetup(ctx context.Context, args []string, stdout, stderr io.Writer,
+	deps setupDependencies,
+) int {
+	if ctx == nil || stdout == nil || stderr == nil || !deps.available() {
+		return 1
+	}
+	options, err := parseSetupOptions(args)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mnemon-harness setup: %v\n", err)
+		return 2
+	}
+	requested := options.projectRoot
+	if requested == "" {
+		requested, err = deps.workingDirectory()
+		if err != nil {
+			return writeSetupFailure(stderr, err)
+		}
+	}
+	projectRoot, stateDirectory, err := deps.resolveState(requested)
+	if err != nil {
+		return writeSetupFailure(stderr, err)
+	}
+	if err := ensureSetupDaemon(ctx, projectRoot, stateDirectory, deps); err != nil {
+		return writeSetupFailure(stderr, err)
+	}
+	if err := deps.install(projectRoot); err != nil {
+		return writeSetupFailure(stderr, err)
+	}
+	if _, err := io.WriteString(stdout,
+		`{"schema":"mnemon.setup","status":"ready","version":1}`+"\n"); err != nil {
+		return 1
+	}
+	return 0
+}
+
+func (deps setupDependencies) available() bool {
+	return deps.workingDirectory != nil && deps.resolveState != nil && deps.ensure != nil &&
+		deps.provision != nil && deps.install != nil
+}
+
+func ensureSetupDaemon(ctx context.Context, projectRoot, stateDirectory string,
+	deps setupDependencies,
+) error {
+	firstErr := deps.ensure(ctx, stateDirectory)
+	if firstErr == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	provisionedState, provisionErr := deps.provision(ctx, projectRoot)
+	if provisionErr != nil {
+		return errors.Join(firstErr, provisionErr)
+	}
+	if provisionedState != stateDirectory {
+		return errors.New("provisioned node state does not match the resolved project")
+	}
+	if err := deps.ensure(ctx, stateDirectory); err != nil {
+		return errors.Join(firstErr, err)
+	}
+	return nil
+}
+
+func parseSetupOptions(args []string) (setupOptions, error) {
+	options := setupOptions{runtime: setupRuntimePi}
+	seenRuntime := false
+	seenRoot := false
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--runtime":
+			if seenRuntime || index+1 >= len(args) {
+				return setupOptions{}, errors.New("--runtime requires one value")
+			}
+			seenRuntime = true
+			index++
+			options.runtime = args[index]
+		case "--project-root":
+			if seenRoot || index+1 >= len(args) {
+				return setupOptions{}, errors.New("--project-root requires one value")
+			}
+			seenRoot = true
+			index++
+			options.projectRoot = args[index]
+		default:
+			return setupOptions{}, fmt.Errorf("unsupported argument %q", args[index])
+		}
+	}
+	if options.runtime != setupRuntimePi {
+		return setupOptions{}, fmt.Errorf("unsupported runtime %q", options.runtime)
+	}
+	if seenRoot && options.projectRoot == "" {
+		return setupOptions{}, errors.New("--project-root must not be empty")
+	}
+	return options, nil
+}
+
+func writeSetupFailure(stderr io.Writer, err error) int {
+	if err == nil {
+		err = errors.New("setup failed")
+	}
+	_, _ = fmt.Fprintf(stderr, "mnemon-harness setup: %v\n", err)
+	return 1
 }

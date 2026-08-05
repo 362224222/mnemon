@@ -1,10 +1,7 @@
 # Binary
 /mnemon
 /mnemon-harness
-/mnemon-hub
 /mnemond
-/mnemon-multica-runtime
-/mnemon-acceptance
 /bin/
 
 # Local dogfood / capability test sandboxes (per-test subdirs)
@@ -13,6 +10,7 @@
 # Local LLM CLI integration (use mnemon setup --global for user-wide install)
 .claude/
 .codex/
+.agents/
 .openclaw/
 .kanna/
 .supervisor/

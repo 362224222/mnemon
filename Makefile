@@ -5,12 +5,19 @@
 BINARY      := mnemon
 VERSION     ?= dev
 LDFLAGS     := -s -w -X github.com/mnemon-dev/mnemon/cmd.version=$(VERSION)
+HARNESS_LDFLAGS := -s -w -X main.version=$(VERSION)
+GO_VERSION   := $(shell awk '$$1 == "go" { print $$2; exit }' go.mod)
+HARNESS_GO_VERSION := $(shell awk '$$1 == "go" { print $$2; exit }' harness/go.mod)
+HARNESS_GO   := env GOTOOLCHAIN=go$(HARNESS_GO_VERSION) GOFLAGS=-mod=readonly go -C harness
 GOBIN       := $(shell go env GOBIN)
 ifeq ($(GOBIN),)
   GOBIN     := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: deps build harness-build install uninstall test unit vet harness-validate harness-docs-check eval-router-check codex-app-eval codex-app-eval-suite codex-memory-deep-eval codex-skill-deep-eval codex-eval-smoke docker-build docker-run compose-up compose-down compose-dev release-snapshot clean help
+.PHONY: deps build harness-build install uninstall test unit vet harness-validate harness-quality harness-verify
+.PHONY: harness-contract harness-static harness-docker harness-docker-case harness-live-pi
+.PHONY: harness-r8 harness-r8-docker harness-domain-ops harness-domain-ops-live
+.PHONY: docker-build docker-run compose-up compose-down compose-dev release-snapshot clean help
 
 .DEFAULT_GOAL := help
 
@@ -18,16 +25,14 @@ endif
 
 deps: ## Download Go dependencies
 	go mod download
+	$(HARNESS_GO) mod download
 
 build: ## Build the mnemon binary
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) .
 
-harness-build: ## Build the harness binaries (mnemon-harness, mnemond, mnemonhub, Multica runtime adapter, and test-only acceptance runner)
-	go build -ldflags "$(LDFLAGS)" -o mnemon-harness ./harness/cmd/mnemon-harness
-	go build -ldflags "$(LDFLAGS)" -o mnemon-hub ./harness/cmd/mnemon-hub
-	go build -ldflags "$(LDFLAGS)" -o mnemond ./harness/cmd/mnemond
-	go build -ldflags "$(LDFLAGS)" -o mnemon-multica-runtime ./harness/cmd/mnemon-multica-runtime
-	go build -ldflags "$(LDFLAGS)" -o mnemon-acceptance ./harness/cmd/mnemon-acceptance
+harness-build: ## Build the experimental R7 Harness binaries
+	$(HARNESS_GO) build -ldflags "$(HARNESS_LDFLAGS)" -o ../mnemon-harness ./cmd/mnemon-harness
+	$(HARNESS_GO) build -ldflags "$(HARNESS_LDFLAGS)" -o ../mnemond ./cmd/mnemond
 
 # ── Install / Uninstall ─────────────────────────────────────────────
 
@@ -52,29 +57,51 @@ unit: ## Run Go unit tests
 vet: ## Run go vet static analysis
 	go vet ./...
 
-harness-validate: ## Validate harness event packages
-	bash scripts/validate_harness_loops.sh
+harness-validate: ## Validate the R7 projection, contract, and evidence bindings
+	$(HARNESS_GO) test ./internal/attach ./tools/corecontract ./test/contracts -count=1
 
-harness-docs-check: ## Check bilingual harness doc heading sync
-	bash scripts/check_bilingual_sync.sh
+harness-quality: ## Run pinned, non-mutating Harness quality gates
+	@base_ref="$${HARNESS_QUALITY_BASE_REF:-HEAD}"; \
+		$(HARNESS_GO) run ./tools/quality check --root .. --base-ref "$$base_ref"
+	$(HARNESS_GO) vet ./...
+	$(HARNESS_GO) test ./tools/quality ./tools/corecontract ./test/contracts ./test/observer -count=1
+	harness/test/r7/domainops/run_live_oracle.sh
 
-eval-router-check: ## Check no-model eval failed-finding routing to proposal
-	bash scripts/check_eval_router_fixture.sh
+harness-contract: ## Validate the active R7 contract and evidence registry
+	$(HARNESS_GO) test ./tools/corecontract ./test/contracts -count=1
 
-codex-app-eval: ## Run real Codex app-server harness smoke eval
-	python3 scripts/codex_app_server_eval.py
+harness-static: ## Run R7 pattern, layout, and deletion oracles
+	harness/test/r7/runner/run_static.sh
 
-codex-app-eval-suite: ## Run real Codex app-server memory/skill scenario suite
-	python3 scripts/codex_app_server_eval.py --suite
+harness-docker: ## Run all R7 cases in isolated Docker peers
+	harness/test/r7/runner/run_cases.sh
 
-codex-memory-deep-eval: ## Run deep real Codex app-server memory regression suite
-	python3 scripts/codex_app_server_eval.py --suite --suite-name memory-deep
+harness-docker-case: ## Run one R7 Docker case with CASE=<name>
+	@test -n "$(CASE)" || { echo "error: CASE is required" >&2; exit 2; }
+	harness/test/r7/runner/run_cases.sh "$(CASE)"
 
-codex-skill-deep-eval: ## Run deep real Codex app-server skill regression suite
-	python3 scripts/codex_app_server_eval.py --suite --suite-name skill-deep
+harness-live-pi: ## Run the opt-in Pi/DeepSeek live smoke
+	@test "$${LIVE_PI:-}" = 1 || { echo "error: set LIVE_PI=1" >&2; exit 2; }
+	@test -n "$${DEEPSEEK_API_KEY:-}" || { echo "error: DEEPSEEK_API_KEY is required" >&2; exit 2; }
+	harness/test/r7/runner/run_live_pi.sh
 
-codex-eval-smoke: ## Run real Codex app-server eval projection smoke check
-	python3 scripts/codex_app_server_eval.py --loop eval
+harness-r8: ## Test the optional, removable R8 selector and its proof adapters
+	$(HARNESS_GO) test ./internal/selector ./internal/selector/simtest ./internal/selector/testdata/network/cmd/r8-peer -count=1
+	$(HARNESS_GO) test -race ./internal/selector ./internal/selector/simtest ./internal/selector/testdata/network/cmd/r8-peer -count=1
+
+harness-r8-docker: harness-r8 ## Run the isolated five-peer R8 network proof
+	harness/test/r8/network/runner/run_docker.sh
+
+harness-domain-ops: ## Run the opt-in real-service federated operations world
+	harness/test/r7/domainops/run_world.sh
+
+harness-domain-ops-live: ## Run the paid autonomous Pi/DeepSeek operations case
+	@test "$${LIVE_DOMAIN_OPS:-}" = 1 || { echo "error: set LIVE_DOMAIN_OPS=1" >&2; exit 2; }
+	@test -n "$${DEEPSEEK_API_KEY:-}" || { echo "error: DEEPSEEK_API_KEY is required" >&2; exit 2; }
+	harness/test/r7/domainops/run_live.sh
+
+harness-verify: harness-quality ## Run the complete exact-tree R7 merge gate and write its report
+	$(HARNESS_GO) run ./tools/corecontract/cmd/core-gate --root ..
 
 # ── Containers / Deployment ──────────────────────────────────────────
 
@@ -99,7 +126,7 @@ release-snapshot: ## Build local GoReleaser snapshot artifacts
 # ── Clean ────────────────────────────────────────────────────────────
 
 clean: ## Remove build artifacts and test data
-	rm -f $(BINARY)
+	rm -f $(BINARY) mnemon-harness mnemond
 	rm -rf .testdata
 
 # ── Help ─────────────────────────────────────────────────────────────

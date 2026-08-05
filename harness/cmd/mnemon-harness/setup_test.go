@@ -3,149 +3,168 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
-	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/attach"
+	"github.com/mnemon-dev/mnemon/harness/internal/daemon"
 )
 
-func TestSetupProductFlagsSelectLoops(t *testing.T) {
-	oldLoops := setupLoops
-	t.Cleanup(func() {
-		setupLoops = oldLoops
-	})
-
-	// selectedSetupLoops only dedupes
-	// the repeated --loop flag, preserving first-seen order.
-	setupLoops = []string{"assignment", "progress_digest", "assignment"}
-
-	got := selectedSetupLoops()
-	want := []string{"assignment", "progress_digest"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("selectedSetupLoops() = %#v, want %#v", got, want)
+func TestSetupProvisionsOnlyAfterTheFirstReadinessAttempt(t *testing.T) {
+	var calls []string
+	deps := setupDependencies{
+		workingDirectory: func() (string, error) { return "/workspace", nil },
+		resolveState: func(requested string) (string, string, error) {
+			calls = append(calls, "resolve:"+requested)
+			return "/workspace", "/workspace/.mnemon/harness/node", nil
+		},
+		ensure: func(_ context.Context, state string) error {
+			calls = append(calls, "ensure:"+state)
+			if len(calls) == 2 {
+				return errors.New("not ready")
+			}
+			return nil
+		},
+		provision: func(_ context.Context, root string) (string, error) {
+			calls = append(calls, "provision:"+root)
+			return "/workspace/.mnemon/harness/node", nil
+		},
+		install: func(root string) error {
+			calls = append(calls, "install:"+root)
+			return nil
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	exit := runSetup(context.Background(), nil, &stdout, &stderr, deps)
+	wantCalls := []string{"resolve:/workspace", "ensure:/workspace/.mnemon/harness/node",
+		"provision:/workspace", "ensure:/workspace/.mnemon/harness/node", "install:/workspace"}
+	if exit != 0 || stdout.String() !=
+		`{"schema":"mnemon.setup","status":"ready","version":1}`+"\n" ||
+		stderr.Len() != 0 || !reflect.DeepEqual(calls, wantCalls) {
+		t.Fatalf("fresh setup = exit %d stdout %q stderr %q calls %#v",
+			exit, stdout.String(), stderr.String(), calls)
 	}
 }
 
-func TestSetupCommandUsesProductDefaults(t *testing.T) {
-	restoreSetupFlags(t)
-	projectRoot := t.TempDir()
-	setupRoot = cmdRepoRoot(t)
-	setupProjectRoot = projectRoot
-	setupHost = "codex"
-	setupLoops = nil
-	setupPrincipal = ""
-	setupControlURL = ""
-	setupUseToken = false
-
-	var out, errw bytes.Buffer
-	setupCmd.SetOut(&out)
-	setupCmd.SetErr(&errw)
-	t.Cleanup(func() {
-		setupCmd.SetOut(os.Stdout)
-		setupCmd.SetErr(os.Stderr)
-	})
-	if err := setupCmd.RunE(setupCmd, nil); err != nil {
-		t.Fatalf("setup command with product defaults: %v\nstderr=%s", err, errw.String())
+func TestSetupReadyReplaySkipsProvisionAndStillVerifiesProjection(t *testing.T) {
+	provisions := 0
+	installs := 0
+	deps := setupDependencies{
+		workingDirectory: func() (string, error) { return "/unused", nil },
+		resolveState: func(requested string) (string, string, error) {
+			if requested != "/project" {
+				t.Fatalf("requested project = %q", requested)
+			}
+			return requested, requested + "/.mnemon/harness/node", nil
+		},
+		ensure: func(context.Context, string) error { return nil },
+		provision: func(context.Context, string) (string, error) {
+			provisions++
+			return "", nil
+		},
+		install: func(string) error { installs++; return nil },
 	}
-	got := out.String()
-	for _, want := range []string{"Agent Integration:", "Local Mnemon:", "Remote Workspace:"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("setup output missing %q:\n%s", want, got)
+	if exit := runSetup(context.Background(), []string{"--runtime", "pi", "--project-root", "/project"},
+		io.Discard, io.Discard, deps); exit != 0 || provisions != 0 || installs != 1 {
+		t.Fatalf("ready setup = exit %d provisions %d installs %d", exit, provisions, installs)
+	}
+}
+
+func TestSetupNeverInstallsAfterProvisionOrReadinessFailure(t *testing.T) {
+	provisionFailure := errors.New("corrupt authority")
+	installs := 0
+	deps := setupDependencies{
+		workingDirectory: func() (string, error) { return "/workspace", nil },
+		resolveState: func(string) (string, string, error) {
+			return "/workspace", "/workspace/state", nil
+		},
+		ensure:    func(context.Context, string) error { return errors.New("not ready") },
+		provision: func(context.Context, string) (string, error) { return "", provisionFailure },
+		install:   func(string) error { installs++; return nil },
+	}
+	var stderr bytes.Buffer
+	exit := runSetup(context.Background(), nil, io.Discard, &stderr, deps)
+	if exit != 1 || installs != 0 || !bytes.Contains(stderr.Bytes(), []byte("corrupt authority")) {
+		t.Fatalf("failed setup = exit %d installs %d stderr %q", exit, installs, stderr.String())
+	}
+}
+
+func TestSetupRejectsUnknownRuntimeAndMalformedOptionsBeforeEffects(t *testing.T) {
+	effects := 0
+	deps := setupDependencies{
+		workingDirectory: func() (string, error) { effects++; return "", nil },
+		resolveState:     func(string) (string, string, error) { effects++; return "", "", nil },
+		ensure:           func(context.Context, string) error { effects++; return nil },
+		provision: func(context.Context, string) (string, error) {
+			effects++
+			return "", nil
+		},
+		install: func(string) error { effects++; return nil },
+	}
+	for _, args := range [][]string{{"--runtime", "codex"}, {"--project-root"},
+		{"--runtime", "pi", "extra"}, {"--runtime", "pi", "--runtime", "pi"}} {
+		if exit := runSetup(context.Background(), args, io.Discard, io.Discard, deps); exit != 2 {
+			t.Fatalf("malformed setup %v exit = %d", args, exit)
 		}
 	}
+	if effects != 0 {
+		t.Fatalf("malformed setup caused %d effects", effects)
+	}
+}
 
-	bindingJSON := string(mustReadCmd(t, filepath.Join(projectRoot, access.DefaultBindingFile)))
-	for _, want := range []string{
-		`"principal": "codex@project"`,
-		`"endpoint": "http://127.0.0.1:8787"`,
-		`"session.observed"`,
-		`.mnemon/harness/channel/credentials/codex-project.token`,
-	} {
-		if !strings.Contains(bindingJSON, want) {
-			t.Fatalf("setup defaults missing %q from bindings:\n%s", want, bindingJSON)
+func TestSetupComposesRealProvisionAndPiProjection(t *testing.T) {
+	base, err := filepath.EvalSymlinks("/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := os.MkdirTemp(base, "mnemon-setup-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(workspace) })
+	if err := os.Chmod(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := productionSetupDependencies()
+	ensureCalls := 0
+	deps.ensure = func(ctx context.Context, state string) error {
+		ensureCalls++
+		if ensureCalls == 1 {
+			if _, err := os.Lstat(state); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("first Ensure state = %v", err)
+			}
+			return errors.New("node is not provisioned")
 		}
-	}
-	// Single canonical pin: setup must no longer dual-emit the legacy underscore alias.
-	if strings.Contains(bindingJSON, "write_candidate_observed") {
-		t.Fatalf("setup bindings must not carry the legacy underscore observed-type alias:\n%s", bindingJSON)
-	}
-	if _, err := os.Stat(filepath.Join(projectRoot, ".mnemon", "harness", "channel", "credentials", "codex-project.token")); err != nil {
-		t.Fatalf("setup must generate the default local token: %v", err)
-	}
-	configJSON := string(mustReadCmd(t, filepath.Join(projectRoot, ".mnemon", "harness", "local", "config.json")))
-	for _, want := range []string{`"endpoint": "http://127.0.0.1:8787"`, `"principal": "codex@project"`, "bindings.json", "governed.db"} {
-		if !strings.Contains(configJSON, want) {
-			t.Fatalf("Local Mnemon config missing %q:\n%s", want, configJSON)
+		runtime, err := daemon.OpenProvisioned(ctx, state)
+		if err != nil {
+			return err
 		}
+		return runtime.Close(context.Background())
 	}
-}
-
-func restoreSetupFlags(t *testing.T) {
-	t.Helper()
-	oldRoot := setupRoot
-	oldProjectRoot := setupProjectRoot
-	oldHost := setupHost
-	oldLoops := setupLoops
-	oldPrincipal := setupPrincipal
-	oldControlURL := setupControlURL
-	oldActorKind := setupActorKind
-	oldUseToken := setupUseToken
-	oldDryRun := setupDryRun
-	t.Cleanup(func() {
-		setupRoot = oldRoot
-		setupProjectRoot = oldProjectRoot
-		setupHost = oldHost
-		setupLoops = oldLoops
-		setupPrincipal = oldPrincipal
-		setupControlURL = oldControlURL
-		setupActorKind = oldActorKind
-		setupUseToken = oldUseToken
-		setupDryRun = oldDryRun
-	})
-	setupRoot = "."
-	setupProjectRoot = ""
-	setupHost = ""
-	setupLoops = nil
-	setupPrincipal = ""
-	setupControlURL = ""
-	setupActorKind = "host-agent"
-	setupUseToken = false
-	setupDryRun = false
-}
-
-func cmdRepoRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve command test path")
+	var stdout, stderr bytes.Buffer
+	exit := runSetup(context.Background(), []string{"--project-root", workspace},
+		&stdout, &stderr, deps)
+	if exit != 0 || ensureCalls != 2 || stderr.Len() != 0 {
+		t.Fatalf("real setup = exit %d ensures %d stdout %q stderr %q",
+			exit, ensureCalls, stdout.String(), stderr.String())
 	}
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-}
-
-func setupProductIntegration(t *testing.T, projectRoot string) {
-	t.Helper()
-	restoreSetupFlags(t)
-	setupRoot = cmdRepoRoot(t)
-	setupProjectRoot = projectRoot
-	setupHost = "codex"
-	setupLoops = nil
-	setupPrincipal = ""
-	setupControlURL = ""
-	setupUseToken = false
-	var out, errw bytes.Buffer
-	setupCmd.SetOut(&out)
-	setupCmd.SetErr(&errw)
-	t.Cleanup(func() {
-		setupCmd.SetOut(os.Stdout)
-		setupCmd.SetErr(os.Stderr)
-	})
-	ctx := context.Background()
-	setupCmd.SetContext(ctx)
-	if err := setupCmd.RunE(setupCmd, nil); err != nil {
-		t.Fatalf("setup product integration: %v\nstdout=%s\nstderr=%s", err, out.String(), errw.String())
+	if err := attach.VerifyPi(workspace); err != nil {
+		t.Fatalf("real setup Pi projection: %v", err)
+	}
+	_, state, err := daemon.ResolveProjectState(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := daemon.OpenProvisioned(context.Background(), state)
+	if err != nil {
+		t.Fatalf("real setup authority: %v", err)
+	}
+	if err := runtime.Close(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

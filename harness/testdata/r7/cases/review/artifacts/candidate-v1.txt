@@ -1,0 +1,2 @@
+calculation=sum(19,23)
+total=41

@@ -1,0 +1,239 @@
+package authority
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"sync"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+const (
+	privateDirectoryMode = 0o700
+	privateFileMode      = 0o600
+	busyTimeoutMS        = 5000
+	storeTimeLayout      = "2006-01-02T15:04:05.000000000Z"
+)
+
+// Store owns the only SQLite writer for one R7 local authority. The process
+// lock excludes a second Store, while the mutex makes Close and transactions
+// have one explicit in-process owner.
+type Store struct {
+	mu               sync.Mutex
+	db               *sql.DB
+	path             string
+	lockFile         *os.File
+	closed           bool
+	now              func() time.Time
+	artifactVerifier ArtifactVerifier
+}
+
+// Open acquires the writer guard and initializes only an empty version-zero
+// database. It never migrates another schema.
+func Open(ctx context.Context, databasePath string) (*Store, error) {
+	return openWithVerifier(ctx, databasePath, time.Now, nil)
+}
+
+// OpenWithClock is the setup-only clock-aware form of Open. Production
+// composition uses one trusted clock for both R7 authority and its local
+// service instead of creating two independently advancing time domains.
+func OpenWithClock(ctx context.Context, databasePath string,
+	now func() time.Time,
+) (*Store, error) {
+	return openWithVerifier(ctx, databasePath, now, nil)
+}
+
+func open(ctx context.Context, databasePath string, now func() time.Time) (_ *Store, err error) {
+	return openWithVerifier(ctx, databasePath, now, nil)
+}
+
+// OpenWithArtifactVerifier requires final admission to re-read and hash exact
+// CAS bytes through verifier. Open without a verifier remains useful for
+// artifact-free local effects and fails closed for Artifact-bearing effects.
+func OpenWithArtifactVerifier(ctx context.Context, databasePath string,
+	verifier ArtifactVerifier,
+) (*Store, error) {
+	if verifier == nil {
+		return nil, errors.New("open authority store: nil Artifact verifier")
+	}
+	return openWithVerifier(ctx, databasePath, time.Now, verifier)
+}
+
+// OpenExistingWithArtifactVerifier acquires the existing writer guard and
+// accepts only an initialized exact R7 authority. It never creates or repairs
+// durable setup state.
+func OpenExistingWithArtifactVerifier(ctx context.Context, databasePath string,
+	verifier ArtifactVerifier,
+) (*Store, error) {
+	if verifier == nil {
+		return nil, errors.New("open existing authority store: nil Artifact verifier")
+	}
+	return openExistingWithVerifier(ctx, databasePath, time.Now, verifier)
+}
+
+// OpenExistingWithArtifactVerifierAndClock is the strict restart form used by
+// daemon composition. It accepts no missing or version-zero authority and
+// shares the caller's trusted clock with attachment and Artifact mechanics.
+func OpenExistingWithArtifactVerifierAndClock(ctx context.Context, databasePath string,
+	verifier ArtifactVerifier, now func() time.Time,
+) (*Store, error) {
+	if verifier == nil {
+		return nil, errors.New("open existing authority store: nil Artifact verifier")
+	}
+	return openExistingWithVerifier(ctx, databasePath, now, verifier)
+}
+
+func openWithVerifier(ctx context.Context, databasePath string, now func() time.Time,
+	verifier ArtifactVerifier,
+) (_ *Store, err error) {
+	return openAuthorityStore(ctx, databasePath, now, verifier, false)
+}
+
+func openExistingWithVerifier(ctx context.Context, databasePath string, now func() time.Time,
+	verifier ArtifactVerifier,
+) (_ *Store, err error) {
+	return openAuthorityStore(ctx, databasePath, now, verifier, true)
+}
+
+func openAuthorityStore(ctx context.Context, databasePath string, now func() time.Time,
+	verifier ArtifactVerifier, existing bool,
+) (_ *Store, err error) {
+	if ctx == nil || now == nil {
+		return nil, errors.New("open authority store: nil context or clock")
+	}
+	var plan *authorityPathPlan
+	if existing {
+		plan, err = prepareExistingAuthorityPath(databasePath)
+	} else {
+		plan, err = prepareAuthorityPath(databasePath)
+	}
+	if err != nil {
+		return nil, err
+	}
+	lockFile, err := plan.acquireWriterLock()
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			_ = releaseWriterLock(lockFile)
+		}
+	}()
+	if !existing {
+		if err = plan.prepareDatabaseFile(); err != nil {
+			return nil, err
+		}
+	}
+	if err = plan.verifyBeforeSQLite(); err != nil {
+		return nil, err
+	}
+
+	dsn := sqliteDSN(plan.databasePath)
+	if existing {
+		dsn = existingSQLiteDSN(plan.databasePath)
+	}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open authority store: SQLite: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	defer func() {
+		if err != nil {
+			_ = db.Close()
+		}
+	}()
+	if existing {
+		if err = openExistingSchema(ctx, db); err == nil {
+			err = configureExistingAuthoritySQLite(ctx, db)
+		}
+	} else {
+		err = configureAuthoritySQLite(ctx, db)
+		if err == nil {
+			err = openSchema(ctx, db)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err = plan.verifyAfterSQLite(); err != nil {
+		return nil, err
+	}
+	return &Store{db: db, path: plan.databasePath, lockFile: lockFile, now: now,
+		artifactVerifier: verifier}, nil
+}
+
+func (s *Store) Path() string {
+	if s == nil {
+		return ""
+	}
+	return s.path
+}
+
+// Close flushes SQLite before releasing the writer guard and is idempotent.
+func (s *Store) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	return errors.Join(s.db.Close(), releaseWriterLock(s.lockFile))
+}
+
+func (s *Store) requireOpen() error {
+	if s == nil || s.db == nil || s.closed {
+		return ErrClosed
+	}
+	return nil
+}
+
+func (s *Store) trustedNow() (time.Time, error) {
+	if s == nil || s.now == nil {
+		return time.Time{}, ErrClosed
+	}
+	value := s.now().Round(0).UTC()
+	if value.IsZero() {
+		return time.Time{}, errors.New("authority: clock returned zero time")
+	}
+	return value, nil
+}
+
+func sqliteDSN(path string) string {
+	value := url.URL{Scheme: "file", Path: path}
+	query := value.Query()
+	query.Add("mode", "rw")
+	query.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeoutMS))
+	query.Add("_pragma", "foreign_keys(ON)")
+	query.Add("_pragma", "journal_mode(WAL)")
+	query.Add("_pragma", "synchronous(FULL)")
+	value.RawQuery = query.Encode()
+	return value.String()
+}
+
+func existingSQLiteDSN(path string) string {
+	value := url.URL{Scheme: "file", Path: path}
+	query := value.Query()
+	query.Add("mode", "rw")
+	query.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeoutMS))
+	value.RawQuery = query.Encode()
+	return value.String()
+}
+
+func formatTime(value time.Time) string { return value.Round(0).UTC().Format(storeTimeLayout) }
+
+func parseTime(value string) (time.Time, error) {
+	parsed, err := time.Parse(storeTimeLayout, value)
+	if err != nil || formatTime(parsed) != value {
+		return time.Time{}, errors.New("authority: stored time is not canonical")
+	}
+	return parsed, nil
+}

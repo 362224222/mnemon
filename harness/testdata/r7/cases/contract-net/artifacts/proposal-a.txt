@@ -1,0 +1,3 @@
+bidder=bidder-a
+cost=7
+output_bytes=600

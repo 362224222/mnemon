@@ -1,0 +1,3 @@
+subject=deployment-window
+challenge=signal-conflicts-with-health-check
+observed=red

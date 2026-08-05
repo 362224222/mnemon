@@ -1,0 +1,3 @@
+subject=deployment-window
+signal=green
+source=initial-observation

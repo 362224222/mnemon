@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "tool_version": "harness-quality/v1",
+  "source_commit": "0be35cbb4251645d74b5daf5d60f7a4183661087",
+  "thresholds": [
+    {
+      "rule": "cognitive_complexity",
+      "limit": 25
+    },
+    {
+      "rule": "control_flow_nesting",
+      "limit": 4
+    },
+    {
+      "rule": "cyclomatic_complexity",
+      "limit": 20
+    },
+    {
+      "rule": "function_logical_lines",
+      "limit": 80
+    },
+    {
+      "rule": "function_statements",
+      "limit": 50
+    },
+    {
+      "rule": "normalized_duplicate_tokens",
+      "limit": 149
+    },
+    {
+      "rule": "paired_test_file_lines",
+      "limit": 800
+    },
+    {
+      "rule": "production_file_lines",
+      "limit": 400
+    }
+  ],
+  "entries": []
+}

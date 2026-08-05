@@ -1,0 +1,666 @@
+{
+  "schema_version": 1,
+  "invariants": [
+    {
+      "id": "P-01",
+      "oracles": [
+        {
+          "id": "forged-agent-authority-fails-closed",
+          "test": "./internal/agency::TestParseAgentIntentJSONRejectsAuthorityAndMalformedShapes"
+        },
+        {
+          "id": "peer-origin-remains-provenance",
+          "test": "./internal/authority::TestPeerDeliveryRoundTripUsesTwoLocalAdmissions"
+        },
+        {
+          "id": "related-evidence-is-provenance-only",
+          "test": "./internal/agency::TestAgentViewProjectsRelatedEvidenceWithoutWritableSubjectAuthority"
+        },
+        {
+          "id": "stale-view-authority-fails-closed",
+          "test": "./internal/authority::TestAdmissionRequiresExactDurablyIssuedView"
+        },
+        {
+          "id": "unoffered-handles-fail-closed",
+          "test": "./internal/agency::TestR7GapP01UnofferedHandlesFailClosed"
+        }
+      ]
+    },
+    {
+      "id": "P-02",
+      "oracles": [
+        {
+          "id": "open-labels-closed-shapes",
+          "test": "./internal/agency::TestR7GapP02OpenLabelsAndClosedShapes"
+        }
+      ]
+    },
+    {
+      "id": "P-03",
+      "oracles": [
+        {
+          "id": "accepted-reference-ends-agent-facing-boundary",
+          "test": "./internal/cli::TestAcceptedReferenceEndsAttachmentAndRejectsFurtherMutation"
+        },
+        {
+          "id": "attachment-begin-replays-exactly-across-restart",
+          "test": "./internal/authority::TestInteractiveAttachmentBeginExactlyReplaysAcrossRestart"
+        },
+        {
+          "id": "different-current-operations-share-one-claim",
+          "test": "./internal/authority::TestConcurrentDifferentCurrentOperationsCreateOneLiveClaim"
+        },
+        {
+          "id": "ended-boundary-cannot-be-revived",
+          "test": "./internal/authority::TestInteractiveAttachmentBeginCannotReviveEndedBoundary"
+        },
+        {
+          "id": "expired-attachment-outcome-never-reports-ready",
+          "test": "./internal/cli::TestHookAttachRejectsExpiredAuthorityOutcomeBeforeJournalCommit"
+        },
+        {
+          "id": "hook-end-cannot-destroy-unpresented-receipt-replay",
+          "test": "./internal/cli::TestHookEndCannotDestroyUnpresentedReceiptReplay"
+        },
+        {
+          "id": "hook-end-finishes-presented-terminal-without-intent-replay",
+          "test": "./internal/cli::TestHookEndFinishesPresentedHandlingWithoutIntentReplay"
+        },
+        {
+          "id": "interactive-root-creates-durable-handling",
+          "test": "./internal/authority::TestLocalHandlingLoopRejectsStaleFenceAndRequiresArtifactForCompleted"
+        },
+        {
+          "id": "managed-wake-is-not-reserved",
+          "test": "./internal/authority::TestAttachmentSchemaDoesNotReserveManagedWakeMode"
+        },
+        {
+          "id": "managed-wake-issuance-path-is-absent",
+          "test": "./test/contracts::TestR7HasNoManagedWakeIssuancePath"
+        },
+        {
+          "id": "missing-journal-new-boundary-delegates-authority-replacement",
+          "test": "./internal/cli::TestHookAttachMissingJournalDelegatesNewBoundaryReplacementToAuthority"
+        },
+        {
+          "id": "new-boundary-finishes-presented-terminal-without-intent-replay",
+          "test": "./internal/cli::TestAcceptedHandlingReceiptRetainsReplayUntilBoundaryEndCommits"
+        },
+        {
+          "id": "one-unended-attachment-per-principal",
+          "test": "./internal/authority::TestAttachmentSchemaAllowsOneUnendedInteractiveBoundaryPerPrincipal"
+        },
+        {
+          "id": "pi-host-boundary-uses-lifecycle-callbacks",
+          "test": "./internal/attach::TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface"
+        },
+        {
+          "id": "pi-host-retries-one-private-boundary",
+          "test": "./internal/attach::TestPiHookRetriesOnePrivateBoundaryAndEmitsNoCueOnFailure"
+        },
+        {
+          "id": "presented-terminal-cannot-reactivate-after-end-failure",
+          "test": "./internal/cli::TestPresentedTerminalCannotReactivateAfterBoundaryEndFailure"
+        },
+        {
+          "id": "private-host-boundary-controls-attachment-lifecycle",
+          "test": "./internal/cli::TestHookAttachNewBoundaryEndsPredecessorAndRotatesEmptyCurrent"
+        },
+        {
+          "id": "same-boundary-authority-replay-must-match-journal",
+          "test": "./internal/cli::TestHookAttachSameBoundaryRejectsDivergentAuthorityReplay"
+        },
+        {
+          "id": "same-completed-boundary-never-reports-ready",
+          "test": "./internal/cli::TestSameHookAttachFinishesPresentedHandlingButNeverReturnsReady"
+        },
+        {
+          "id": "wrong-attachment-cannot-claim",
+          "test": "./internal/authority::TestCurrentRejectsExpiredAndWrongAttachmentProof"
+        },
+        {
+          "id": "wrong-principal-cannot-claim",
+          "test": "./internal/authority::TestCurrentNeverClaimsAnotherPrincipalsHandling"
+        }
+      ]
+    },
+    {
+      "id": "P-04",
+      "oracles": [
+        {
+          "id": "boundary-end-clears-only-occupancy",
+          "test": "./internal/authority::TestEndInteractiveAttachmentReleasesClaimWithoutDomainEffect"
+        },
+        {
+          "id": "boundary-end-fault-rolls-back",
+          "test": "./internal/authority::TestEndInteractiveAttachmentFaultRollsBackEndAndClaim"
+        },
+        {
+          "id": "boundary-end-races-admission-atomically",
+          "test": "./internal/authority::TestEndInteractiveAttachmentRacesAdmissionWithoutPartialEffect"
+        },
+        {
+          "id": "expiry-clears-only-occupancy",
+          "test": "./internal/authority::TestFreshCurrentDurablySettlesExpiredClaimWithoutDomainEffect"
+        },
+        {
+          "id": "fresh-boundaries-prevent-handling-attention-starvation",
+          "test": "./internal/authority::TestCurrentLeastAttendedSelectionSurvivesBoundaryWithoutAdvance"
+        },
+        {
+          "id": "fresh-boundary-replacement-clears-only-occupancy",
+          "test": "./internal/authority::TestFreshBoundaryAtomicallyReplacesPredecessorWithoutDomainEffect"
+        },
+        {
+          "id": "stale-fence-and-completion-floor",
+          "test": "./internal/authority::TestLocalHandlingLoopRejectsStaleFenceAndRequiresArtifactForCompleted"
+        }
+      ]
+    },
+    {
+      "id": "P-05",
+      "oracles": [
+        {
+          "id": "bound-intent-transaction-fault-matrix",
+          "test": "./internal/authority::TestBoundIntentFaultMatrixCommitsWholeOriginOutcomeOrNone"
+        },
+        {
+          "id": "peer-delivery-transaction-fault-matrix",
+          "test": "./internal/authority::TestVerifiedPeerDeliveryFaultMatrixCommitsWholeReceiverOutcomeOrNone"
+        },
+        {
+          "id": "reference-transaction-fault-matrix",
+          "test": "./internal/authority::TestReferenceFaultMatrixCommitsLineageAndHeadAtomically"
+        }
+      ]
+    },
+    {
+      "id": "P-06",
+      "oracles": [
+        {
+          "id": "delivery-id-envelope-conflict",
+          "test": "./internal/authority::TestPeerInboxRejectsSameDeliveryIDDifferentEnvelope"
+        },
+        {
+          "id": "missing-artifact-creates-no-fact",
+          "test": "./internal/authority::TestMissingPeerArtifactExpiresWithoutCreatingDomainState"
+        },
+        {
+          "id": "peer-response-preserves-correlation-root",
+          "test": "./internal/authority::TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult"
+        },
+        {
+          "id": "remote-failure-preserves-origin-anchor",
+          "test": "./internal/authority::TestRemoteRejectionAndExpiryLeaveOriginAnchorOpen"
+        },
+        {
+          "id": "two-local-admissions",
+          "test": "./internal/authority::TestPeerDeliveryRoundTripUsesTwoLocalAdmissions"
+        }
+      ]
+    },
+    {
+      "id": "P-07",
+      "oracles": [
+        {
+          "id": "admission-digest-conflict-is-stable",
+          "test": "./internal/authority::TestAdmissionRejectsSameOperationKeyWithDifferentRequestDigest"
+        },
+        {
+          "id": "admission-replay-precedes-mutable-authority",
+          "test": "./internal/authority::TestAcceptedOperationReplayPrecedesStaleSubjectAndReferenceAuthority"
+        },
+        {
+          "id": "attachment-begin-operation-conflict-is-stable",
+          "test": "./internal/authority::TestInteractiveAttachmentBeginRejectsSameOperationDifferentPrincipal"
+        },
+        {
+          "id": "attachment-begin-response-replays-byte-stably-across-restart",
+          "test": "./internal/daemon::TestAttachmentBeginResponseExactlyReplaysAcrossDaemonRestart"
+        },
+        {
+          "id": "concurrent-current-replay-creates-one-effect",
+          "test": "./internal/authority::TestConcurrentCurrentReplayCreatesOneClaimAndOneOperation"
+        },
+        {
+          "id": "current-replay-survives-restart-and-expiry",
+          "test": "./internal/authority::TestCurrentOperationReplaysFrozenViewAfterRestartAndExpiry"
+        },
+        {
+          "id": "disposition-replay-survives-restart",
+          "test": "./internal/authority::TestClaimExpiryReplaySurvivesRestartAndRejectsDigestConflict"
+        },
+        {
+          "id": "frozen-focus-does-not-absorb-later-events",
+          "test": "./internal/authority::TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult"
+        }
+      ]
+    },
+    {
+      "id": "P-08",
+      "oracles": [
+        {
+          "id": "citation-is-exact-and-nonmutating",
+          "test": "./internal/authority::TestReferenceCitationRecordsExactHeadWithoutMutatingLineage"
+        },
+        {
+          "id": "concurrent-first-publish-has-one-winner",
+          "test": "./internal/authority::TestConcurrentReferenceCASAcceptsExactlyOneCandidate"
+        },
+        {
+          "id": "concurrent-mutation-has-one-winner",
+          "test": "./internal/authority::TestConcurrentExistingReferenceHeadCASAcceptsExactlyOneMutation"
+        },
+        {
+          "id": "forward-head-fails-closed",
+          "test": "./internal/authority::TestReferenceRejectsForwardHead"
+        },
+        {
+          "id": "invalid-key-fails-closed",
+          "test": "./internal/agency::TestR7GapP08InvalidReferenceKeysFailClosed"
+        },
+        {
+          "id": "stale-head-fails-closed",
+          "test": "./internal/authority::TestReferenceExistingHeadCASRejectsStaleMutation"
+        },
+        {
+          "id": "tombstone-can-be-reactivated",
+          "test": "./internal/authority::TestReferenceCanRetractThenSupersedeTombstone"
+        },
+        {
+          "id": "tombstone-retract-replays-only-same-operation",
+          "test": "./internal/authority::TestReferenceTombstoneRejectsFreshRetractAndReplaysOriginal"
+        }
+      ]
+    },
+    {
+      "id": "P-09",
+      "oracles": [
+        {
+          "id": "agent-view-last-line-bound-fails-closed",
+          "test": "./internal/agency::TestAgentViewFailsClosedAboveCanonicalByteLimit"
+        },
+        {
+          "id": "artifact-input-bound",
+          "test": "./internal/authority::TestVerifyArtifactEnforcesExistingCASObjectBound"
+        },
+        {
+          "id": "bounded-expiry-maintenance",
+          "test": "./internal/authority::TestClaimExpiryMaintenanceIsBoundedAndLeavesExcessClaimsExact"
+        },
+        {
+          "id": "canonical-object-bounds-fail-closed",
+          "test": "./internal/agency::TestCanonicalObjectsHaveHardTotalByteLimits"
+        },
+        {
+          "id": "causal-depth-fails-closed",
+          "test": "./internal/authority::TestCausalDepthRejectsMissingOrMismatchedAcceptedEvent"
+        },
+        {
+          "id": "escaped-current-does-not-let-related-overflow-view",
+          "test": "./internal/authority::TestCurrentKeepsEscapedCurrentAndOmitsRelatedBeyondEncodedBudget"
+        },
+        {
+          "id": "focus-prefix-and-payload-budget-are-explicit",
+          "test": "./internal/authority::TestFocusProjectionUsesDeterministicBoundedPrefixAndPayloadBudget"
+        },
+        {
+          "id": "maximum-accepted-world-remains-readable",
+          "test": "./internal/authority::TestMaximumAcceptedWorldKeepsCurrentReadable"
+        },
+        {
+          "id": "maximum-reference-and-payload-view-remains-readable",
+          "test": "./internal/agency::TestAgentViewMaximumReferenceAndPayloadShapeRemainsReadable"
+        },
+        {
+          "id": "open-handling-count-fails-closed",
+          "test": "./internal/authority::TestOpenHandlingBoundRejectsAdditionalSuccessor"
+        },
+        {
+          "id": "peer-artifacts-must-be-complete",
+          "test": "./internal/agency::TestVerifiedPeerDeliveryRequiresParsedEnvelopeAndCompleteArtifacts"
+        },
+        {
+          "id": "peer-input-bounds-fail-closed",
+          "test": "./internal/agency::TestVerifiedPeerArtifactBounds"
+        },
+        {
+          "id": "reference-projection-bound-fails-closed",
+          "test": "./internal/authority::TestReferenceProjectionBoundDoesNotOfferPublishAboveLimit"
+        },
+        {
+          "id": "semantic-payload-json-budget-fails-closed",
+          "test": "./internal/agency::TestPeerDeliveryRejectsOversizeCanonicalInputs"
+        },
+        {
+          "id": "successor-bound-fails-closed",
+          "test": "./internal/agency::TestR7GapP09SuccessorBoundFailsClosed"
+        }
+      ]
+    },
+    {
+      "id": "P-10",
+      "oracles": [
+        {
+          "id": "completion-requires-verified-artifact",
+          "test": "./internal/authority::TestLocalHandlingLoopRejectsStaleFenceAndRequiresArtifactForCompleted"
+        },
+        {
+          "id": "runtime-observations-cannot-complete",
+          "test": "./test/r7/process::TestHandlingSurvivesProcessAndDaemonBoundaries"
+        }
+      ]
+    }
+  ],
+  "gates": [
+    {
+      "id": "G-R7-AUTHORITY-CUTOVER",
+      "steps": [
+        {
+          "id": "contract",
+          "kind": "go-test",
+          "argv": [
+            "go",
+            "-C",
+            "harness",
+            "test",
+            "-json",
+            "./tools/corecontract",
+            "./tools/corecontract/cmd/core-gate",
+            "./test/contracts",
+            "-count=1"
+          ],
+          "oracles": [
+            "test:./test/contracts::TestR7AuthorityCutover",
+            "test:./test/contracts::TestR7HasNoManagedWakeIssuancePath",
+            "test:./test/contracts::TestR7RequirementsRegistry",
+            "test:./test/contracts::TestReleaseBoundary"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G-R7-CASE-DATA-ONLY",
+      "steps": [
+        {
+          "id": "case-data-only",
+          "kind": "shell",
+          "argv": [
+            "bash",
+            "harness/test/r7/runner/run_case_data_only.sh"
+          ],
+          "oracles": [
+            "stdout:r7 static oracle passed: case behavior is data-only"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G-R7-CASES",
+      "steps": [
+        {
+          "id": "cases",
+          "kind": "shell",
+          "argv": [
+            "bash",
+            "harness/test/r7/runner/run_cases.sh"
+          ],
+          "oracles": [
+            "stdout:r7 case passed: blackboard",
+            "stdout:r7 case passed: contract-net",
+            "stdout:r7 case passed: review"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G-R7-CONTINUITY",
+      "steps": [
+        {
+          "id": "process",
+          "kind": "go-test",
+          "argv": [
+            "go",
+            "-C",
+            "harness",
+            "test",
+            "-json",
+            "./test/r7/process",
+            "-count=1"
+          ],
+          "oracles": [
+            "test:./test/r7/process::TestHandlingSurvivesProcessAndDaemonBoundaries"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G-R7-CORE",
+      "steps": [
+        {
+          "id": "core-race",
+          "kind": "go-test",
+          "argv": [
+            "go",
+            "-C",
+            "harness",
+            "test",
+            "-json",
+            "-race",
+            "./internal/agency",
+            "./internal/authority",
+            "./internal/cas",
+            "./internal/peerlink",
+            "./internal/daemon",
+            "./internal/cli",
+            "./internal/attach",
+            "-count=1"
+          ],
+          "oracles": [
+            "test:./internal/authority::TestOpenRejectsSecondWriter"
+          ]
+        },
+        {
+          "id": "core-unit",
+          "kind": "go-test",
+          "argv": [
+            "go",
+            "-C",
+            "harness",
+            "test",
+            "-json",
+            "./internal/agency",
+            "./internal/authority",
+            "./internal/cas",
+            "./internal/peerlink",
+            "./internal/daemon",
+            "./internal/cli",
+            "./internal/attach",
+            "-count=1"
+          ],
+          "oracles": [
+            "test:./internal/agency::TestAgentViewFailsClosedAboveCanonicalByteLimit",
+            "test:./internal/agency::TestAgentViewMaximumReferenceAndPayloadShapeRemainsReadable",
+            "test:./internal/agency::TestAgentViewProjectsRelatedEvidenceWithoutWritableSubjectAuthority",
+            "test:./internal/agency::TestCanonicalObjectsHaveHardTotalByteLimits",
+            "test:./internal/agency::TestParseAgentIntentJSONRejectsAuthorityAndMalformedShapes",
+            "test:./internal/agency::TestPeerDeliveryRejectsOversizeCanonicalInputs",
+            "test:./internal/agency::TestR7GapP01UnofferedHandlesFailClosed",
+            "test:./internal/agency::TestR7GapP02OpenLabelsAndClosedShapes",
+            "test:./internal/agency::TestR7GapP08InvalidReferenceKeysFailClosed",
+            "test:./internal/agency::TestR7GapP09SuccessorBoundFailsClosed",
+            "test:./internal/agency::TestVerifiedPeerArtifactBounds",
+            "test:./internal/agency::TestVerifiedPeerDeliveryRequiresParsedEnvelopeAndCompleteArtifacts",
+            "test:./internal/attach::TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface",
+            "test:./internal/attach::TestPiHookRetriesOnePrivateBoundaryAndEmitsNoCueOnFailure",
+            "test:./internal/authority::TestAcceptedOperationReplayPrecedesStaleSubjectAndReferenceAuthority",
+            "test:./internal/authority::TestAdmissionRejectsSameOperationKeyWithDifferentRequestDigest",
+            "test:./internal/authority::TestAdmissionRequiresExactDurablyIssuedView",
+            "test:./internal/authority::TestAttachmentSchemaAllowsOneUnendedInteractiveBoundaryPerPrincipal",
+            "test:./internal/authority::TestAttachmentSchemaDoesNotReserveManagedWakeMode",
+            "test:./internal/authority::TestBoundIntentFaultMatrixCommitsWholeOriginOutcomeOrNone",
+            "test:./internal/authority::TestCausalDepthRejectsMissingOrMismatchedAcceptedEvent",
+            "test:./internal/authority::TestClaimExpiryMaintenanceIsBoundedAndLeavesExcessClaimsExact",
+            "test:./internal/authority::TestClaimExpiryReplaySurvivesRestartAndRejectsDigestConflict",
+            "test:./internal/authority::TestConcurrentCurrentReplayCreatesOneClaimAndOneOperation",
+            "test:./internal/authority::TestConcurrentDifferentCurrentOperationsCreateOneLiveClaim",
+            "test:./internal/authority::TestConcurrentExistingReferenceHeadCASAcceptsExactlyOneMutation",
+            "test:./internal/authority::TestConcurrentReferenceCASAcceptsExactlyOneCandidate",
+            "test:./internal/authority::TestCurrentKeepsEscapedCurrentAndOmitsRelatedBeyondEncodedBudget",
+            "test:./internal/authority::TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult",
+            "test:./internal/authority::TestCurrentLeastAttendedSelectionSurvivesBoundaryWithoutAdvance",
+            "test:./internal/authority::TestCurrentNeverClaimsAnotherPrincipalsHandling",
+            "test:./internal/authority::TestCurrentOperationReplaysFrozenViewAfterRestartAndExpiry",
+            "test:./internal/authority::TestCurrentRejectsExpiredAndWrongAttachmentProof",
+            "test:./internal/authority::TestEndInteractiveAttachmentFaultRollsBackEndAndClaim",
+            "test:./internal/authority::TestEndInteractiveAttachmentRacesAdmissionWithoutPartialEffect",
+            "test:./internal/authority::TestEndInteractiveAttachmentReleasesClaimWithoutDomainEffect",
+            "test:./internal/authority::TestFocusProjectionUsesDeterministicBoundedPrefixAndPayloadBudget",
+            "test:./internal/authority::TestFreshBoundaryAtomicallyReplacesPredecessorWithoutDomainEffect",
+            "test:./internal/authority::TestFreshCurrentDurablySettlesExpiredClaimWithoutDomainEffect",
+            "test:./internal/authority::TestInteractiveAttachmentBeginCannotReviveEndedBoundary",
+            "test:./internal/authority::TestInteractiveAttachmentBeginExactlyReplaysAcrossRestart",
+            "test:./internal/authority::TestInteractiveAttachmentBeginRejectsSameOperationDifferentPrincipal",
+            "test:./internal/authority::TestLocalHandlingLoopRejectsStaleFenceAndRequiresArtifactForCompleted",
+            "test:./internal/authority::TestMaximumAcceptedWorldKeepsCurrentReadable",
+            "test:./internal/authority::TestMissingPeerArtifactExpiresWithoutCreatingDomainState",
+            "test:./internal/authority::TestOpenHandlingBoundRejectsAdditionalSuccessor",
+            "test:./internal/authority::TestPeerDeliveryRoundTripUsesTwoLocalAdmissions",
+            "test:./internal/authority::TestPeerInboxRejectsSameDeliveryIDDifferentEnvelope",
+            "test:./internal/authority::TestReferenceCanRetractThenSupersedeTombstone",
+            "test:./internal/authority::TestReferenceCitationRecordsExactHeadWithoutMutatingLineage",
+            "test:./internal/authority::TestReferenceExistingHeadCASRejectsStaleMutation",
+            "test:./internal/authority::TestReferenceFaultMatrixCommitsLineageAndHeadAtomically",
+            "test:./internal/authority::TestReferenceProjectionBoundDoesNotOfferPublishAboveLimit",
+            "test:./internal/authority::TestReferenceRejectsForwardHead",
+            "test:./internal/authority::TestReferenceTombstoneRejectsFreshRetractAndReplaysOriginal",
+            "test:./internal/authority::TestRemoteRejectionAndExpiryLeaveOriginAnchorOpen",
+            "test:./internal/authority::TestVerifiedPeerDeliveryFaultMatrixCommitsWholeReceiverOutcomeOrNone",
+            "test:./internal/authority::TestVerifyArtifactEnforcesExistingCASObjectBound",
+            "test:./internal/cli::TestAcceptedHandlingReceiptRetainsReplayUntilBoundaryEndCommits",
+            "test:./internal/cli::TestAcceptedReferenceEndsAttachmentAndRejectsFurtherMutation",
+            "test:./internal/cli::TestHookAttachMissingJournalDelegatesNewBoundaryReplacementToAuthority",
+            "test:./internal/cli::TestHookAttachNewBoundaryEndsPredecessorAndRotatesEmptyCurrent",
+            "test:./internal/cli::TestHookAttachRejectsExpiredAuthorityOutcomeBeforeJournalCommit",
+            "test:./internal/cli::TestHookAttachSameBoundaryRejectsDivergentAuthorityReplay",
+            "test:./internal/cli::TestHookEndCannotDestroyUnpresentedReceiptReplay",
+            "test:./internal/cli::TestHookEndFinishesPresentedHandlingWithoutIntentReplay",
+            "test:./internal/cli::TestPresentedTerminalCannotReactivateAfterBoundaryEndFailure",
+            "test:./internal/cli::TestSameHookAttachFinishesPresentedHandlingButNeverReturnsReady",
+            "test:./internal/daemon::TestAttachmentBeginResponseExactlyReplaysAcrossDaemonRestart"
+          ]
+        },
+        {
+          "id": "process",
+          "kind": "go-test",
+          "argv": [
+            "go",
+            "-C",
+            "harness",
+            "test",
+            "-json",
+            "./test/r7/process",
+            "-count=1"
+          ],
+          "oracles": [
+            "test:./test/r7/process::TestHandlingSurvivesProcessAndDaemonBoundaries"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G-R7-FEDERATION",
+      "steps": [
+        {
+          "id": "cases",
+          "kind": "shell",
+          "argv": [
+            "bash",
+            "harness/test/r7/runner/run_cases.sh"
+          ],
+          "oracles": [
+            "stdout:r7 case passed: blackboard",
+            "stdout:r7 case passed: contract-net",
+            "stdout:r7 case passed: review"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G-R7-NO-CASE-KIND",
+      "steps": [
+        {
+          "id": "no-case-kind",
+          "kind": "shell",
+          "argv": [
+            "bash",
+            "harness/test/r7/runner/run_no_case_kind.sh"
+          ],
+          "oracles": [
+            "stdout:r7 static oracle passed: no production case-specific kind"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G-R7-ONE-PATH",
+      "steps": [
+        {
+          "id": "cases",
+          "kind": "shell",
+          "argv": [
+            "bash",
+            "harness/test/r7/runner/run_cases.sh"
+          ],
+          "oracles": [
+            "stdout:r7 case passed: blackboard",
+            "stdout:r7 case passed: contract-net",
+            "stdout:r7 case passed: review"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G-R7-PATTERN-FREE",
+      "steps": [
+        {
+          "id": "pattern-free",
+          "kind": "shell",
+          "argv": [
+            "bash",
+            "harness/test/r7/runner/run_pattern_free.sh"
+          ],
+          "oracles": [
+            "stdout:r7 static oracle passed: Core is pattern-free after deleting examples and cases"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G-R7-ROOT-ISOLATION",
+      "steps": [
+        {
+          "id": "contract",
+          "kind": "go-test",
+          "argv": [
+            "go",
+            "-C",
+            "harness",
+            "test",
+            "-json",
+            "./tools/corecontract",
+            "./tools/corecontract/cmd/core-gate",
+            "./test/contracts",
+            "-count=1"
+          ],
+          "oracles": [
+            "test:./test/contracts::TestR7AuthorityCutover",
+            "test:./test/contracts::TestR7HasNoManagedWakeIssuancePath",
+            "test:./test/contracts::TestR7RequirementsRegistry",
+            "test:./test/contracts::TestReleaseBoundary"
+          ]
+        }
+      ]
+    }
+  ]
+}

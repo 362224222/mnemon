@@ -1,0 +1,4 @@
+initiator
+bidder-a
+bidder-b
+bidder-c

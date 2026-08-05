@@ -1,0 +1,3 @@
+subject=deployment-window
+verified_signal=red
+method=independent-health-check

@@ -1,0 +1,3 @@
+worker=bidder-b
+output_bytes=600
+status=produced
