@@ -82,6 +82,11 @@ assert_domain_projection_boundary() {
     printf 'runtime oracle: mission contains a task answer or Event choreography\n' >&2
     exit 1
   }
+  printf '%s\n' "$outcome_attention" >"$scratch/outcome-attention.md"
+  projection_policy "$scratch/outcome-attention.md" || {
+    printf 'runtime oracle: outcome attention contains a task answer or Event choreography\n' >&2
+    exit 1
+  }
 
   printf '%s\n' '{"kind":"repair.force","consequence":"handling.create","successors":[{"alias":"data"}]}' \
     >"$scratch/forbidden-projection.md"

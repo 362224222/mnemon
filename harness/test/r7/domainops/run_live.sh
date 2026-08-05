@@ -35,6 +35,7 @@ failure_trace_path=${DOMAIN_OPS_FAILURE_TRACE:-$repository_root/.testdata/r7-dom
 roles='lead edge payment platform data'
 attention_contract='This is one bounded attention opportunity, not the whole workflow. Inspect only what is useful now, make at most one accepted contribution, and stop; later turns can continue.'
 neutral_attention="$attention_contract Continue the work available in this workspace. Use current evidence and your local authority, preserve uncertainty, and stop when no useful bounded action remains."
+outcome_attention="$attention_contract A verified real-world outcome is now available. Re-read your bounded View and local evidence. Decide whether anything should change now or survive into a future context; doing nothing is valid."
 initial_mission=
 
 runtime_root=
@@ -780,10 +781,10 @@ run_turn() {
 }
 
 run_attention_round() {
-  local episode=$1 round=$2 role pid failed=0
+  local episode=$1 round=$2 prompt=${3:-$neutral_attention} role pid failed=0
   local round_pids=()
   for role in $roles; do
-    run_turn "$role" "$neutral_attention" "$episode-round-$round-$role" &
+    run_turn "$role" "$prompt" "$episode-round-$round-$role" &
     pid=$!
     round_pids+=("$pid")
     turn_pids+=("$pid")
@@ -1416,7 +1417,7 @@ main() {
   failure_stage=scenario.episode-1-consolidation-start
   capture_consolidation_start
   failure_stage=scenario.episode-1-post-outcome-attention
-  run_attention_round episode-1 post-outcome
+  run_attention_round episode-1 post-outcome "$outcome_attention"
   failure_stage=scenario.evolution-boundary
   capture_evolution_boundary
   failure_stage=scenario.episode-1-post-outcome-revalidation
