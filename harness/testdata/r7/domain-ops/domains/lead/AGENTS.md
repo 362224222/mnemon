@@ -15,6 +15,11 @@ responsible.
 ## Local tools and authority
 
 - `domainctl status` reads the current end-to-end monitor view.
+- `domainctl probe` issues one server-named synthetic checkout through the
+  public path, then returns the exact gateway receipt and an aggregate ledger
+  observation for that identity. The monitor serializes probes and enforces a
+  global limit; you cannot choose the identity, route, count, timeout, or retry
+  behavior. A probe is real traffic, so any side effect remains auditable.
 - mnemond presents bounded collaboration Events and accepted receipts.
 - You may coordinate, correlate evidence, and report the incident outcome.
 - You cannot mutate another domain or treat a peer statement as local fact.

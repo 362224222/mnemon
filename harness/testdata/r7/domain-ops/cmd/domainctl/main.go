@@ -83,6 +83,11 @@ func execute(ctx context.Context, config configuration) (json.RawMessage, error)
 			usage()
 		}
 		response, err = request(ctx, http.MethodGet, config.endpoint, arguments[1], nil)
+	case "probe":
+		if len(arguments) != 1 {
+			usage()
+		}
+		response, err = request(ctx, http.MethodPost, config.endpoint, "/probe", []byte("{}"))
 	case "action":
 		if len(arguments) != 3 {
 			usage()
@@ -165,8 +170,9 @@ func resolve(endpoint, path string) (string, error) {
 		return "", errors.New("path must be an absolute-path reference")
 	}
 	if reference.Path != "/status" && reference.Path != "/history" &&
+		reference.Path != "/probe" &&
 		!strings.HasPrefix(reference.Path, "/admin/") && reference.Path != "/charges" {
-		return "", errors.New("path is outside the status, history, charges, and admin surfaces")
+		return "", errors.New("path is outside the status, history, probe, charges, and admin surfaces")
 	}
 	return base.ResolveReference(reference).String(), nil
 }
@@ -174,6 +180,7 @@ func resolve(endpoint, path string) (string, error) {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: domainctl [flags] status [prefix]")
 	fmt.Fprintln(os.Stderr, "       domainctl [flags] read /status|/history[?query]|/charges[?query]")
+	fmt.Fprintln(os.Stderr, "       domainctl [flags] probe")
 	fmt.Fprintln(os.Stderr, "       domainctl [flags] action /admin/<action> '<json>'")
 	os.Exit(2)
 }

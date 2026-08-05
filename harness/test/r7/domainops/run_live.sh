@@ -927,6 +927,8 @@ assert_receipts() {
 revalidate_episode_state() {
   local episode=$1 incident_prefix=$2 evaluation_prefix=$3 stability_prefix=$4
   local suffix=post-attention
+
+  assert_synthetic_probes "$episode"
   compose --profile tools run --rm --no-deps data-tool status "$incident_prefix" \
     >"$runtime_root/$episode-incident-after-$suffix.json"
   compose --profile tools run --rm --no-deps data-tool \
@@ -967,8 +969,8 @@ revalidate_episode_state() {
 }
 
 assert_fresh_batch() {
-  local report=$1 count=$2 label=$3
-  jq -e --argjson count "$count" '
+  local report=$1 count=$2 label=$3 observed
+  if jq -e --argjson count "$count" '
     .sent == $count and .accepted == $count and .failed == 0 and
     (.receipts | length) == $count and all(.receipts[]; .capture_id > 0) and
     .observed.ledger.charges == $count and
@@ -976,13 +978,82 @@ assert_fresh_batch() {
     .observed.ledger.voided_charges == 0 and
     .observed.ledger.unique_businesses == $count and
     .observed.ledger.duplicate_businesses == 0
-  ' "$report" >/dev/null || fail "$label fresh-traffic oracle failed"
+  ' "$report" >/dev/null; then
+    return 0
+  fi
+  observed=$(jq -c '{sent,accepted,failed,receipt_count:(.receipts | length),observed}' \
+    "$report")
+  fail "$label fresh-traffic oracle failed; observed=$observed"
+}
+
+assert_synthetic_probes() {
+  local episode=$1 history="$runtime_root/$1-synthetic-history.json"
+  local charges="$runtime_root/$1-synthetic-charges.json"
+  local audit="$runtime_root/$1-synthetic-probes.json"
+
+  compose --profile tools run --rm --no-deps edge-tool \
+    read '/history?prefix=synthetic-' >"$history"
+  compose --profile tools run --rm --no-deps data-tool \
+    read '/charges?prefix=synthetic-' >"$charges"
+  jq -e --slurpfile charges "$charges" '
+    .role == "edge" and .result.limit == 32 and
+    (.result.entries | type == "array" and length <= 16) and
+    ($charges | length == 1 and $charges[0].role == "data" and
+      ($charges[0].result | type == "array" and length <= 32)) and
+    (.result.entries as $receipts | $charges[0].result as $records |
+      ([ $receipts[].business_id ] | unique | length) == ($receipts | length) and
+      all($receipts[];
+        (.business_id | startswith("synthetic-")) and .request_id > 0 and
+        (.route == "east" or .route == "west") and
+        ((.status == "succeeded" and .capture_id > 0) or
+         (.status == "failed" and .capture_id == 0))) and
+      all($records[] as $record;
+        ($record.business_id | startswith("synthetic-")) and
+        any($receipts[]; .business_id == $record.business_id)) and
+      all($receipts[] as $receipt;
+        [ $records[] | select(.business_id == $receipt.business_id) ] as $related |
+        ($related | length) <= 2 and
+        if $receipt.status == "succeeded" then
+          ([ $related[] | select(.state == "active") ] | length) == 1 and
+          any($related[]; .state == "active" and .sequence == $receipt.capture_id) and
+          all($related[];
+            (.sequence == $receipt.capture_id and .state == "active") or
+            (.sequence != $receipt.capture_id and .state == "voided"))
+        else
+          all($related[]; .state == "voided")
+        end))
+  ' "$history" >/dev/null ||
+    fail "$episode synthetic checkout side effects are not reconciled"
+
+  jq -n --argjson history "$(cat "$history")" \
+    --argjson charges "$(cat "$charges")" '
+      $history.result.entries as $receipts |
+      $charges.result as $records |
+      {
+        observed:($receipts | length),
+        succeeded:([$receipts[] | select(.status == "succeeded")] | length),
+        failed:([$receipts[] | select(.status == "failed")] | length),
+        ledger:{
+          charges:($records | length),
+          active_charges:([$records[] | select(.state == "active")] | length),
+          voided_charges:([$records[] | select(.state == "voided")] | length),
+          unique_businesses:([$records[].business_id] | unique | length),
+          duplicate_businesses:([$records | group_by(.business_id)[] |
+            select([.[] | select(.state == "active")] | length > 1)] | length)
+        }
+      }
+    ' >"$audit"
 }
 
 assert_recovery() {
   local episode=$1 incident_prefix=$2 evaluation_prefix=$3 stability_prefix=$4
+  failure_stage="scenario.$episode.synthetic-probes"
+  assert_synthetic_probes "$episode"
+  failure_stage="scenario.$episode.recovery-load"
   run_load "$evaluation_prefix" 6 "$runtime_root/$episode-recovery.json"
+  failure_stage="scenario.$episode.stability-load"
   run_load "$stability_prefix" 6 "$runtime_root/$episode-stability.json"
+  failure_stage="scenario.$episode.world-observation"
   compose --profile tools run --rm --no-deps data-tool status "$incident_prefix" \
     >"$runtime_root/$episode-incident-after.json"
   compose --profile tools run --rm --no-deps data-tool \
@@ -992,8 +1063,11 @@ assert_recovery() {
   compose --profile tools run --rm --no-deps data-tool \
     read "/charges?prefix=$stability_prefix" >"$runtime_root/$episode-stability-charges.json"
 
+  failure_stage="scenario.$episode.recovery-fresh"
   assert_fresh_batch "$runtime_root/$episode-recovery.json" 6 "$episode recovery"
+  failure_stage="scenario.$episode.stability-fresh"
   assert_fresh_batch "$runtime_root/$episode-stability.json" 6 "$episode stability"
+  failure_stage="scenario.$episode.historical-reconciliation"
   if ! jq -e '
     .role == "data" and
     .result.charges == 8 and
@@ -1006,10 +1080,13 @@ assert_recovery() {
     observed=$(jq -c '.result // {}' "$runtime_root/$episode-incident-after.json")
     fail "$episode independent existing-data reconciliation oracle failed; observed=$observed"
   fi
+  failure_stage="scenario.$episode.historical-receipts"
   assert_receipts "$runtime_root/$episode-baseline.json" \
     "$runtime_root/$episode-incident-charges.json" 2 1 "$episode historical"
+  failure_stage="scenario.$episode.recovery-receipts"
   assert_receipts "$runtime_root/$episode-recovery.json" \
     "$runtime_root/$episode-recovery-charges.json" 1 0 "$episode recovery"
+  failure_stage="scenario.$episode.stability-receipts"
   assert_receipts "$runtime_root/$episode-stability.json" \
     "$runtime_root/$episode-stability-charges.json" 1 0 "$episode stability"
 }
@@ -1244,13 +1321,15 @@ episode_report_json() {
   jq -n \
     --arg id "$episode" \
     --argjson baseline "$(cat "$runtime_root/$episode-baseline.json")" \
+    --argjson synthetic_probes "$(cat "$runtime_root/$episode-synthetic-probes.json")" \
     --argjson recovery "$(cat "$runtime_root/$episode-recovery.json")" \
     --argjson stability "$(cat "$runtime_root/$episode-stability.json")" \
     --argjson incident_after "$(cat "$runtime_root/$episode-incident-after.json")" \
     --argjson incident_charges "$(cat "$runtime_root/$episode-incident-charges.json")" \
     --argjson recovery_charges "$(cat "$runtime_root/$episode-recovery-charges.json")" \
     --argjson stability_charges "$(cat "$runtime_root/$episode-stability-charges.json")" '
-      {id:$id,baseline:$baseline,recovery:$recovery,stability:$stability,
+      {id:$id,baseline:$baseline,synthetic_probes:$synthetic_probes,
+       recovery:$recovery,stability:$stability,
        incident_after:$incident_after,incident_charges:$incident_charges,
        recovery_charges:$recovery_charges,stability_charges:$stability_charges}
     '

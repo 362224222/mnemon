@@ -113,6 +113,18 @@ compose --profile tools run --rm --no-deps payment-tool \
 compose --profile tools run --rm --no-deps platform-tool \
   --endpoint http://callback-east:8080 action /admin/latency \
   '{"latency_ms":5}' >/dev/null
+compose --profile tools run --rm --no-deps lead-tool probe >"$runtime_dir/synthetic-probe.json"
+jq -e '
+  .role == "lead" and
+  .result.receipt.business_id == "synthetic-001" and
+  .result.receipt.status == "succeeded" and
+  .result.receipt.capture_id > 0 and
+  .result.ledger.charges == 1 and .result.ledger.active_charges == 1 and
+  .result.ledger.voided_charges == 0 and
+  .result.ledger.unique_businesses == 1 and
+  .result.ledger.duplicate_businesses == 0
+' "$runtime_dir/synthetic-probe.json" >/dev/null ||
+  fail 'the bounded lead probe did not traverse the real checkout path'
 compose --profile tools run --rm --no-deps platform-tool \
   --endpoint http://callback-west:8080 action /admin/latency \
   '{"latency_ms":300}' >/dev/null
@@ -136,4 +148,4 @@ jq -e '
 ' "$runtime_dir/incident-b.json" >/dev/null ||
   fail 'the region-reversed hidden service fault was not observed'
 
-printf 'r7 domain ops world: PASS (two real regional faults, bounded receipt history, five isolated domain surfaces)\n'
+printf 'r7 domain ops world: PASS (two real regional faults, bounded public probe, receipt history, five isolated domain surfaces)\n'

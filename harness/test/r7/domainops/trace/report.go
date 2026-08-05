@@ -42,14 +42,15 @@ type liveReport struct {
 }
 
 type episodeReport struct {
-	ID               string             `json:"id"`
-	Baseline         loadSummary        `json:"baseline"`
-	Recovery         loadSummary        `json:"recovery"`
-	Stability        loadSummary        `json:"stability"`
-	IncidentAfter    domainResult       `json:"incident_after"`
-	IncidentCharges  domainChargeResult `json:"incident_charges"`
-	RecoveryCharges  domainChargeResult `json:"recovery_charges"`
-	StabilityCharges domainChargeResult `json:"stability_charges"`
+	ID               string              `json:"id"`
+	Baseline         loadSummary         `json:"baseline"`
+	SyntheticProbes  syntheticProbeAudit `json:"synthetic_probes"`
+	Recovery         loadSummary         `json:"recovery"`
+	Stability        loadSummary         `json:"stability"`
+	IncidentAfter    domainResult        `json:"incident_after"`
+	IncidentCharges  domainChargeResult  `json:"incident_charges"`
+	RecoveryCharges  domainChargeResult  `json:"recovery_charges"`
+	StabilityCharges domainChargeResult  `json:"stability_charges"`
 }
 
 type evolutionSummary struct {

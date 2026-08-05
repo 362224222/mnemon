@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+const maxSyntheticProbes = 16
+
 func validateWorld(report liveReport) error {
 	if len(report.World.Episodes) != 2 || report.World.Episodes[0].ID != "episode-1" ||
 		report.World.Episodes[1].ID != "episode-2" {
@@ -26,6 +28,13 @@ func validateWorld(report liveReport) error {
 			}
 			prefixes[summary.Prefix] = struct{}{}
 		}
+	}
+	first, second := report.World.Episodes[0].SyntheticProbes,
+		report.World.Episodes[1].SyntheticProbes
+	if second.Observed < first.Observed || second.Succeeded < first.Succeeded ||
+		second.Failed < first.Failed || second.Ledger.Charges < first.Ledger.Charges ||
+		second.Ledger.UniqueBusinesses < first.Ledger.UniqueBusinesses {
+		return errors.New("sanitized live report regresses cumulative synthetic probes")
 	}
 	return validateGlobalChargeIdentity(report.World.Episodes)
 }
@@ -64,6 +73,9 @@ func validateEpisode(episode episodeReport, expectedRoute string) error {
 		!validFreshSummary(episode.Stability, 6) {
 		return errors.New("sanitized live report does not prove recovery and stability")
 	}
+	if err := validateSyntheticProbes(episode.SyntheticProbes); err != nil {
+		return err
+	}
 	incident := episode.IncidentAfter
 	if incident.Role != "data" || incident.Result != (ledgerStatus{
 		Charges: 8, ActiveCharges: 4, VoidedCharges: 4,
@@ -86,6 +98,23 @@ func validateEpisode(episode episodeReport, expectedRoute string) error {
 			check.copies, check.voided); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateSyntheticProbes(audit syntheticProbeAudit) error {
+	ledger := audit.Ledger
+	if audit.Observed < 0 || audit.Observed > maxSyntheticProbes ||
+		audit.Succeeded < 0 || audit.Failed < 0 ||
+		audit.Succeeded+audit.Failed != audit.Observed ||
+		ledger.Charges < 0 || ledger.ActiveCharges < 0 || ledger.VoidedCharges < 0 ||
+		ledger.UniqueBusinesses < 0 || ledger.DuplicateBusinesses != 0 ||
+		ledger.Charges > 2*audit.Observed ||
+		ledger.ActiveCharges != audit.Succeeded ||
+		ledger.ActiveCharges+ledger.VoidedCharges != ledger.Charges ||
+		ledger.UniqueBusinesses < audit.Succeeded ||
+		ledger.UniqueBusinesses > audit.Observed {
+		return errors.New("sanitized live report contains an invalid synthetic-probe audit")
 	}
 	return nil
 }

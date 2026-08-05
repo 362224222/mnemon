@@ -47,7 +47,7 @@ reasons. Each has different local knowledge, credentials, and tools:
 
 | Domain | Knows and owns |
 | --- | --- |
-| `lead` | End-to-end symptoms and the incident outcome; no service mutation |
+| `lead` | End-to-end symptoms and a bounded public probe; no service configuration mutation |
 | `edge` | Gateway routing, counters, and a bounded read-only request/receipt history |
 | `payment` | Payment behavior and bounded payment configuration |
 | `platform` | Callback delivery behavior and bounded callback configuration |
@@ -56,6 +56,13 @@ reasons. Each has different local knowledge, credentials, and tools:
 Service administration is available only on the owning domain network. A
 shared mnemond network carries governed collaboration Events; it does not grant
 service credentials or merge the five Runtime contexts.
+
+The lead may ask its existing monitor for one server-shaped synthetic checkout
+at a time. The monitor chooses the identity, submits exactly one request through
+the public gateway, and returns the exact gateway receipt plus an aggregate
+ledger observation. It serializes calls and enforces a global limit; the Agent
+cannot select a route, request count, timeout, retry policy, or repair. This is
+an environmental observation affordance, not service-administration authority.
 
 ## What is deliberately not scripted
 
@@ -78,6 +85,9 @@ Each episode passes on the same external outcomes: historical customer receipts
 still point to one active capture, extra captures remain as explicit void audit
 records, and two fresh evaluation batches complete without duplicate active
 captures. Accepted collaboration effects retain their R7 causality and receipt.
+Any optional `synthetic-*` checkout is audited separately: successful public
+receipts retain exactly their acknowledged active capture, failed receipts leave
+no active capture, and all other side effects remain explicit void records.
 Pi runs with a fresh process and no session for every attention opportunity,
 while the five mnemond authority stores and their References survive both
 episodes. Before Episode 2, all five Runtime containers and writable workspaces
