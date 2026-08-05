@@ -33,7 +33,8 @@ trace_path=${DOMAIN_OPS_TRACE:-$repository_root/.testdata/r7-domain-ops-live/las
 failure_report_path=${DOMAIN_OPS_FAILURE_REPORT:-$repository_root/.testdata/r7-domain-ops-live/last-failure.json}
 failure_trace_path=${DOMAIN_OPS_FAILURE_TRACE:-$repository_root/.testdata/r7-domain-ops-live/last-failure.trace}
 roles='lead edge payment platform data'
-neutral_attention='Continue the work available in this workspace. Use current evidence and your local authority, preserve uncertainty, and stop when no useful bounded action remains.'
+attention_contract='This is one bounded attention opportunity, not the whole workflow. Inspect only what is useful now, make at most one accepted contribution, and stop; later turns can continue.'
+neutral_attention="$attention_contract Continue the work available in this workspace. Use current evidence and your local authority, preserve uncertainty, and stop when no useful bounded action remains."
 initial_mission=
 
 runtime_root=
@@ -423,7 +424,7 @@ bounded_pi_process() {
   # limit below applies only to persisted, filtered evidence and stderr.
   ulimit -f "$persisted_evidence_max_blocks"
   pi_process "$container" "$tag" |
-    jq -c 'select(.type != "message_update" and .type != "tool_execution_update")'
+    jq --unbuffered -c 'select(.type != "message_update" and .type != "tool_execution_update")'
 }
 
 stop_remote_pi_pipeline() {
@@ -771,8 +772,9 @@ run_attention_round() {
 }
 
 run_agents() {
-  local episode=$1 round
-  run_turn lead "$initial_mission" "$episode-initial-lead"
+  local episode=$1 round initial_attention
+  initial_attention=$(printf '%s\n\n%s' "$initial_mission" "$attention_contract")
+  run_turn lead "$initial_attention" "$episode-initial-lead"
   wait_for_peer_delivery_quiescence "$episode-initial-lead"
   round=1
   while test "$round" -le "$rounds"; do

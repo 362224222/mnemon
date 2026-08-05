@@ -88,6 +88,11 @@ instruction to publish; it can only re-observe its own now-updated service and
 decide whether anything is worth retaining before the authority boundary is
 captured.
 
+Every Runtime prompt also states the generic attention contract: one
+opportunity does not own the whole workflow, may commit at most one accepted
+contribution, and should stop so later turns can continue. This is a resource
+boundary, not case choreography or a completion condition.
+
 The evolution oracle is structural rather than semantic. After Episode 1's
 external recovery oracle passes, at least one node must create or update an
 active Reference during the neutral post-outcome attention interval. After
