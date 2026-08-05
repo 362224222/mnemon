@@ -607,6 +607,10 @@ summarize_partial_turn() {
   local raw=$1
   jq -s -c '
     def command: (.args.command // "");
+    def invocation_pattern($verb):
+      (("(^|[|;&][[:space:]]*)([^[:space:];|&]*/)?mnemon-harness" +
+        "[[:space:]]+agent[[:space:]]+" + $verb + "([[:space:];|&]|$)"));
+    def invocation_count($verb): [command | scan(invocation_pattern($verb))] | length;
     def result_strings:
       if (.result | type) == "object" and
           (.result.content? | type) == "array" then
@@ -631,8 +635,10 @@ summarize_partial_turn() {
       (.retryable == (.code == "operation_pending" or .code == "mnemond_unavailable"));
     . as $stream |
     ([$stream[] | select(.type == "tool_execution_start" and .toolName == "bash" and
-      (command | test("mnemon-harness[[:space:]]+agent[[:space:]]+submit"))) |
-      .toolCallId] | unique) as $submit_calls |
+      invocation_count("submit") > 0)]) as $submit_starts |
+    ([$submit_starts[].toolCallId] | unique) as $submit_calls |
+    ([$stream[] | select(.type == "tool_execution_end" and .toolName == "bash" and
+      (.toolCallId as $id | $submit_calls | index($id) != null))]) as $submit_ends |
     {
       stream_records:length,
       record_types:(reduce .[] as $record ({};
@@ -658,8 +664,19 @@ summarize_partial_turn() {
         .result.details.version == 1 and .result.details.status == "completed")] | length),
       current_attempts:([.[] | select(.type == "tool_execution_start" and
         .toolName == "bash" and (command | test("mnemon-harness[[:space:]]+agent[[:space:]]+current")))] | length),
-      submit_attempts:([.[] | select(.type == "tool_execution_start" and
-        .toolName == "bash" and (command | test("mnemon-harness[[:space:]]+agent[[:space:]]+submit")))] | length),
+      submit_attempts:($submit_starts | length),
+      submit_ends:($submit_ends | length),
+      submit_invocation_cardinality:(reduce $submit_starts[] as $start ({};
+        ($start | invocation_count("submit") | tostring) as $count |
+        .[$count] = ((.[$count] // 0) + 1))),
+      submit_control_error_codes:(reduce ([$submit_ends[] | result_objects[] |
+        select(valid_control_error) | .code][]) as $code ({};
+        .[$code] = ((.[$code] // 0) + 1))),
+      submit_unclassified:([$submit_ends[] | select(
+        (any(result_strings;
+          contains("\"schema\":\"mnemon.agent.receipt\"") or
+          contains("\"schema_version\":1") and contains("\"status\":\"error\"")) | not) and
+        .isError != true)] | length),
       accepted_receipts:([.[] | select(.type == "tool_execution_end" and
         .toolName == "bash" and any(result_strings;
           contains("\"schema\":\"mnemon.agent.receipt\"") and
