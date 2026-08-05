@@ -11,6 +11,13 @@ may still refer to one business operation, so business-level review and
 attempt-level replay are different questions. Data correction must remain
 auditable.
 
+For checkout-integrity reconciliation, a successful gateway history entry
+identifies the exact `capture_id` returned at the public checkout boundary.
+Preserve that capture unless independent evidence authorizes reversal. Treat
+any other same-business active capture as a reconciliation candidate, not
+automatically as a duplicate; void an exact capture only when evidence shows
+it was not the acknowledged outcome and is not otherwise legitimate.
+
 ## Local tools and authority
 
 - `domainctl status` reads aggregate ledger observations.
