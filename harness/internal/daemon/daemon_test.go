@@ -105,11 +105,6 @@ func TestDaemonRecoversOnlyAStaleOwnerSocketAfterTakingWriter(t *testing.T) {
 		_ = stale.Close()
 		t.Fatal(err)
 	}
-	staleInfo, err := os.Lstat(socket)
-	if err != nil {
-		_ = stale.Close()
-		t.Fatal(err)
-	}
 	if err := stale.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -117,12 +112,18 @@ func TestDaemonRecoversOnlyAStaleOwnerSocketAfterTakingWriter(t *testing.T) {
 	go func() { serveErrors <- runtime.Serve(context.Background()) }()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		current, err := os.Lstat(socket)
-		if err == nil && !os.SameFile(staleInfo, current) {
+		conn, err := net.DialTimeout("unix", socket, 50*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
 			break
 		}
+		select {
+		case serveErr := <-serveErrors:
+			t.Fatalf("daemon serve exited before replacing stale socket: %v", serveErr)
+		default:
+		}
 		if !time.Now().Before(deadline) {
-			t.Fatal("stale owner socket was not replaced")
+			t.Fatalf("daemon did not accept connections after replacing stale socket: %v", err)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
