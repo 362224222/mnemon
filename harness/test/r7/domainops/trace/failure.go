@@ -83,6 +83,7 @@ func validateCompletedTurnSubset(turns []turnSummary) error {
 			turn.SubmitAttempts,
 			turn.IntentSubmits,
 			turn.AcceptedReceipts, turn.RejectedReceipts, turn.SubmitDenials,
+			turn.SubmitInvocationFailures,
 			turn.PostAcceptDenials,
 			turn.PrivateBindingProbes}
 		if _, err := parseReportTime("turn captured_at", turn.CapturedAt); err != nil {
@@ -96,7 +97,7 @@ func validateCompletedTurnSubset(turns []turnSummary) error {
 			turn.PostAcceptDenials > turn.SubmitDenials ||
 			(turn.PostAcceptDenials > 0 && turn.AcceptedReceipts != 1) ||
 			turn.IntentSubmits != turn.AcceptedReceipts+turn.RejectedReceipts ||
-			turn.SubmitAttempts != turn.IntentSubmits+turn.SubmitDenials {
+			turn.SubmitAttempts != turn.IntentSubmits+turn.SubmitDenials+turn.SubmitInvocationFailures {
 			return errors.New("sanitized failure report contains an invalid completed turn")
 		}
 	}

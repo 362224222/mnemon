@@ -332,6 +332,14 @@ if sanitize_turn lead oracle-unaccounted "$scratch/unaccounted.jsonl" \
   exit 1
 fi
 
+write_submit_stream "$scratch/local-failure.jsonl" '{"status":"error"}'
+sanitize_turn lead oracle-local-failure "$scratch/local-failure.jsonl" \
+  "$scratch/local-failure.json"
+jq -e '
+  .submit_attempts == 1 and .intent_submits == 0 and
+  .submit_denials == 0 and .submit_invocation_failures == 1
+' "$scratch/local-failure.json" >/dev/null
+
 write_submit_stream "$scratch/two-effects.jsonl" "$accepted_receipt" "$accepted_receipt"
 if sanitize_turn lead oracle-two-effects "$scratch/two-effects.jsonl" \
     "$scratch/two-effects.json"; then

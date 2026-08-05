@@ -97,21 +97,22 @@ type runReport struct {
 }
 
 type turnSummary struct {
-	Role                 string `json:"role"`
-	Turn                 string `json:"turn"`
-	CapturedAt           string `json:"captured_at"`
-	HookCues             int    `json:"hook_cues"`
-	BashCalls            int    `json:"bash_calls"`
-	DelegateCalls        int    `json:"delegate_calls"`
-	CurrentReads         int    `json:"current_reads"`
-	SubmitAttempts       int    `json:"submit_attempts"`
-	IntentSubmits        int    `json:"intent_submits"`
-	AcceptedReceipts     int    `json:"accepted_receipts"`
-	RejectedReceipts     int    `json:"rejected_receipts"`
-	SubmitDenials        int    `json:"submit_denials"`
-	PostAcceptDenials    int    `json:"post_accept_denials"`
-	PrivateBindingProbes int    `json:"private_binding_probes"`
-	AgentEnd             bool   `json:"agent_end"`
+	Role                     string `json:"role"`
+	Turn                     string `json:"turn"`
+	CapturedAt               string `json:"captured_at"`
+	HookCues                 int    `json:"hook_cues"`
+	BashCalls                int    `json:"bash_calls"`
+	DelegateCalls            int    `json:"delegate_calls"`
+	CurrentReads             int    `json:"current_reads"`
+	SubmitAttempts           int    `json:"submit_attempts"`
+	IntentSubmits            int    `json:"intent_submits"`
+	AcceptedReceipts         int    `json:"accepted_receipts"`
+	RejectedReceipts         int    `json:"rejected_receipts"`
+	SubmitDenials            int    `json:"submit_denials"`
+	SubmitInvocationFailures int    `json:"submit_invocation_failures"`
+	PostAcceptDenials        int    `json:"post_accept_denials"`
+	PrivateBindingProbes     int    `json:"private_binding_probes"`
+	AgentEnd                 bool   `json:"agent_end"`
 }
 
 type peerEffectSummary struct {
@@ -342,7 +343,8 @@ func expectedTurnRoles(rounds int) map[string]string {
 func validateTurnSummary(turn turnSummary) error {
 	values := []int{turn.HookCues, turn.BashCalls, turn.DelegateCalls, turn.CurrentReads,
 		turn.SubmitAttempts, turn.IntentSubmits, turn.AcceptedReceipts, turn.RejectedReceipts,
-		turn.SubmitDenials, turn.PostAcceptDenials, turn.PrivateBindingProbes}
+		turn.SubmitDenials, turn.SubmitInvocationFailures, turn.PostAcceptDenials,
+		turn.PrivateBindingProbes}
 	if _, err := parseReportTime("turn captured_at", turn.CapturedAt); err != nil {
 		return err
 	}
@@ -355,7 +357,7 @@ func validateTurnSummary(turn turnSummary) error {
 		turn.PostAcceptDenials > turn.SubmitDenials ||
 		(turn.PostAcceptDenials > 0 && turn.AcceptedReceipts != 1) ||
 		turn.IntentSubmits != turn.AcceptedReceipts+turn.RejectedReceipts ||
-		turn.SubmitAttempts != turn.IntentSubmits+turn.SubmitDenials {
+		turn.SubmitAttempts != turn.IntentSubmits+turn.SubmitDenials+turn.SubmitInvocationFailures {
 		return errors.New("sanitized live report contains inconsistent successful CLI observations")
 	}
 	return nil

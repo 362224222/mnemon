@@ -106,3 +106,23 @@ func TestValidateFailureReportBoundsRuntimePrivateDelegation(t *testing.T) {
 		t.Fatal("validateFailureReport() accepted more than one Runtime-private delegate")
 	}
 }
+
+func TestReportValidationAccountsRuntimeSubmitInvocationFailures(t *testing.T) {
+	report := validReport()
+	report.Turns[0].SubmitAttempts = 1
+	report.Turns[0].SubmitInvocationFailures = 1
+	if err := validateReport(report); err != nil {
+		t.Fatalf("validateReport() rejected one bounded Runtime invocation failure: %v", err)
+	}
+	report.Turns[0].SubmitInvocationFailures = 0
+	if err := validateReport(report); err == nil {
+		t.Fatal("validateReport() accepted an unaccounted submit attempt")
+	}
+
+	failure := validFailureReport()
+	failure.Turns[0].SubmitAttempts = 1
+	failure.Turns[0].SubmitInvocationFailures = 1
+	if err := validateFailureReport(failure); err != nil {
+		t.Fatalf("validateFailureReport() rejected one bounded Runtime invocation failure: %v", err)
+	}
+}

@@ -53,6 +53,9 @@ invent a causal edge to an Event.
 `turns[].delegate_calls` counts completed child-Pi effects, not tool attempts.
 The Runtime may return a closed `slot_used` result for a repeated attempt, but
 the report still requires at most one completed delegate per parent turn.
+`turns[].submit_invocation_failures` separately counts Pi/Bash invocation
+failures that exposed no Receipt or admission diagnostic. Their protocol
+outcome is unknown: they neither prove nor contribute evidence of an Effect.
 
 The passed runner report is `mnemon.r7.domain-ops.live-report` version 2. It
 contains two ordered service-world episodes and a bounded authority boundary
