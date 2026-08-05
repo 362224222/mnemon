@@ -19,7 +19,9 @@ Runtime extension invokes `hook attach` or `hook end`. Reasoning, tools, and
 Runtime-private helpers stay private. Persist only results that must survive as
 an Artifact, Event, or Reference. Gather evidence before the Intent. A rejected
 Receipt creates no Effect; amend or defer. After acceptance, make no further
-mnemond mutation that turn. One request may name all View-offered successors.
+mnemond mutation that turn. Execute at most one `agent submit` process in each
+Bash tool call; let its result return before correcting or retrying. One request
+may name all View-offered successors.
 
 This guide and the current View are the complete Agent-facing surface. Do not
 discover protocol state through setup, peer, status, or help. `mnemon-harness` is already on
