@@ -498,6 +498,14 @@ sanitize_turn() {
     def belongs($ids):
       (.toolCallId // null) as $id |
       $id != null and (($ids | index($id)) != null);
+    def valid_delegate_result:
+      (.result.details? // null) as $details |
+      ($details | type) == "object" and
+      $details.schema == "mnemon.pi.delegate" and $details.version == 1 and
+      (($details.status == "completed" and .isError == false) or
+       (($details.status as $status |
+         ["slot_used", "task_invalid", "model_unavailable", "auth_unavailable", "failed"] |
+         index($status)) != null and .isError == true));
     . as $stream |
     ([$stream[] | select(.type == "message_end" and .message.role == "assistant")]) as
       $assistant_ends |
@@ -507,7 +515,9 @@ sanitize_turn() {
       invokes("submit"))]) as $submit_starts |
     ([$submit_starts[].toolCallId] | unique) as $submit_calls |
     ([$stream[] | select(.type == "tool_execution_start" and
-      .toolName == "delegate") | .toolCallId] | unique) as $delegate_calls |
+      .toolName == "delegate") | .toolCallId] | unique) as $delegate_attempts |
+    ([$stream[] | select(.type == "tool_execution_end" and
+      .toolName == "delegate" and belongs($delegate_attempts))]) as $delegate_ends |
     (reduce $stream[] as $record (
       {accepted_seen:false, denials:0};
       if ($record.type == "tool_execution_end" and $record.toolName == "bash" and
@@ -529,7 +539,8 @@ sanitize_turn() {
         .message.role == "custom" and .message.customType == "mnemond")] | length),
       bash_calls: ([$stream[] | select(
         .type == "tool_execution_start" and .toolName == "bash")] | length),
-      delegate_calls: ($delegate_calls | length),
+      delegate_calls: ([$delegate_ends[] |
+        select(.result.details.status == "completed")] | length),
       current_reads: ([$stream[] | select(
         .type == "tool_execution_end" and .toolName == "bash" and .isError == false and
         belongs($current_calls) and
@@ -565,8 +576,9 @@ sanitize_turn() {
           .accepted_receipts, .rejected_receipts, .submit_denials,
           .post_accept_denials, .private_binding_probes] | all(. >= 0 and . <= 256)) and
         .delegate_calls <= 1 and
-        ([$stream[] | select(.type == "tool_execution_end" and .toolName == "delegate" and
-          belongs($delegate_calls))] | length) == .delegate_calls and
+        ($delegate_ends | length) == ($delegate_attempts | length) and
+        ([$delegate_ends[].toolCallId] | unique | sort) == ($delegate_attempts | sort) and
+        all($delegate_ends[]; valid_delegate_result) and
         .accepted_receipts <= 1 and
         .post_accept_denials <= .submit_denials and
         (.post_accept_denials == 0 or .accepted_receipts == 1) and
@@ -622,8 +634,12 @@ summarize_partial_turn() {
       tool_errors:([.[] | select(.type == "tool_execution_end" and .isError == true)] | length),
       domain_calls:([.[] | select(.type == "tool_execution_start" and
         .toolName == "bash" and (command | contains("domainctl")))] | length),
-      delegate_calls:([.[] | select(.type == "tool_execution_start" and
+      delegate_attempts:([.[] | select(.type == "tool_execution_start" and
         .toolName == "delegate")] | length),
+      delegate_effects:([.[] | select(.type == "tool_execution_end" and
+        .toolName == "delegate" and .isError == false and
+        .result.details.schema == "mnemon.pi.delegate" and
+        .result.details.version == 1 and .result.details.status == "completed")] | length),
       current_attempts:([.[] | select(.type == "tool_execution_start" and
         .toolName == "bash" and (command | test("mnemon-harness[[:space:]]+agent[[:space:]]+current")))] | length),
       submit_attempts:([.[] | select(.type == "tool_execution_start" and

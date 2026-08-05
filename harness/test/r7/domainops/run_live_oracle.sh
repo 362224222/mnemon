@@ -251,28 +251,37 @@ for terminal_reason in error aborted; do
 done
 
 write_delegate_stream() {
-  local count=$1 destination=$2 index
+  local destination=$1 status index=0 is_error
+  shift
   jq -nc '{type:"message_start",message:{role:"custom",customType:"mnemond"}}' \
     >"$destination"
-  index=1
-  while test "$index" -le "$count"; do
+  for status in "$@"; do
+    index=$((index + 1))
+    is_error=true
+    test "$status" != completed || is_error=false
     jq -nc --arg id "delegate-$index" \
       '{type:"tool_execution_start",toolCallId:$id,toolName:"delegate",
         args:{task:"bounded independent analysis"}}' >>"$destination"
-    jq -nc --arg id "delegate-$index" \
-      '{type:"tool_execution_end",toolCallId:$id,toolName:"delegate",isError:false,
-        result:{content:[{type:"text",text:"bounded observation"}]}}' >>"$destination"
-    index=$((index + 1))
+    jq -nc --arg id "delegate-$index" --arg status "$status" \
+      --argjson is_error "$is_error" \
+      '{type:"tool_execution_end",toolCallId:$id,toolName:"delegate",isError:$is_error,
+        result:{content:[{type:"text",text:"bounded observation"}],
+          details:{schema:"mnemon.pi.delegate",version:1,status:$status}}}' \
+      >>"$destination"
   done
   jq -nc '{type:"message_end",message:{role:"assistant",stopReason:"stop"}}' \
     >>"$destination"
   jq -nc '{type:"agent_end"}' >>"$destination"
 }
 
-write_delegate_stream 1 "$scratch/delegate.jsonl"
+write_delegate_stream "$scratch/delegate.jsonl" completed
 sanitize_turn lead oracle-delegate "$scratch/delegate.jsonl" "$scratch/delegate.json"
 test "$(jq '.delegate_calls' "$scratch/delegate.json")" = 1
-write_delegate_stream 2 "$scratch/two-delegates.jsonl"
+write_delegate_stream "$scratch/contained-delegate.jsonl" completed slot_used
+sanitize_turn lead oracle-contained-delegate "$scratch/contained-delegate.jsonl" \
+  "$scratch/contained-delegate.json"
+test "$(jq '.delegate_calls' "$scratch/contained-delegate.json")" = 1
+write_delegate_stream "$scratch/two-delegates.jsonl" completed completed
 if sanitize_turn lead oracle-two-delegates "$scratch/two-delegates.jsonl" \
     "$scratch/two-delegates.json"; then
   printf 'runtime oracle: two delegate calls in one turn were accepted\n' >&2
