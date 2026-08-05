@@ -11,13 +11,36 @@ import (
 func TestFederatedObservationsShareCorrelationAndRemainBoundedCandidates(t *testing.T) {
 	origin := newAuthorityFixture(t, "principal:focus-federated-origin")
 	originPrivate := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x51}, ed25519.SeedSize))
+	peers := newFocusFederatedPeers(t, origin, originPrivate)
+
+	publishTestReference(t, origin, "local.guidance", "locally admitted guidance")
+	wantReference := focusReferenceSnapshot(t, origin, "local.guidance")
+	exchanges := requireFederatedFocusFanout(t, origin, peers)
+	roundTripFederatedFocusObservations(t, origin, originPrivate, exchanges, wantReference)
+	requireFederatedFocusRotation(t, origin, peers)
+	requireFocusReferenceUnchanged(t, origin, wantReference)
+}
+
+func newFocusFederatedPeers(t *testing.T, origin *authorityFixture,
+	originPrivate ed25519.PrivateKey,
+) []focusFederatedPeer {
+	t.Helper()
 	peers := make([]focusFederatedPeer, 0, 3)
 	for index, suffix := range []string{"alpha", "beta", "gamma"} {
 		peers = append(peers, newFocusFederatedPeer(t, origin, originPrivate, index, suffix))
 	}
+	return peers
+}
 
-	publishTestReference(t, origin, "local.guidance", "locally admitted guidance")
-	wantReference := focusReferenceSnapshot(t, origin, "local.guidance")
+type focusFederatedExchange struct {
+	peer     *focusFederatedPeer
+	delivery agency.PeerDelivery
+}
+
+func requireFederatedFocusFanout(t *testing.T, origin *authorityFixture,
+	peers []focusFederatedPeer,
+) []focusFederatedExchange {
+	t.Helper()
 	admitFederatedFocusRequest(t, origin, peers)
 	if got := countRows(t, origin.store, "peer_outbox"); got != len(peers) {
 		t.Fatalf("fan-out outbox rows = %d, want %d", got, len(peers))
@@ -31,6 +54,7 @@ func TestFederatedObservationsShareCorrelationAndRemainBoundedCandidates(t *test
 	for index := range peers {
 		byRoute[peers[index].originRoute.RouteID.String()] = &peers[index]
 	}
+	exchanges := make([]focusFederatedExchange, 0, len(pending))
 	var request agency.EventRef
 	for index, item := range pending {
 		peer := byRoute[item.Route().RouteID().String()]
@@ -43,49 +67,34 @@ func TestFederatedObservationsShareCorrelationAndRemainBoundedCandidates(t *test
 		} else if delivery.OriginEvent() != request {
 			t.Fatalf("fan-out origin Event = %v, want %v", delivery.OriginEvent(), request)
 		}
-		admitFederatedFocusRequestAtPeer(t, originPrivate, peer, delivery)
-		admitFederatedFocusObservation(t, origin, peer, delivery)
-		if got := focusReferenceSnapshot(t, origin, "local.guidance"); got != wantReference {
-			t.Fatalf("peer observation changed local Reference: got %#v want %#v", got, wantReference)
-		}
-		if got := countRows(t, origin.store, "reference_lineage"); got != 1 {
-			t.Fatalf("peer observation created Reference lineage rows = %d, want 1", got)
-		}
+		exchanges = append(exchanges, focusFederatedExchange{peer: peer, delivery: delivery})
 	}
+	return exchanges
+}
 
+func roundTripFederatedFocusObservations(t *testing.T, origin *authorityFixture,
+	originPrivate ed25519.PrivateKey, exchanges []focusFederatedExchange,
+	wantReference focusReferenceState,
+) {
+	t.Helper()
+	for _, exchange := range exchanges {
+		admitFederatedFocusRequestAtPeer(t, originPrivate, exchange.peer, exchange.delivery)
+		admitFederatedFocusObservation(t, origin, exchange.peer, exchange.delivery)
+		requireFocusReferenceUnchanged(t, origin, wantReference)
+	}
+}
+
+func requireFederatedFocusRotation(t *testing.T, origin *authorityFixture,
+	peers []focusFederatedPeer,
+) {
+	t.Helper()
 	wantPayloads := map[string]bool{"consider independent observations": false}
 	for _, peer := range peers {
 		wantPayloads[peer.observation] = false
 	}
 	for turn := 0; turn < len(wantPayloads); turn++ {
 		view := decodeFocusView(t, origin.current(t))
-		if view.Current == nil {
-			t.Fatal("federated focus View has no Current")
-		}
-		payload := view.Current.Semantic.Payload
-		if _, exists := wantPayloads[payload]; !exists {
-			t.Fatalf("unexpected Current payload %q", payload)
-		}
-		if wantPayloads[payload] {
-			t.Fatalf("Current payload %q was selected twice before all candidates", payload)
-		}
-		wantPayloads[payload] = true
-		if len(view.RelatedOpen) != agency.MaxAgentViewRelatedOpen ||
-			view.RelatedOpen[0].Facts.Relation != "correlation" {
-			t.Fatalf("bounded related projection = %#v", view.RelatedOpen)
-		}
-		wantRelated := len(peers)
-		if payload != "consider independent observations" {
-			// The root has no correlation field of its own, so it is not a
-			// related candidate while one of its correlated replies is Current.
-			wantRelated--
-		}
-		if view.Outstanding.OpenTotal != len(wantPayloads) ||
-			view.Outstanding.RelatedTotal != wantRelated ||
-			view.Outstanding.RelatedProjected != agency.MaxAgentViewRelatedOpen ||
-			!view.Outstanding.Truncated {
-			t.Fatalf("bounded outstanding projection = %#v", view.Outstanding)
-		}
+		requireFederatedFocusView(t, view, wantPayloads, len(peers))
 		if turn+1 < len(wantPayloads) {
 			replaceInteractiveBoundary(t, origin)
 		}
@@ -95,8 +104,39 @@ func TestFederatedObservationsShareCorrelationAndRemainBoundedCandidates(t *test
 			t.Fatalf("correlated candidate never entered Current: %q", payload)
 		}
 	}
-	if got := focusReferenceSnapshot(t, origin, "local.guidance"); got != wantReference {
-		t.Fatalf("attention rotation changed local Reference: got %#v want %#v", got, wantReference)
+}
+
+func requireFederatedFocusView(t *testing.T, view focusViewWire,
+	wantPayloads map[string]bool, peerCount int,
+) {
+	t.Helper()
+	if view.Current == nil {
+		t.Fatal("federated focus View has no Current")
+	}
+	payload := view.Current.Semantic.Payload
+	seen, exists := wantPayloads[payload]
+	if !exists {
+		t.Fatalf("unexpected Current payload %q", payload)
+	}
+	if seen {
+		t.Fatalf("Current payload %q was selected twice before all candidates", payload)
+	}
+	wantPayloads[payload] = true
+	if len(view.RelatedOpen) != agency.MaxAgentViewRelatedOpen ||
+		view.RelatedOpen[0].Facts.Relation != "correlation" {
+		t.Fatalf("bounded related projection = %#v", view.RelatedOpen)
+	}
+	wantRelated := peerCount
+	if payload != "consider independent observations" {
+		// The root has no correlation field of its own, so it is not a
+		// related candidate while one of its correlated replies is Current.
+		wantRelated--
+	}
+	if view.Outstanding.OpenTotal != len(wantPayloads) ||
+		view.Outstanding.RelatedTotal != wantRelated ||
+		view.Outstanding.RelatedProjected != agency.MaxAgentViewRelatedOpen ||
+		!view.Outstanding.Truncated {
+		t.Fatalf("bounded outstanding projection = %#v", view.Outstanding)
 	}
 }
 
@@ -244,6 +284,18 @@ func admitFederatedFocusObservation(t *testing.T, origin *authorityFixture,
 }
 
 type focusReferenceState struct{ head, state, artifact string }
+
+func requireFocusReferenceUnchanged(t *testing.T, fixture *authorityFixture,
+	want focusReferenceState,
+) {
+	t.Helper()
+	if got := focusReferenceSnapshot(t, fixture, "local.guidance"); got != want {
+		t.Fatalf("peer observation changed local Reference: got %#v want %#v", got, want)
+	}
+	if got := countRows(t, fixture.store, "reference_lineage"); got != 1 {
+		t.Fatalf("peer observation created Reference lineage rows = %d, want 1", got)
+	}
+}
 
 func focusReferenceSnapshot(t *testing.T, fixture *authorityFixture,
 	key string,
