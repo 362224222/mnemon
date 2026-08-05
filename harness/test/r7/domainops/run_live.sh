@@ -526,7 +526,8 @@ sanitize_turn() {
       if ($record.type == "tool_execution_end" and $record.toolName == "bash" and
           ($record | belongs($submit_calls))) then
         .denials += (if .accepted_seen then
-          (if ($record | any(result_objects[]; valid_control_error)) then 1 else 0 end)
+          (if ($record | (any(result_objects[]; valid_receipt) | not) and
+              any(result_objects[]; valid_control_error)) then 1 else 0 end)
         else 0 end) |
         .accepted_seen = (.accepted_seen or
           ($record | any(result_objects[]; valid_receipt and .outcome == "accepted")))
@@ -556,7 +557,8 @@ sanitize_turn() {
       rejected_receipts: ([$submit_ends[] |
         select(any(result_objects[]; valid_receipt and .outcome == "rejected"))] | length),
       submit_denials: ([$submit_ends[] |
-        select(any(result_objects[]; valid_control_error))] | length),
+        select((any(result_objects[]; valid_receipt) | not) and
+          any(result_objects[]; valid_control_error))] | length),
       post_accept_denials: $post_accept.denials,
       private_binding_probes: ([$stream[] | select(.type == "tool_execution_start" and
         .toolName == "bash" and
@@ -581,9 +583,10 @@ sanitize_turn() {
         ($submit_ends | length) == ($submit_calls | length) and
         ([$submit_ends[].toolCallId] | unique | sort) == ($submit_calls | sort) and
         all($submit_ends[];
-          ([(if any(result_objects[]; valid_receipt and .outcome == "accepted") then 1 else 0 end),
-            (if any(result_objects[]; valid_receipt and .outcome == "rejected") then 1 else 0 end),
-            (if any(result_objects[]; valid_control_error) then 1 else 0 end)] | add) == 1) and
+          ((any(result_objects[]; valid_receipt and .outcome == "accepted") and
+            any(result_objects[]; valid_receipt and .outcome == "rejected")) | not) and
+          (any(result_objects[]; valid_receipt) or
+            any(result_objects[]; valid_control_error))) and
         .accepted_receipts <= 1 and
         .post_accept_denials <= .submit_denials and
         (.post_accept_denials == 0 or .accepted_receipts == 1) and
@@ -663,6 +666,10 @@ summarize_partial_turn() {
           contains("\"outcome\":\"rejected\"")))] | length),
       submit_denials:([$stream[] | select(.type == "tool_execution_end" and
         .toolName == "bash" and (.toolCallId as $id | $submit_calls | index($id) != null) and
+        (any(result_strings;
+          contains("\"schema\":\"mnemon.agent.receipt\"") and
+          (contains("\"outcome\":\"accepted\"") or
+            contains("\"outcome\":\"rejected\""))) | not) and
         any(result_objects[]; valid_control_error))] | length),
       hook_cues:([.[] | select(
         (.type == "message_start" or .type == "message_end") and

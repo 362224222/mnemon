@@ -306,6 +306,15 @@ jq -e '
   .submit_attempts == 1 and .intent_submits == 0 and .submit_denials == 1
 ' "$scratch/duplicate-rendering.json" >/dev/null
 
+write_submit_stream "$scratch/repaired-operation.jsonl" \
+  "$closed_denial"$'\n'"$accepted_receipt"
+sanitize_turn lead oracle-repaired-operation "$scratch/repaired-operation.jsonl" \
+  "$scratch/repaired-operation.json"
+jq -e '
+  .submit_attempts == 1 and .intent_submits == 1 and
+  .accepted_receipts == 1 and .rejected_receipts == 0 and .submit_denials == 0
+' "$scratch/repaired-operation.json" >/dev/null
+
 contained=("$accepted_receipt")
 for _ in $(seq 1 13); do contained+=("$closed_denial"); done
 write_submit_stream "$scratch/contained.jsonl" "${contained[@]}"
