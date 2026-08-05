@@ -464,9 +464,15 @@ sanitize_turn() {
     def invocation_count($verb): [command | scan(invocation_pattern($verb))] | length;
     def invokes($verb):
       (invocation_count($verb) > 0);
+    def result_texts:
+      if (.result | type) == "object" and
+          (.result.content? | type) == "array" then
+        .result.content[] | select(.type == "text" and (.text | type) == "string") |
+          .text
+      elif (.result | type) == "string" then .result
+      else empty end;
     def result_objects:
-      [(.result | .. | strings | split("\n")[] | fromjson? |
-        select(type == "object"))];
+      [result_texts | split("\n")[] | fromjson? | select(type == "object")];
     def valid_receipt:
       .schema == "mnemon.agent.receipt" and .version == 1 and
       (.replayed | type == "boolean") and
@@ -577,10 +583,15 @@ summarize_partial_turn() {
   local raw=$1
   jq -s -c '
     def command: (.args.command // "");
-    def result_strings: (.result | .. | strings);
+    def result_strings:
+      if (.result | type) == "object" and
+          (.result.content? | type) == "array" then
+        .result.content[] | select(.type == "text" and (.text | type) == "string") |
+          .text
+      elif (.result | type) == "string" then .result
+      else empty end;
     def result_objects:
-      [(.result | .. | strings | split("\n")[] | fromjson? |
-        select(type == "object"))];
+      [result_strings | split("\n")[] | fromjson? | select(type == "object")];
     def valid_control_error:
       (keys | sort) == ["code", "message", "operation_id", "replayed", "retryable",
         "schema_version", "status"] and

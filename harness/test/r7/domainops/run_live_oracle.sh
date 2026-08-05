@@ -213,7 +213,8 @@ write_submit_stream() {
         args:{command:"mnemon-harness agent submit --json"}}' >>"$destination"
     jq -nc --arg id "submit-$index" --arg text "$result" --argjson is_error "$is_error" \
       '{type:"tool_execution_end",toolCallId:$id,toolName:"bash",isError:$is_error,
-        result:{content:[{type:"text",text:$text}]}}' >>"$destination"
+        result:{content:[{type:"text",text:$text}],details:{output:$text}}}' \
+      >>"$destination"
   done
   jq -nc '{type:"message_end",message:{role:"assistant",stopReason:"stop"}}' \
     >>"$destination"
