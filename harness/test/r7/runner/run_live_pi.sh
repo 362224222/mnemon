@@ -309,12 +309,18 @@ r7_live_assert_pi_trace() {
 
 r7_live_assert_committed_effect() {
   local hook=$R7_LIVE_ROOT/verify-hook.json view=$R7_LIVE_ROOT/verify-view.json
-  if ! r7_live_boundary_envelope | env -u DEEPSEEK_API_KEY PATH="$R7_LIVE_ROOT/bin:$PATH" \
-    "$R7_LIVE_ROOT/bin/mnemon-harness" hook attach --json >"$hook" 2>/dev/null; then
+  if ! r7_live_boundary_envelope | (
+    cd "$R7_LIVE_WORKSPACE" &&
+      env -u DEEPSEEK_API_KEY PATH="$R7_LIVE_ROOT/bin:$PATH" \
+        "$R7_LIVE_ROOT/bin/mnemon-harness" hook attach --json
+  ) >"$hook" 2>/dev/null; then
     r7_live_fail 'a fresh attachment could not inspect the post-Pi authority state'
   fi
-  if ! env -u DEEPSEEK_API_KEY PATH="$R7_LIVE_ROOT/bin:$PATH" \
-    "$R7_LIVE_ROOT/bin/mnemon-harness" agent current --json >"$view" 2>/dev/null; then
+  if ! (
+    cd "$R7_LIVE_WORKSPACE" &&
+      env -u DEEPSEEK_API_KEY PATH="$R7_LIVE_ROOT/bin:$PATH" \
+        "$R7_LIVE_ROOT/bin/mnemon-harness" agent current --json
+  ) >"$view" 2>/dev/null; then
     r7_live_fail 'a fresh attachment could not obtain the post-Pi View'
   fi
   jq -e '
