@@ -407,6 +407,7 @@
           "enum": [
             "runtime.turn.started",
             "runtime.hook.cue",
+            "runtime.delegate.invoked",
             "runtime.view.received",
             "runtime.intent.submitted",
             "runtime.turn.ended",
@@ -494,6 +495,7 @@
                   "enum": [
                     "runtime.turn.started",
                     "runtime.hook.cue",
+                    "runtime.delegate.invoked",
                     "runtime.intent.submitted",
                     "runtime.turn.ended",
                     "runtime.turn.timed_out",

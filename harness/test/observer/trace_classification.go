@@ -10,6 +10,7 @@ type factClassification struct {
 var factClassifications = map[string]factClassification{
 	"runtime.turn.started":     {source: "runtime", truth: "observation"},
 	"runtime.hook.cue":         {source: "runtime", truth: "observation"},
+	"runtime.delegate.invoked": {source: "runtime", truth: "observation"},
 	"runtime.view.received":    {source: "runtime", truth: "derived_projection"},
 	"runtime.intent.submitted": {source: "runtime", truth: "observation"},
 	"runtime.turn.ended":       {source: "runtime", truth: "observation"},

@@ -1,6 +1,9 @@
 package main
 
-import "errors"
+import (
+	"errors"
+	"strings"
+)
 
 // validateServiceReceiptEvidence binds every customer-visible capture ID to
 // the exact retained ledger record. Aggregate counts cannot prove this link.
@@ -12,7 +15,7 @@ func validateServiceReceiptEvidence(summary loadSummary, charges domainChargeRes
 		len(charges.Result) != len(summary.Receipts)*copiesPerBusiness {
 		return errors.New("sanitized live report has incomplete exact service-receipt evidence")
 	}
-	receipts, err := indexServiceReceipts(summary.Receipts)
+	receipts, err := indexServiceReceipts(summary.Prefix, summary.Receipts)
 	if err != nil {
 		return err
 	}
@@ -30,10 +33,13 @@ func validateServiceReceiptEvidence(summary loadSummary, charges domainChargeRes
 	return nil
 }
 
-func indexServiceReceipts(values []serviceReceipt) (map[string]int64, error) {
+func indexServiceReceipts(prefix string, values []serviceReceipt) (map[string]int64, error) {
+	if prefix == "" {
+		return nil, errors.New("sanitized live report has an empty load identity")
+	}
 	receipts := make(map[string]int64, len(values))
 	for _, receipt := range values {
-		if receipt.BusinessID == "" || receipt.CaptureID <= 0 {
+		if !strings.HasPrefix(receipt.BusinessID, prefix+"-") || receipt.CaptureID <= 0 {
 			return nil, errors.New("sanitized live report has an invalid customer receipt")
 		}
 		if _, duplicate := receipts[receipt.BusinessID]; duplicate {

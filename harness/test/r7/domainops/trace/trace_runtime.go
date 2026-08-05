@@ -27,6 +27,12 @@ func appendRuntimeFacts(writer *observer.Writer, turns []turnSummary) error {
 				Truth:  observer.TruthDerivedProjection,
 				Fields: observer.FactFields{Action: "current"}})
 		}
+		if turn.DelegateCalls > 0 {
+			facts = append(facts, observer.Fact{ID: runtimeFactID(turn, "delegate"),
+				CapturedAt: capturedAt, Source: observer.Source{Class: observer.SourceRuntime, Node: turn.Role},
+				Agent: turn.Role, Turn: turn.Turn, Kind: "runtime.delegate.invoked",
+				Truth: observer.TruthObservation})
+		}
 		if turn.IntentSubmits > 0 {
 			facts = append(facts, observer.Fact{ID: runtimeFactID(turn, "intent"),
 				CapturedAt: capturedAt, Source: observer.Source{Class: observer.SourceRuntime, Node: turn.Role},

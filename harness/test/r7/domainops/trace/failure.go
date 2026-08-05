@@ -67,7 +67,7 @@ func validateFailureReport(report failureReport) error {
 }
 
 func validateCompletedTurnSubset(turns []turnSummary) error {
-	if len(turns) > 1+8*len(domainRoles) {
+	if len(turns) > 2*(1+8*len(domainRoles))+len(domainRoles) {
 		return errors.New("sanitized failure report contains too many completed turns")
 	}
 	seen := make(map[string]struct{}, len(turns))
@@ -79,7 +79,8 @@ func validateCompletedTurnSubset(turns []turnSummary) error {
 			return errors.New("sanitized failure report repeats a turn")
 		}
 		seen[turn.Turn] = struct{}{}
-		values := []int{turn.HookCues, turn.BashCalls, turn.CurrentReads, turn.SubmitAttempts,
+		values := []int{turn.HookCues, turn.BashCalls, turn.DelegateCalls, turn.CurrentReads,
+			turn.SubmitAttempts,
 			turn.IntentSubmits,
 			turn.AcceptedReceipts, turn.RejectedReceipts, turn.SubmitDenials,
 			turn.PostAcceptDenials,
@@ -89,7 +90,8 @@ func validateCompletedTurnSubset(turns []turnSummary) error {
 		}
 		if !turn.AgentEnd || turn.HookCues < 1 || slices.ContainsFunc(values,
 			func(value int) bool { return value < 0 || value > 256 }) ||
-			turn.PrivateBindingProbes != 0 || turn.CurrentReads > turn.BashCalls ||
+			turn.PrivateBindingProbes != 0 || turn.DelegateCalls > 1 ||
+			turn.CurrentReads > turn.BashCalls ||
 			turn.AcceptedReceipts > 1 ||
 			turn.PostAcceptDenials > turn.SubmitDenials ||
 			(turn.PostAcceptDenials > 0 && turn.AcceptedReceipts != 1) ||
@@ -153,7 +155,7 @@ func finishFailedTrace(writer *observer.Writer, code string, observedAt, finishe
 		Evidence: []string{failureFact}}}
 	for _, gate := range []string{"scenario.recovery", "scenario.service-receipts",
 		"r7.operation-receipts", "r7.peer-accepted-effect", "r7.delivery-quiescence",
-		"scenario.isolation"} {
+		"scenario.isolation", "scenario.evolution"} {
 		gates = append(gates, observer.Gate{ID: gate, Status: observer.GateUnknown})
 	}
 	gates = append(gates, observer.Gate{ID: "r8.applicability",

@@ -17,7 +17,7 @@ import (
 
 const (
 	scenarioID              = "r7-domain-ops-live"
-	scenarioIdentityVersion = "mnemon.r7.domain-ops.scenario/v1"
+	scenarioIdentityVersion = "mnemon.r7.domain-ops.scenario/v2"
 	maxScenarioFileBytes    = 1 << 20
 	maxBinaryManifestBytes  = 4 << 10
 )
@@ -47,6 +47,8 @@ var scenarioFiles = []string{
 }
 
 var candidateBinaryPaths = []string{
+	"/opt/mnemon/pi-delegate/delegate-runtime.mjs",
+	"/opt/mnemon/pi-delegate/delegate.ts",
 	"/usr/local/bin/domainctl",
 	"/usr/local/bin/mnemon-harness",
 	"/usr/local/bin/mnemond",

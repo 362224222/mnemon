@@ -23,7 +23,7 @@ projection_policy() {
   local file=$1
   local protocol_pattern hidden_answer_pattern choreography_pattern
   protocol_pattern='("(kind|consequence|successors|alias|subject_handling|correlation_handle|reply_target)"[[:space:]]*:|handling\.(create|advance|resolve)|reference\.(publish|supersede|retract)|review\.|contract-net\.|blackboard\.)'
-  hidden_answer_pattern='("route"[[:space:]]*:[[:space:]]*"east"[[:space:]]*}|--latency[[:space:]]+300ms|--timeout[[:space:]]+100ms|--stable-keys=false|callback-east|payment-east|incident-[0-9]|evaluation-[0-9]|stability-[0-9]|root[ -]?cause[[:space:]]+(is|=)|remediation[[:space:]]+(is|=)|fix[[:space:]]+by)'
+  hidden_answer_pattern='("route"[[:space:]]*:[[:space:]]*"east"[[:space:]]*}|--latency[[:space:]]+300ms|--timeout[[:space:]]+100ms|--stable-keys=false|incident-[ab0-9]|evaluation-[ab0-9]|stability-[ab0-9]|root[ -]?cause[[:space:]]+(is|=)|remediation[[:space:]]+(is|=)|fix[[:space:]]+by)'
   choreography_pattern='(first[[:space:]]+(ask|contact|send)|then[[:space:]]+(ask|contact|send)|send[[:space:]].*[[:space:]]to[[:space:]]+(lead|edge|payment|platform|data))'
 
   ! grep -Ein -- "$protocol_pattern|$hidden_answer_pattern|$choreography_pattern" "$file" \
@@ -39,6 +39,15 @@ assert_domain_projection_boundary() {
   fi
   printf '%s\n' "$pi_source" | grep -F -- 'docker exec -w /workspace' >/dev/null || {
     printf 'runtime oracle: domainops Pi does not start in the controlled workspace\n' >&2
+    exit 1
+  }
+  printf '%s\n' "$pi_source" | grep -F -- \
+    '--extension /opt/mnemon/pi-delegate/delegate.ts' >/dev/null || {
+    printf 'runtime oracle: domainops Pi lacks the bounded delegate extension\n' >&2
+    exit 1
+  }
+  printf '%s\n' "$pi_source" | grep -F -- '--tools bash,delegate' >/dev/null || {
+    printf 'runtime oracle: domainops Pi does not expose the exact bounded tool surface\n' >&2
     exit 1
   }
 
@@ -84,6 +93,55 @@ assert_domain_projection_boundary() {
 }
 
 assert_domain_projection_boundary
+
+assert_generic_evolution_oracle() {
+  local role database reference_digest event_json
+  runtime_root="$scratch/evolution-runtime"
+  authority_captured=1
+  mkdir -p "$runtime_root/authority" "$runtime_root/evolution-boundary"
+  reference_digest="sha256:$(printf 'a%.0s' {1..64})"
+  for role in $roles; do
+    mkdir -p "$runtime_root/authority/$role"
+    database="$runtime_root/authority/$role/agency.db"
+    sqlite3 "$database" 'CREATE TABLE events(origin_sequence INTEGER, canonical_json BLOB);'
+    jq -n --arg role "$role" \
+      '{role:$role,consolidation_after_sequence:0,max_origin_sequence:0,active_heads:[]}' \
+      >"$runtime_root/evolution-boundary/$role.json"
+  done
+  jq -n --arg digest "$reference_digest" '
+    {role:"lead",consolidation_after_sequence:0,max_origin_sequence:1,active_heads:[
+      {event_id:"event:fixture-reference",event_digest:$digest}]}
+  ' >"$runtime_root/evolution-boundary/lead.json"
+  event_json=$(jq -cn --arg digest "$reference_digest" '
+    {machine:{event_id:"event:fixture-use"},evidence:{causation:[
+      {id:"event:fixture-reference",digest:$digest}]}}
+  ')
+  sqlite3 "$runtime_root/authority/lead/agency.db" <<SQL
+.parameter init
+.parameter set @event '$event_json'
+INSERT INTO events(origin_sequence,canonical_json) VALUES(2,@event);
+SQL
+  assert_evolution
+  test "$(cat "$runtime_root/evolution-effects.total")" = 1 || {
+    printf 'runtime oracle: exact later Reference use was not counted\n' >&2
+    exit 1
+  }
+
+  jq '.active_heads[0].event_digest =
+    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' \
+    "$runtime_root/evolution-boundary/lead.json" \
+    >"$runtime_root/evolution-boundary/lead-tampered.json"
+  mv "$runtime_root/evolution-boundary/lead-tampered.json" \
+    "$runtime_root/evolution-boundary/lead.json"
+  if (assert_evolution >/dev/null 2>&1); then
+    printf 'runtime oracle: non-exact later Reference use passed\n' >&2
+    exit 1
+  fi
+  runtime_root=
+  authority_captured=0
+}
+
+assert_generic_evolution_oracle
 
 stream_mode=valid
 pi_process() {
@@ -164,6 +222,7 @@ write_submit_stream() {
 
 write_sanitizer_stream stop "$scratch/stop.jsonl"
 sanitize_turn lead oracle "$scratch/stop.jsonl" "$scratch/stop.json"
+test "$(jq '.delegate_calls' "$scratch/stop.json")" = 0
 partial=$(summarize_partial_turn "$scratch/stop.jsonl")
 jq -e '
   .record_types.message_start == 1 and
@@ -189,6 +248,35 @@ for terminal_reason in error aborted; do
     exit 1
   fi
 done
+
+write_delegate_stream() {
+  local count=$1 destination=$2 index
+  jq -nc '{type:"message_start",message:{role:"custom",customType:"mnemond"}}' \
+    >"$destination"
+  index=1
+  while test "$index" -le "$count"; do
+    jq -nc --arg id "delegate-$index" \
+      '{type:"tool_execution_start",toolCallId:$id,toolName:"delegate",
+        args:{task:"bounded independent analysis"}}' >>"$destination"
+    jq -nc --arg id "delegate-$index" \
+      '{type:"tool_execution_end",toolCallId:$id,toolName:"delegate",isError:false,
+        result:{content:[{type:"text",text:"bounded observation"}]}}' >>"$destination"
+    index=$((index + 1))
+  done
+  jq -nc '{type:"message_end",message:{role:"assistant",stopReason:"stop"}}' \
+    >>"$destination"
+  jq -nc '{type:"agent_end"}' >>"$destination"
+}
+
+write_delegate_stream 1 "$scratch/delegate.jsonl"
+sanitize_turn lead oracle-delegate "$scratch/delegate.jsonl" "$scratch/delegate.json"
+test "$(jq '.delegate_calls' "$scratch/delegate.json")" = 1
+write_delegate_stream 2 "$scratch/two-delegates.jsonl"
+if sanitize_turn lead oracle-two-delegates "$scratch/two-delegates.jsonl" \
+    "$scratch/two-delegates.json"; then
+  printf 'runtime oracle: two delegate calls in one turn were accepted\n' >&2
+  exit 1
+fi
 
 accepted_receipt='{"schema":"mnemon.agent.receipt","version":1,"outcome":"accepted","replayed":false}'
 closed_denial='{"code":"context_required","message":"a bounded View is required","operation_id":null,"replayed":false,"retryable":false,"schema_version":1,"status":"error"}'

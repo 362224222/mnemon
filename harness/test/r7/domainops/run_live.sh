@@ -159,7 +159,8 @@ build_and_start_world() {
     -t "$agent_image" "$harness_root" >/dev/null
   agent_image_id=$(docker image inspect --format '{{.Id}}' "$agent_image")
   agent_binary_digests=$(docker run --rm --entrypoint sha256sum "$agent_image" \
-    /usr/local/bin/mnemon-harness /usr/local/bin/mnemond /usr/local/bin/domainctl)
+    /usr/local/bin/mnemon-harness /usr/local/bin/mnemond /usr/local/bin/domainctl \
+    /opt/mnemon/pi-delegate/delegate.ts /opt/mnemon/pi-delegate/delegate-runtime.mjs)
   test -n "$agent_image_id" && test -n "$agent_binary_digests" ||
     fail 'candidate Agent image identity is unavailable'
   printf '%s\n' "$agent_binary_digests" >"$runtime_root/candidate-binaries.sha256"
@@ -176,8 +177,9 @@ run_load() {
 }
 
 seed_incident() {
-  run_load "$1" 4 "$runtime_root/baseline.json"
-  jq -e '
+  local episode=$1 prefix=$2 expected_route=$3
+  run_load "$prefix" 4 "$runtime_root/$episode-baseline.json"
+  jq -e --arg route "$expected_route" '
     .sent == 4 and .accepted == 4 and .failed == 0 and
     (.receipts | length) == 4 and
     ([.receipts[].business_id] | unique | length) == 4 and
@@ -185,9 +187,35 @@ seed_incident() {
     .observed.ledger.charges == 8 and
     .observed.ledger.active_charges == 8 and
     .observed.ledger.unique_businesses == 4 and
-    .observed.ledger.duplicate_businesses == 4
-  ' "$runtime_root/baseline.json" >/dev/null ||
+    .observed.ledger.duplicate_businesses == 4 and
+    .observed.gateway.route == $route
+  ' "$runtime_root/$episode-baseline.json" >/dev/null ||
     fail 'the hidden production incident was not established'
+}
+
+inject_second_variant() {
+  # This runner-only mutation reverses the affected region while preserving the
+  # same externally visible fault family. It is never mounted or prompted into
+  # an Agent workspace. Resetting the first region here prevents the second
+  # episode from inheriting whichever valid remediation episode 1 happened to
+  # choose; the oracle still does not prescribe how episode 2 is recovered.
+  compose --profile tools run --rm --no-deps platform-tool \
+    --endpoint http://callback-east:8080 action /admin/latency \
+    '{"latency_ms":5}' >"$runtime_root/episode-2-reset-platform.json"
+  compose --profile tools run --rm --no-deps payment-tool \
+    --endpoint http://payment-east:8080 action /admin/config \
+    '{"timeout_ms":500,"stable_keys":true,"retries":2}' \
+    >"$runtime_root/episode-2-reset-payment.json"
+  compose --profile tools run --rm --no-deps platform-tool \
+    --endpoint http://callback-west:8080 action /admin/latency \
+    '{"latency_ms":300}' >"$runtime_root/episode-2-injected-platform.json"
+  compose --profile tools run --rm --no-deps payment-tool \
+    --endpoint http://payment-west:8080 action /admin/config \
+    '{"timeout_ms":100,"stable_keys":false,"retries":2}' \
+    >"$runtime_root/episode-2-injected-payment.json"
+  compose --profile tools run --rm --no-deps edge-tool \
+    action /admin/route '{"route":"west"}' \
+    >"$runtime_root/episode-2-injected-edge.json"
 }
 
 prepare_workspace() {
@@ -223,7 +251,9 @@ start_agent_container() {
   test "$(docker inspect --format '{{.Image}}' "$container")" = "$agent_image_id" ||
     fail "$role does not run the candidate Agent image"
   test "$(docker exec "$container" sha256sum /usr/local/bin/mnemon-harness \
-    /usr/local/bin/mnemond /usr/local/bin/domainctl)" = "$agent_binary_digests" ||
+    /usr/local/bin/mnemond /usr/local/bin/domainctl \
+    /opt/mnemon/pi-delegate/delegate.ts \
+    /opt/mnemon/pi-delegate/delegate-runtime.mjs)" = "$agent_binary_digests" ||
     fail "$role does not run the candidate Agent binaries"
 }
 
@@ -366,7 +396,8 @@ pi_process() {
       # this non-interactive wrapper lets it become the session leader in
       # place, while the wrapper explicitly owns and joins its lifetime.
       setsid pi --mode json --print --no-session --approve --no-prompt-templates --no-themes \
-        --provider deepseek --model "$model" --thinking off --tools bash \
+        --extension /opt/mnemon/pi-delegate/delegate.ts \
+        --provider deepseek --model "$model" --thinking off --tools bash,delegate \
         @/workspace/.mnemon/live/turn-prompt.md &
       child=$!
       printf "%s\n" "$child" >"$pid_file"
@@ -469,6 +500,8 @@ sanitize_turn() {
     ([$stream[] | select(.type == "tool_execution_start" and .toolName == "bash" and
       invokes("submit"))]) as $submit_starts |
     ([$submit_starts[].toolCallId] | unique) as $submit_calls |
+    ([$stream[] | select(.type == "tool_execution_start" and
+      .toolName == "delegate") | .toolCallId] | unique) as $delegate_calls |
     (reduce $stream[] as $record (
       {accepted_seen:false, denials:0};
       if ($record.type == "tool_execution_end" and $record.toolName == "bash" and
@@ -490,6 +523,7 @@ sanitize_turn() {
         .message.role == "custom" and .message.customType == "mnemond")] | length),
       bash_calls: ([$stream[] | select(
         .type == "tool_execution_start" and .toolName == "bash")] | length),
+      delegate_calls: ($delegate_calls | length),
       current_reads: ([$stream[] | select(
         .type == "tool_execution_end" and .toolName == "bash" and .isError == false and
         belongs($current_calls) and
@@ -521,9 +555,12 @@ sanitize_turn() {
         (($assistant_ends[-1].message.stopReason // "") != "aborted") and
         .private_binding_probes == 0 and
         .agent_end == true and
-        ([.hook_cues, .bash_calls, .current_reads, .submit_attempts, .intent_submits,
+        ([.hook_cues, .bash_calls, .delegate_calls, .current_reads, .submit_attempts, .intent_submits,
           .accepted_receipts, .rejected_receipts, .submit_denials,
           .post_accept_denials, .private_binding_probes] | all(. >= 0 and . <= 256)) and
+        .delegate_calls <= 1 and
+        ([$stream[] | select(.type == "tool_execution_end" and .toolName == "delegate" and
+          belongs($delegate_calls))] | length) == .delegate_calls and
         .accepted_receipts <= 1 and
         .post_accept_denials <= .submit_denials and
         (.post_accept_denials == 0 or .accepted_receipts == 1) and
@@ -574,6 +611,8 @@ summarize_partial_turn() {
       tool_errors:([.[] | select(.type == "tool_execution_end" and .isError == true)] | length),
       domain_calls:([.[] | select(.type == "tool_execution_start" and
         .toolName == "bash" and (command | contains("domainctl")))] | length),
+      delegate_calls:([.[] | select(.type == "tool_execution_start" and
+        .toolName == "delegate")] | length),
       current_attempts:([.[] | select(.type == "tool_execution_start" and
         .toolName == "bash" and (command | test("mnemon-harness[[:space:]]+agent[[:space:]]+current")))] | length),
       submit_attempts:([.[] | select(.type == "tool_execution_start" and
@@ -688,10 +727,10 @@ run_turn() {
 }
 
 run_attention_round() {
-  local round=$1 role pid failed=0
+  local episode=$1 round=$2 role pid failed=0
   local round_pids=()
   for role in $roles; do
-    run_turn "$role" "$neutral_attention" "round-$round-$role" &
+    run_turn "$role" "$neutral_attention" "$episode-round-$round-$role" &
     pid=$!
     round_pids+=("$pid")
     turn_pids+=("$pid")
@@ -699,18 +738,18 @@ run_attention_round() {
   for pid in "${round_pids[@]}"; do
     if ! wait "$pid"; then failed=1; fi
   done
-  test "$failed" = 0 || fail "attention round $round did not finish cleanly"
+  test "$failed" = 0 || fail "$episode attention round $round did not finish cleanly"
   turn_pids=()
-  wait_for_peer_delivery_quiescence "round-$round"
+  wait_for_peer_delivery_quiescence "$episode-round-$round"
 }
 
 run_agents() {
-  local round
-  run_turn lead "$initial_mission" initial-lead
-  wait_for_peer_delivery_quiescence initial-lead
+  local episode=$1 round
+  run_turn lead "$initial_mission" "$episode-initial-lead"
+  wait_for_peer_delivery_quiescence "$episode-initial-lead"
   round=1
   while test "$round" -le "$rounds"; do
-    run_attention_round "$round"
+    run_attention_round "$episode" "$round"
     round=$((round + 1))
   done
 }
@@ -818,6 +857,7 @@ assert_receipts() {
     --argjson voids "$expected_voids" '
       . as $charges |
       .role == "data" and
+      (.result | length) == (($report[0].receipts | length) * $expected) and
       all($report[0].receipts[];
         . as $receipt |
         ([$charges.result[] | select(.business_id == $receipt.business_id)] | length) == $expected and
@@ -827,6 +867,48 @@ assert_receipts() {
         ([$charges.result[] | select(
           .business_id == $receipt.business_id and .state == "voided")] | length) == $voids)
     ' "$charges" >/dev/null || fail "$label receipt integrity oracle failed"
+}
+
+revalidate_episode_state() {
+  local episode=$1 incident_prefix=$2 evaluation_prefix=$3 stability_prefix=$4
+  local suffix=post-attention
+  compose --profile tools run --rm --no-deps data-tool status "$incident_prefix" \
+    >"$runtime_root/$episode-incident-after-$suffix.json"
+  compose --profile tools run --rm --no-deps data-tool \
+    read "/charges?prefix=$incident_prefix" \
+    >"$runtime_root/$episode-incident-charges-$suffix.json"
+  compose --profile tools run --rm --no-deps data-tool \
+    read "/charges?prefix=$evaluation_prefix" \
+    >"$runtime_root/$episode-recovery-charges-$suffix.json"
+  compose --profile tools run --rm --no-deps data-tool \
+    read "/charges?prefix=$stability_prefix" \
+    >"$runtime_root/$episode-stability-charges-$suffix.json"
+
+  jq -e '
+    .role == "data" and
+    .result.charges == 8 and .result.active_charges == 4 and
+    .result.voided_charges == 4 and .result.unique_businesses == 4 and
+    .result.duplicate_businesses == 0
+  ' "$runtime_root/$episode-incident-after-$suffix.json" >/dev/null ||
+    fail "$episode changed after its external outcome was accepted"
+  assert_receipts "$runtime_root/$episode-baseline.json" \
+    "$runtime_root/$episode-incident-charges-$suffix.json" 2 1 \
+    "$episode post-attention historical"
+  assert_receipts "$runtime_root/$episode-recovery.json" \
+    "$runtime_root/$episode-recovery-charges-$suffix.json" 1 0 \
+    "$episode post-attention recovery"
+  assert_receipts "$runtime_root/$episode-stability.json" \
+    "$runtime_root/$episode-stability-charges-$suffix.json" 1 0 \
+    "$episode post-attention stability"
+
+  mv "$runtime_root/$episode-incident-after-$suffix.json" \
+    "$runtime_root/$episode-incident-after.json"
+  mv "$runtime_root/$episode-incident-charges-$suffix.json" \
+    "$runtime_root/$episode-incident-charges.json"
+  mv "$runtime_root/$episode-recovery-charges-$suffix.json" \
+    "$runtime_root/$episode-recovery-charges.json"
+  mv "$runtime_root/$episode-stability-charges-$suffix.json" \
+    "$runtime_root/$episode-stability-charges.json"
 }
 
 assert_fresh_batch() {
@@ -843,20 +925,20 @@ assert_fresh_batch() {
 }
 
 assert_recovery() {
-  local incident_prefix=$1 evaluation_prefix=$2 stability_prefix=$3
-  run_load "$evaluation_prefix" 6 "$runtime_root/recovery.json"
-  run_load "$stability_prefix" 6 "$runtime_root/stability.json"
+  local episode=$1 incident_prefix=$2 evaluation_prefix=$3 stability_prefix=$4
+  run_load "$evaluation_prefix" 6 "$runtime_root/$episode-recovery.json"
+  run_load "$stability_prefix" 6 "$runtime_root/$episode-stability.json"
   compose --profile tools run --rm --no-deps data-tool status "$incident_prefix" \
-    >"$runtime_root/incident-after.json"
+    >"$runtime_root/$episode-incident-after.json"
   compose --profile tools run --rm --no-deps data-tool \
-    read "/charges?prefix=$incident_prefix" >"$runtime_root/incident-charges.json"
+    read "/charges?prefix=$incident_prefix" >"$runtime_root/$episode-incident-charges.json"
   compose --profile tools run --rm --no-deps data-tool \
-    read "/charges?prefix=$evaluation_prefix" >"$runtime_root/recovery-charges.json"
+    read "/charges?prefix=$evaluation_prefix" >"$runtime_root/$episode-recovery-charges.json"
   compose --profile tools run --rm --no-deps data-tool \
-    read "/charges?prefix=$stability_prefix" >"$runtime_root/stability-charges.json"
+    read "/charges?prefix=$stability_prefix" >"$runtime_root/$episode-stability-charges.json"
 
-  assert_fresh_batch "$runtime_root/recovery.json" 6 recovery
-  assert_fresh_batch "$runtime_root/stability.json" 6 stability
+  assert_fresh_batch "$runtime_root/$episode-recovery.json" 6 "$episode recovery"
+  assert_fresh_batch "$runtime_root/$episode-stability.json" 6 "$episode stability"
   if ! jq -e '
     .role == "data" and
     .result.charges == 8 and
@@ -864,17 +946,204 @@ assert_recovery() {
     .result.voided_charges == 4 and
     .result.unique_businesses == 4 and
     .result.duplicate_businesses == 0
-  ' "$runtime_root/incident-after.json" >/dev/null; then
+  ' "$runtime_root/$episode-incident-after.json" >/dev/null; then
     local observed
-    observed=$(jq -c '.result // {}' "$runtime_root/incident-after.json")
-    fail "the independent existing-data reconciliation oracle failed; observed=$observed"
+    observed=$(jq -c '.result // {}' "$runtime_root/$episode-incident-after.json")
+    fail "$episode independent existing-data reconciliation oracle failed; observed=$observed"
   fi
-  assert_receipts "$runtime_root/baseline.json" "$runtime_root/incident-charges.json" 2 1 \
-    historical
-  assert_receipts "$runtime_root/recovery.json" "$runtime_root/recovery-charges.json" 1 0 \
-    recovery
-  assert_receipts "$runtime_root/stability.json" "$runtime_root/stability-charges.json" 1 0 \
-    stability
+  assert_receipts "$runtime_root/$episode-baseline.json" \
+    "$runtime_root/$episode-incident-charges.json" 2 1 "$episode historical"
+  assert_receipts "$runtime_root/$episode-recovery.json" \
+    "$runtime_root/$episode-recovery-charges.json" 1 0 "$episode recovery"
+  assert_receipts "$runtime_root/$episode-stability.json" \
+    "$runtime_root/$episode-stability-charges.json" 1 0 "$episode stability"
+}
+
+capture_consolidation_start() {
+  local staging="$runtime_root/evolution-consolidation-state"
+  local role container database sequence failed=0
+  rm -rf -- "$staging" "$runtime_root/evolution-consolidation-start"
+  mkdir -p "$staging" "$runtime_root/evolution-consolidation-start"
+
+  pause_agent_containers || fail 'could not pause nodes before result consolidation'
+  for role in $roles; do
+    container=$(container_for "$role")
+    mkdir -p "$staging/$role"
+    if ! docker cp "$container:/workspace/.mnemon/harness/node/." \
+        "$staging/$role" >/dev/null; then
+      failed=1
+      break
+    fi
+  done
+  unpause_agent_containers || failed=1
+  test "$failed" = 0 || fail 'could not capture the pre-consolidation authority boundary'
+
+  for role in $roles; do
+    database="$staging/$role/agency.db"
+    sequence=$(sqlite3 -readonly -batch -cmd '.timeout 5000' \
+      -cmd 'PRAGMA query_only=ON;' "$database" \
+      'SELECT COALESCE(MAX(origin_sequence), 0) FROM events;')
+    case "$sequence" in ''|*[!0-9]*) fail "$role consolidation sequence is invalid" ;; esac
+    jq -n --arg role "$role" --argjson sequence "$sequence" \
+      '{role:$role,max_origin_sequence:$sequence}' \
+      >"$runtime_root/evolution-consolidation-start/$role.json"
+  done
+  rm -rf -- "$staging"
+}
+
+capture_evolution_boundary() {
+  local staging="$runtime_root/evolution-boundary-state"
+  local role container database start_sequence sequence heads total=0 failed=0
+  rm -rf -- "$staging" "$runtime_root/evolution-boundary"
+  mkdir -p "$staging" "$runtime_root/evolution-boundary"
+
+  pause_agent_containers || fail 'could not pause nodes at the episode boundary'
+  for role in $roles; do
+    container=$(container_for "$role")
+    mkdir -p "$staging/$role"
+    if ! docker cp "$container:/workspace/.mnemon/harness/node/." \
+        "$staging/$role" >/dev/null; then
+      failed=1
+      break
+    fi
+  done
+  unpause_agent_containers || failed=1
+  test "$failed" = 0 || fail 'could not capture the episode authority boundary'
+
+  for role in $roles; do
+    database="$staging/$role/agency.db"
+    start_sequence=$(jq -er '.max_origin_sequence' \
+      "$runtime_root/evolution-consolidation-start/$role.json")
+    sequence=$(sqlite3 -readonly -batch -cmd '.timeout 5000' \
+      -cmd 'PRAGMA query_only=ON;' "$database" \
+      'SELECT COALESCE(MAX(origin_sequence), 0) FROM events;')
+    case "$sequence" in ''|*[!0-9]*) fail "$role episode boundary sequence is invalid" ;; esac
+    test "$sequence" -ge "$start_sequence" ||
+      fail "$role authority sequence regressed across result consolidation"
+    heads=$(sqlite3 -readonly -batch -json -cmd '.timeout 5000' \
+      -cmd 'PRAGMA query_only=ON;' "$database" "
+      SELECT r.head_event_id AS event_id,
+             e.event_digest AS event_digest
+      FROM active_references AS r
+      JOIN events AS e ON e.event_id = r.head_event_id
+      WHERE r.state = 'active'
+        AND e.origin_sequence > $start_sequence
+      ORDER BY r.head_event_id;")
+    test -n "$heads" || heads='[]'
+    jq -e 'type == "array" and all(.[];
+      (.event_id | type == "string" and length > 0) and
+      (.event_digest | type == "string" and length > 0))' <<<"$heads" >/dev/null ||
+      fail "$role episode boundary Reference snapshot is invalid"
+    total=$((total + $(jq 'length' <<<"$heads")))
+    jq -n --arg role "$role" --argjson start "$start_sequence" \
+      --argjson sequence "$sequence" --argjson heads "$heads" \
+      '{role:$role,consolidation_after_sequence:$start,
+        max_origin_sequence:$sequence,active_heads:$heads}' \
+      >"$runtime_root/evolution-boundary/$role.json"
+  done
+  rm -rf -- "$runtime_root/runtime-restart-state"
+  mv "$staging" "$runtime_root/runtime-restart-state"
+  if test "$total" -lt 1; then
+    fail 'post-outcome attention produced no active Reference for a future independent Runtime'
+    return 1
+  fi
+  jq -s '{nodes:.,active_head_count:([.[].active_heads | length] | add)}' \
+    "$runtime_root/evolution-boundary"/*.json >"$runtime_root/evolution-boundary.json"
+}
+
+restart_agent_runtimes() {
+  local role container snapshot state_dir=/workspace/.mnemon/harness/node
+  for role in $roles; do
+    container=$(container_for "$role")
+    docker stop --time 5 "$container" >/dev/null
+    docker rm "$container" >/dev/null
+  done
+  agent_containers=
+
+  for role in $roles; do
+    snapshot="$runtime_root/runtime-restart-state/$role"
+    test -s "$snapshot/agency.db" || fail "$role restart snapshot lacks authority"
+    rm -f -- "$snapshot/control.sock"
+    start_agent_container "$role"
+    container=$(container_for "$role")
+    docker exec -u 0 "$container" sh -c \
+      'mkdir -p /workspace/.mnemon/harness/node && chown -R 10001:10001 /workspace/.mnemon'
+    docker cp "$snapshot/." "$container:$state_dir" >/dev/null
+    docker exec -u 0 "$container" chown -R 10001:10001 /workspace/.mnemon
+    assert_agent_boundary "$role"
+    docker exec -w /workspace "$container" mnemon-harness setup \
+      --runtime pi --project-root /workspace >"$runtime_root/restart-setup-$role.json"
+    jq -e '.schema == "mnemon.setup" and .version == 1 and .status == "ready"' \
+      "$runtime_root/restart-setup-$role.json" >/dev/null ||
+      fail "$role fresh Runtime setup was not ready"
+    docker exec "$container" sh -c \
+      'umask 077; mkdir -p /runtime/pi-state /workspace/.mnemon/live && chmod 700 /runtime/pi-state /workspace/.mnemon/live'
+    docker exec -u 0 "$container" chmod 0711 /runtime
+    docker exec -d "$container" sh -c \
+      "exec mnemond serve --state-dir $state_dir >/workspace/.mnemon/live/mnemond.log 2>&1"
+  done
+
+  for role in $roles; do
+    container=$(container_for "$role")
+    local ready=0 attempt=0
+    while test "$attempt" -lt 50; do
+      if docker exec "$container" test -S "$state_dir/control.sock"; then
+        ready=1
+        break
+      fi
+      sleep 0.1
+      attempt=$((attempt + 1))
+    done
+    test "$ready" = 1 || fail "$role fresh Runtime mnemond did not become ready"
+  done
+  rm -rf -- "$runtime_root/runtime-restart-state"
+}
+
+assert_evolution() {
+  local role database boundary sequence events summary total=0
+  test "$authority_captured" = 1 || fail 'evolution oracle requires captured authority state'
+  : >"$runtime_root/evolution-effects.jsonl"
+  for role in $roles; do
+    database="$runtime_root/authority/$role/agency.db"
+    boundary="$runtime_root/evolution-boundary/$role.json"
+    sequence=$(jq -er '.max_origin_sequence' "$boundary")
+    events=$(sqlite3 -readonly -batch -json -cmd '.timeout 5000' \
+      -cmd 'PRAGMA query_only=ON;' "$database" "
+      SELECT origin_sequence,
+             CAST(canonical_json AS TEXT) AS canonical_json
+      FROM events
+      WHERE origin_sequence > $sequence
+      ORDER BY origin_sequence;")
+    test -n "$events" || events='[]'
+    summary=$(jq -n --arg role "$role" --slurpfile boundary "$boundary" \
+      --argjson events "$events" '
+      def exact($left; $right):
+        $left != null and $left.id == $right.event_id and
+        $left.digest == $right.event_digest;
+      ($events | map(.canonical_json | fromjson)) as $accepted |
+      ($boundary[0].active_heads) as $heads |
+      [ $accepted[] as $event |
+        $heads[] as $head |
+        select(
+          any($event.evidence.causation[]?; exact(.; $head)) or
+          exact($event.machine.expected_reference.head?; $head)
+        ) |
+        {event_id:$event.machine.event_id,
+         reference_event_id:$head.event_id,reference_digest:$head.event_digest}
+      ] | unique_by(.event_id + "\u0000" + .reference_event_id) as $matches |
+      {role:$role,boundary_sequence:$boundary[0].max_origin_sequence,
+       active_head_count:($heads|length),accepted_reference_uses:($matches|length),
+       matches:$matches}')
+    jq -e '.accepted_reference_uses >= 0 and (.matches | type == "array")' \
+      <<<"$summary" >/dev/null || fail "$role evolution evidence is invalid"
+    total=$((total + $(jq '.accepted_reference_uses' <<<"$summary")))
+    printf '%s\n' "$summary" >>"$runtime_root/evolution-effects.jsonl"
+  done
+  if test "$total" -lt 1; then
+    fail 'episode 2 did not explicitly use or replace an episode-1 Reference head'
+    return 1
+  fi
+  printf '%s\n' "$total" >"$runtime_root/evolution-effects.total"
 }
 
 stop_and_capture_authority() {
@@ -915,10 +1184,30 @@ assert_peer_effect() {
   printf '%s\n' "$total" >"$runtime_root/peer-effects.total"
 }
 
+episode_report_json() {
+  local episode=$1
+  jq -n \
+    --arg id "$episode" \
+    --argjson baseline "$(cat "$runtime_root/$episode-baseline.json")" \
+    --argjson recovery "$(cat "$runtime_root/$episode-recovery.json")" \
+    --argjson stability "$(cat "$runtime_root/$episode-stability.json")" \
+    --argjson incident_after "$(cat "$runtime_root/$episode-incident-after.json")" \
+    --argjson incident_charges "$(cat "$runtime_root/$episode-incident-charges.json")" \
+    --argjson recovery_charges "$(cat "$runtime_root/$episode-recovery-charges.json")" \
+    --argjson stability_charges "$(cat "$runtime_root/$episode-stability-charges.json")" '
+      {id:$id,baseline:$baseline,recovery:$recovery,stability:$stability,
+       incident_after:$incident_after,incident_charges:$incident_charges,
+       recovery_charges:$recovery_charges,stability_charges:$stability_charges}
+    '
+}
+
 write_report() {
-  local temporary total
+  local temporary total episodes evolution_total
   temporary="$runtime_root/report.json"
   total=$(cat "$runtime_root/peer-effects.total")
+  evolution_total=$(cat "$runtime_root/evolution-effects.total")
+  episodes=$(jq -n --argjson first "$(episode_report_json episode-1)" \
+    --argjson second "$(episode_report_json episode-2)" '[$first,$second]')
   run_finished_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   jq -n \
     --arg schema 'mnemon.r7.domain-ops.live-report' \
@@ -928,31 +1217,28 @@ write_report() {
     --arg finished_at "$run_finished_at" \
     --arg candidate_digest "$agent_image_id" \
     --argjson rounds "$rounds" \
-    --argjson baseline "$(cat "$runtime_root/baseline.json")" \
-    --argjson recovery "$(cat "$runtime_root/recovery.json")" \
-    --argjson stability "$(cat "$runtime_root/stability.json")" \
-    --argjson incident_after "$(cat "$runtime_root/incident-after.json")" \
-    --argjson incident_charges "$(cat "$runtime_root/incident-charges.json")" \
-    --argjson recovery_charges "$(cat "$runtime_root/recovery-charges.json")" \
-    --argjson stability_charges "$(cat "$runtime_root/stability-charges.json")" \
+    --argjson episodes "$episodes" \
     --argjson turns "$(jq -s 'sort_by(.turn)' "$runtime_root/sanitized"/*.json)" \
     --argjson delivery_quiescence "$(jq -s '.' "$runtime_root/peer-quiescence.jsonl")" \
     --argjson peer_effects "$(jq -s '.' "$runtime_root/peer-effects.jsonl")" \
+    --argjson evolution_boundary "$(cat "$runtime_root/evolution-boundary.json")" \
+    --argjson evolution_effects "$(jq -s '.' "$runtime_root/evolution-effects.jsonl")" \
+    --argjson evolution_total "$evolution_total" \
     --argjson peer_effect_total "$total" '
       {
         schema:$schema,
-        version:1,
+        version:2,
         status:"passed",
         model:$model,
         rounds:$rounds,
         run:{id:$run_id,started_at:$started_at,finished_at:$finished_at,
           candidate_digest:$candidate_digest},
-        isolation:{passed:true},
-        world:{baseline:$baseline,recovery:$recovery,stability:$stability,
-          incident_after:$incident_after,incident_charges:$incident_charges,
-          recovery_charges:$recovery_charges,stability_charges:$stability_charges},
+        isolation:{passed:true,fresh_runtime_between_episodes:true},
+        world:{episodes:$episodes},
         protocol:{accepted_peer_effects:$peer_effect_total,by_receiver:$peer_effects,
-          delivery_quiescence:$delivery_quiescence},
+          delivery_quiescence:$delivery_quiescence,
+          evolution:{boundary:$evolution_boundary,effects:$evolution_effects,
+            accepted_reference_uses:$evolution_total}},
         turns:$turns,
         raw_provider_streams_retained:false
       }
@@ -1056,23 +1342,48 @@ main() {
   mkdir -p "$runtime_root/cards" "$runtime_root/workspaces" "$runtime_root/raw" \
     "$runtime_root/sanitized" "$runtime_root/authority"
 
-  local incident_prefix="incident-$$"
-  local evaluation_prefix="evaluation-$$"
-  local stability_prefix="stability-$$"
+  local first_incident_prefix="incident-a-$$"
+  local first_evaluation_prefix="evaluation-a-$$"
+  local first_stability_prefix="stability-a-$$"
+  local second_incident_prefix="incident-b-$$"
+  local second_evaluation_prefix="evaluation-b-$$"
+  local second_stability_prefix="stability-b-$$"
   failure_stage=runner.world-start
   build_and_start_world
-  failure_stage=scenario.incident-seed
-  seed_incident "$incident_prefix"
+  failure_stage=scenario.episode-1-incident-seed
+  seed_incident episode-1 "$first_incident_prefix" east
   failure_stage=runner.authority-start
   prepare_agents
-  failure_stage=scenario.agent-turns
-  run_agents
-  failure_stage=scenario.recovery
-  assert_recovery "$incident_prefix" "$evaluation_prefix" "$stability_prefix"
+  failure_stage=scenario.episode-1-agent-turns
+  run_agents episode-1
+  failure_stage=scenario.episode-1-recovery
+  assert_recovery episode-1 "$first_incident_prefix" "$first_evaluation_prefix" \
+    "$first_stability_prefix"
+  failure_stage=scenario.episode-1-consolidation-start
+  capture_consolidation_start
+  failure_stage=scenario.episode-1-post-outcome-attention
+  run_attention_round episode-1 post-outcome
+  failure_stage=scenario.evolution-boundary
+  capture_evolution_boundary
+  failure_stage=scenario.episode-1-post-outcome-revalidation
+  revalidate_episode_state episode-1 "$first_incident_prefix" \
+    "$first_evaluation_prefix" "$first_stability_prefix"
+  failure_stage=runner.runtime-restart
+  restart_agent_runtimes
+  failure_stage=scenario.episode-2-injection
+  inject_second_variant
+  seed_incident episode-2 "$second_incident_prefix" west
+  failure_stage=scenario.episode-2-agent-turns
+  run_agents episode-2
+  failure_stage=scenario.episode-2-recovery
+  assert_recovery episode-2 "$second_incident_prefix" "$second_evaluation_prefix" \
+    "$second_stability_prefix"
   failure_stage=runner.authority-capture
   stop_and_capture_authority
   failure_stage=r7.peer-effect
   assert_peer_effect
+  failure_stage=scenario.evolution
+  assert_evolution
   failure_stage=runner.pass-report
   write_report
   failure_stage=runner.pass-trace
@@ -1081,7 +1392,7 @@ main() {
   publish_evidence
   failure_stage=runner.complete
 
-  printf 'r7 domain ops live: PASS (real services, autonomous domain Agents, external recovery oracle, authenticated peer effect)\n'
+  printf 'r7 domain ops live: PASS (two real incidents, fresh Pi turns, retained authority, external recovery and evolution oracles)\n'
   printf 'sanitized report: %s\n' "$report_path"
   printf 'observer trace: %s\n' "$trace_path"
 }

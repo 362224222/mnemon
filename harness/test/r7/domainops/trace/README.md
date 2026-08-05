@@ -12,8 +12,8 @@ The trace header's `scenario.digest` is content addressed. It binds:
   mission, five domain projections, Compose world, tools, tests, and fixtures;
 - the paid runner, Agent Dockerfile, and load/world entry points that determine
   the attention schedule, Runtime image, and external oracle;
-- the exact `domainctl`, `mnemon-harness`, and `mnemond` candidate binary
-  digests observed in the Agent image.
+- the exact `domainctl`, `mnemon-harness`, `mnemond`, and bounded Pi delegate
+  asset digests observed in the Agent image.
 
 Rounds, timestamps, model output, and successful outcomes are deliberately not
 part of this identity. Changing the physical case or candidate binaries changes
@@ -31,7 +31,7 @@ go run ./test/r7/domainops/trace \
   --output /absolute/result.trace
 ```
 
-The candidate manifest must contain exactly the three required absolute binary
+The candidate manifest must contain exactly the required absolute runtime
 paths. The adapter independently hashes every fixture input and rejects missing,
 unbound, duplicate, symlinked, oversized, or malformed inputs.
 
@@ -49,6 +49,17 @@ For every accepted Event, the trace may expose only bounded protocol metadata:
 
 These fields come from canonical stopped authority state. Runtime counters never
 invent a causal edge to an Event.
+
+The passed runner report is `mnemon.r7.domain-ops.live-report` version 2. It
+contains two ordered service-world episodes and a bounded authority boundary
+between them. A runner-attested sequence captured after the external recovery
+oracle starts the consolidation interval; the adapter independently verifies
+that every reported boundary head was accepted after that sequence, exists in
+the stopped Reference lineage, and is no newer than the end boundary. Every
+reported later use must be an exact causation or supersede/retract edge from a
+post-boundary accepted Event. It does not inspect Artifact bytes, semantic kinds, or remediation
+choices. Version 1 passed reports are intentionally not accepted as two-episode
+evidence; failed reports retain their independent version-1 shape below.
 
 ## Failed-run input
 

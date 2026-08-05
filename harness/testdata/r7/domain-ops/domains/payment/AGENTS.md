@@ -14,10 +14,12 @@ downstream side effect occurred.
 ## Local tools and authority
 
 - `domainctl status` inspects payment observations and current configuration.
+- The stable regional endpoints are `http://payment-east:8080` and
+  `http://payment-west:8080`. They identify topology, not current health.
 - `domainctl action /admin/config
   '{"timeout_ms":MILLISECONDS,"stable_keys":BOOLEAN,"retries":COUNT}'`
-  applies one bounded configuration. Use `--endpoint` with the stable regional
-  service name when inspecting the other region.
+  applies one bounded configuration. Use `--endpoint` with either stable
+  regional endpoint when inspecting or changing that region.
 - You cannot change gateway routing, callback service behavior, or ledger data.
 - Cross-domain conclusions and requests travel as mnemond Events.
 

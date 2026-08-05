@@ -54,8 +54,12 @@ func writeTrace(destination io.Writer, proof evidence) error {
 	if err != nil {
 		return err
 	}
+	evolutionFacts, err := evolutionEffectFacts(proof.Report.Protocol.Evolution, eventFacts)
+	if err != nil {
+		return err
+	}
 	gateFacts, err := appendGateFacts(writer, finishedAt, receiptFacts, deliveryFacts,
-		len(artifactFacts))
+		evolutionFacts, len(artifactFacts))
 	if err != nil {
 		return err
 	}
@@ -72,11 +76,38 @@ func writeTrace(destination io.Writer, proof evidence) error {
 			Evidence: []string{gateFacts["r7.delivery-quiescence"]}},
 		{ID: "scenario.isolation", Status: observer.GatePass,
 			Evidence: []string{gateFacts["scenario.isolation"]}},
+		{ID: "scenario.evolution", Status: observer.GatePass,
+			Evidence: []string{gateFacts["scenario.evolution"]}},
 		{ID: "r8.applicability", Status: observer.GateNotApplicable,
 			Evidence: []string{gateFacts["r8.applicability"]}},
 	}
 	return writer.Finish(observer.Result{Status: observer.ResultPassed,
 		FinishedAt: finishedAt, Gates: gates})
+}
+
+func evolutionEffectFacts(summary evolutionSummary, eventFacts map[string]string) ([]string, error) {
+	seen := make(map[string]struct{})
+	result := make([]string, 0, summary.AcceptedReferenceUses)
+	for _, node := range summary.Effects {
+		for _, match := range node.Matches {
+			effectFact, effectExists := eventFacts[match.EventID]
+			referenceFact, referenceExists := eventFacts[match.ReferenceEventID]
+			if !effectExists || !referenceExists {
+				return nil, errors.New("evolution effect has no accepted Event Fact")
+			}
+			for _, fact := range []string{referenceFact, effectFact} {
+				if _, duplicate := seen[fact]; duplicate {
+					continue
+				}
+				seen[fact] = struct{}{}
+				result = append(result, fact)
+			}
+		}
+	}
+	if len(result) == 0 {
+		return nil, errors.New("evolution effect evidence is empty")
+	}
+	return result, nil
 }
 
 func appendArtifactFacts(writer *observer.Writer, nodes []nodeEvidence) ([]string, error) {
@@ -129,6 +160,9 @@ func appendEventFacts(writer *observer.Writer, nodes []nodeEvidence) (
 		if event.Correlation != nil {
 			references.Correlation = event.Correlation.ID
 		}
+		if event.ReferenceHead != "" {
+			references.ReferenceHead = event.ReferenceHead
+		}
 		if _, err := writer.Append(observer.Fact{ID: factID, CapturedAt: event.AcceptedAt,
 			Source: observer.Source{Class: observer.SourceR7Authority, Node: event.Node},
 			Kind:   "r7.event.accepted", Truth: observer.TruthAcceptedLocalFact, Causes: causes,
@@ -144,7 +178,7 @@ func appendEventFacts(writer *observer.Writer, nodes []nodeEvidence) (
 }
 
 func appendGateFacts(writer *observer.Writer, capturedAt time.Time, receiptFacts,
-	deliveryFacts []string, artifactCount int,
+	deliveryFacts, evolutionFacts []string, artifactCount int,
 ) (map[string]string, error) {
 	if len(receiptFacts) == 0 || len(deliveryFacts) == 0 {
 		return nil, errors.New("gate evidence is incomplete")
@@ -170,6 +204,8 @@ func appendGateFacts(writer *observer.Writer, capturedAt time.Time, receiptFacts
 			causes: limit(deliveryFacts)},
 		{id: "r7.delivery-quiescence", status: "pass", code: "bounded-empty-delivery-barriers"},
 		{id: "scenario.isolation", status: "pass", code: "isolated-runtime"},
+		{id: "scenario.evolution", status: "pass", code: "cross-session-reference-use",
+			causes: limit(evolutionFacts)},
 		{id: "r8.applicability", status: "not_applicable", code: "independent-mas"},
 	}
 	if artifactCount < 0 {

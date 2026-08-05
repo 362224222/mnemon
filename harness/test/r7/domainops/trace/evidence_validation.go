@@ -19,7 +19,10 @@ func validateCombinedEvidence(proof evidence) error {
 	if err := validateGlobalDeliveries(proof.Nodes, global); err != nil {
 		return err
 	}
-	return validatePeerEffectSummary(proof)
+	if err := validatePeerEffectSummary(proof); err != nil {
+		return err
+	}
+	return validateEvolutionEvidence(proof)
 }
 
 func validateAuthoritySummary(nodes []nodeEvidence) error {
@@ -135,6 +138,134 @@ func validatePeerEffectSummary(proof evidence) error {
 		return errors.New("stopped authority peer effects differ from sanitized live report")
 	}
 	return nil
+}
+
+func validateEvolutionEvidence(proof evidence) error {
+	nodes := make(map[string]nodeEvidence, len(proof.Nodes))
+	for _, node := range proof.Nodes {
+		nodes[node.Role] = node
+	}
+	boundary, err := validateEvolutionBoundary(nodes,
+		proof.Report.Protocol.Evolution.Boundary.Nodes)
+	if err != nil {
+		return err
+	}
+	total, err := validateEvolutionEffects(nodes, boundary,
+		proof.Report.Protocol.Evolution.Effects)
+	if err != nil {
+		return err
+	}
+	if total != proof.Report.Protocol.Evolution.AcceptedReferenceUses || total < 1 {
+		return errors.New("stopped authority does not prove a later Reference use")
+	}
+	return nil
+}
+
+func validateEvolutionBoundary(nodes map[string]nodeEvidence,
+	values []evolutionBoundaryNode,
+) (map[string]evolutionBoundaryNode, error) {
+	boundary := make(map[string]evolutionBoundaryNode, len(domainRoles))
+	for _, value := range values {
+		node, exists := nodes[value.Role]
+		if !exists {
+			return nil, errors.New("evolution boundary names an absent authority node")
+		}
+		if err := validateEvolutionBoundaryNode(node, value); err != nil {
+			return nil, err
+		}
+		boundary[value.Role] = value
+	}
+	return boundary, nil
+}
+
+func validateEvolutionBoundaryNode(node nodeEvidence, value evolutionBoundaryNode) error {
+	events := make(map[string]eventEvidence, len(node.Events))
+	for _, event := range node.Events {
+		events[event.ID] = event
+	}
+	lineage := make(map[string]struct{}, len(node.References))
+	for _, reference := range node.References {
+		lineage[reference.EventID] = struct{}{}
+	}
+	for _, head := range value.ActiveHeads {
+		event, exists := events[head.EventID]
+		_, isReference := lineage[head.EventID]
+		if !exists || !isReference || event.Digest != head.EventDigest ||
+			event.OriginSequence <= value.ConsolidationAfterSequence ||
+			event.OriginSequence > value.MaxOriginSequence {
+			return errors.New("evolution boundary head differs from stopped Reference lineage")
+		}
+	}
+	return nil
+}
+
+func validateEvolutionEffects(nodes map[string]nodeEvidence,
+	boundary map[string]evolutionBoundaryNode, values []evolutionNodeSummary,
+) (int, error) {
+	total := 0
+	for _, reported := range values {
+		node, exists := nodes[reported.Role]
+		base, hasBoundary := boundary[reported.Role]
+		if !exists || !hasBoundary {
+			return 0, errors.New("evolution effect names an absent authority boundary")
+		}
+		expected := collectEvolutionMatches(node, base)
+		if err := validateEvolutionMatches(expected, reported.Matches); err != nil {
+			return 0, err
+		}
+		total += len(expected)
+	}
+	return total, nil
+}
+
+func collectEvolutionMatches(node nodeEvidence,
+	base evolutionBoundaryNode,
+) map[string]evolutionMatchReport {
+	expected := make(map[string]evolutionMatchReport)
+	for _, event := range node.Events {
+		if event.OriginSequence <= base.MaxOriginSequence {
+			continue
+		}
+		for _, head := range base.ActiveHeads {
+			if !eventUsesReferenceHead(event, head) {
+				continue
+			}
+			match := evolutionMatchReport{EventID: event.ID,
+				ReferenceEventID: head.EventID, ReferenceDigest: head.EventDigest}
+			expected[evolutionMatchKey(match)] = match
+		}
+	}
+	return expected
+}
+
+func validateEvolutionMatches(expected map[string]evolutionMatchReport,
+	reported []evolutionMatchReport,
+) error {
+	if len(expected) != len(reported) {
+		return errors.New("reported evolution effects differ from stopped authority")
+	}
+	seen := make(map[string]struct{}, len(reported))
+	for _, match := range reported {
+		key := evolutionMatchKey(match)
+		if _, duplicate := seen[key]; duplicate || expected[key] != match {
+			return errors.New("reported evolution match is not an exact accepted Event edge")
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func eventUsesReferenceHead(event eventEvidence, head evolutionReferenceHead) bool {
+	for _, causal := range event.Causation {
+		if causal.ID == head.EventID && causal.Digest == head.EventDigest {
+			return true
+		}
+	}
+	return event.ReferenceHead == head.EventID && event.ReferenceDigest == head.EventDigest
+}
+
+func evolutionMatchKey(match evolutionMatchReport) string {
+	return match.EventID + "\x00" + match.ReferenceEventID + "\x00" + match.ReferenceDigest
 }
 
 func mapsEqual(left, right map[string]int) bool {

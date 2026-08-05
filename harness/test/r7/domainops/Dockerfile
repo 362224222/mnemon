@@ -27,6 +27,8 @@ RUN apk add --no-cache bash ca-certificates jq && \
     npm install -g --ignore-scripts --no-audit --no-fund \
       "@earendil-works/pi-coding-agent@${PI_VERSION}" && \
     adduser -D -u 10001 agent && mkdir -p /workspace && chown agent:agent /workspace
+COPY --chown=10001:10001 test/r7/runtime/pi/delegate.ts \
+  test/r7/runtime/pi/delegate-runtime.mjs /opt/mnemon/pi-delegate/
 COPY --from=build --chown=10001:10001 /out/domainctl /usr/local/bin/domainctl
 COPY --from=build --chown=10001:10001 /out/mnemon-harness /usr/local/bin/mnemon-harness
 COPY --from=build --chown=10001:10001 /out/mnemond /usr/local/bin/mnemond
