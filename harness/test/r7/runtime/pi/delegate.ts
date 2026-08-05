@@ -24,6 +24,23 @@ export function createDelegateExtension(delegateRunner: DelegateRunner = runDele
 		pi.on("before_agent_start", async () => {
 			usedInAgentRun = false;
 		});
+		// Pi treats a returned tool value as successful. Reflect the delegate's
+		// closed status through the tool-result middleware, which is the host's
+		// supported error channel, rather than placing an ignored isError field
+		// in the execute() result.
+		pi.on("tool_result", async (event) => {
+			if (event.toolName !== "delegate") return;
+			const details = event.details as
+				| { schema?: unknown; version?: unknown; status?: unknown }
+				| undefined;
+			if (
+				details?.schema === "mnemon.pi.delegate" &&
+				details.version === 1 &&
+				details.status !== "completed"
+			) {
+				return { isError: true };
+			}
+		});
 
 		pi.registerTool({
 			name: "delegate",
@@ -39,7 +56,6 @@ export function createDelegateExtension(delegateRunner: DelegateRunner = runDele
 					return {
 						content: [{ type: "text" as const, text: "Delegate unavailable: the bounded slot was already used." }],
 						details: { schema: "mnemon.pi.delegate", version: 1, status: "slot_used" },
-						isError: true,
 					};
 				}
 				usedInAgentRun = true;
@@ -49,14 +65,12 @@ export function createDelegateExtension(delegateRunner: DelegateRunner = runDele
 					return {
 						content: [{ type: "text" as const, text: "Delegate rejected an invalid bounded task." }],
 						details: { schema: "mnemon.pi.delegate", version: 1, status: "task_invalid" },
-						isError: true,
 					};
 				}
 				if (!ctx.model) {
 					return {
 						content: [{ type: "text" as const, text: "Delegate unavailable: no active parent model." }],
 						details: { schema: "mnemon.pi.delegate", version: 1, status: "model_unavailable" },
-						isError: true,
 					};
 				}
 
@@ -67,7 +81,6 @@ export function createDelegateExtension(delegateRunner: DelegateRunner = runDele
 					return {
 						content: [{ type: "text" as const, text: "Delegate unavailable: parent authentication was not resolved." }],
 						details: { schema: "mnemon.pi.delegate", version: 1, status: "auth_unavailable" },
-						isError: true,
 					};
 				}
 
@@ -94,7 +107,6 @@ export function createDelegateExtension(delegateRunner: DelegateRunner = runDele
 					return {
 						content: [{ type: "text" as const, text: `Delegate failed safely: ${code}.` }],
 						details: { schema: "mnemon.pi.delegate", version: 1, status: "failed", code },
-						isError: true,
 					};
 				}
 			},

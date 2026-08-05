@@ -150,6 +150,16 @@ test("extension exposes one slot per parent run and inherits trusted model ident
 	const second = await tool.execute("two", { task: "inspect again" }, undefined, undefined, context);
 	assert.equal(first.details.status, "completed");
 	assert.equal(second.details.status, "slot_used");
+	assert.equal(await handlers.get("tool_result")({
+		toolName: "delegate",
+		details: first.details,
+		isError: false,
+	}), undefined);
+	assert.deepEqual(await handlers.get("tool_result")({
+		toolName: "delegate",
+		details: second.details,
+		isError: false,
+	}), { isError: true });
 	assert.equal(calls.length, 1);
 	assert.equal(calls[0].provider, "deepseek");
 	assert.equal(calls[0].model, "deepseek-v4-flash");
