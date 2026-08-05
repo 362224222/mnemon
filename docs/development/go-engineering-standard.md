@@ -45,8 +45,8 @@ responsibilities MUST remain distinct:
   projections MUST be generated from it or exhaustively parity-validated
   against it; independent unchecked discriminator lists are prohibited.
 
-This split applies to every new Event-like design, not only to the current R5
-Teamwork work.
+This split applies to every new Event-like design, not only to the current
+Harness work.
 
 ## 2. Package and ownership design
 

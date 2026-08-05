@@ -26,4 +26,3 @@ private context is needed, allow them to choose their own investigation, and
 keep claims distinct from verified outcomes. Prefer reversible changes and a
 fresh end-to-end observation before reporting recovery. Use only Event handles
 offered by the current View; do not invent authority fields.
-

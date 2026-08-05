@@ -144,7 +144,9 @@ Run the focused observer checks with:
 go -C harness test ./test/observer
 ```
 
-The complete Harness gate also includes this package through `go test ./...`.
+`make harness-quality` runs this focused package explicitly, and
+`make harness-verify` inherits that check before running the exact-tree R7
+gate. This explicit nested-module invocation is also exercised by CI.
 The checks validate the schema asset, strict JSONL decoding, bounds,
 redaction, trace linkage, footer digests, fixtures, Content Security Policy,
 and the absence of external resources or markup injection APIs.

@@ -64,7 +64,7 @@ harness-quality: ## Run pinned, non-mutating Harness quality gates
 	@base_ref="$${HARNESS_QUALITY_BASE_REF:-HEAD}"; \
 		$(HARNESS_GO) run ./tools/quality check --root .. --base-ref "$$base_ref"
 	$(HARNESS_GO) vet ./...
-	$(HARNESS_GO) test ./tools/quality ./tools/corecontract ./test/contracts -count=1
+	$(HARNESS_GO) test ./tools/quality ./tools/corecontract ./test/contracts ./test/observer -count=1
 	harness/test/r7/domainops/run_live_oracle.sh
 
 harness-contract: ## Validate the active R7 contract and evidence registry
