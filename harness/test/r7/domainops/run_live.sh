@@ -1007,10 +1007,12 @@ assert_synthetic_probes() {
         (.route == "east" or .route == "west") and
         ((.status == "succeeded" and .capture_id > 0) or
          (.status == "failed" and .capture_id == 0))) and
-      all($records[] as $record;
+      all($records[];
+        . as $record |
         ($record.business_id | startswith("synthetic-")) and
         any($receipts[]; .business_id == $record.business_id)) and
-      all($receipts[] as $receipt;
+      all($receipts[];
+        . as $receipt |
         [ $records[] | select(.business_id == $receipt.business_id) ] as $related |
         ($related | length) <= 2 and
         if $receipt.status == "succeeded" then
