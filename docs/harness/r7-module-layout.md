@@ -220,7 +220,8 @@ Every step leaves the tree building and its own tests green. No step performs a
 bulk delete except C6.
 
 ```
-C0  darwin build repaired; CI runs the same gate set as the local merge gate
+C0  darwin build repaired; the complete R7 evidence gate runs for Harness
+    changes and scheduled verification, while release-path CI stays fast
 C1  cli        purify agencycli in place; own its Unix client; defer rename
 C2  cas        extract the agency-native CAS core before its consumers
 C3  peerlink   replace peer/agency_*.go with bounded, mutually authenticated

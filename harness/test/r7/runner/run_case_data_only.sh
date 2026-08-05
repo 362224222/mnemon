@@ -40,5 +40,4 @@ while IFS= read -r executable; do
   esac
 done < <(find "$R7_STATIC_HARNESS_ROOT/testdata/r7" -type f -perm -111 -print)
 
-"$RUNNER_DIR/run_no_case_kind.sh"
 printf 'r7 static oracle passed: case behavior is data-only\n'

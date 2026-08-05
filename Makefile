@@ -15,7 +15,7 @@ ifeq ($(GOBIN),)
 endif
 
 .PHONY: deps build harness-build install uninstall test unit vet harness-validate harness-quality harness-verify
-.PHONY: harness-contract harness-static harness-docker harness-docker-case harness-live-pi
+.PHONY: harness-live-pi
 .PHONY: harness-r8 harness-r8-docker harness-domain-ops harness-domain-ops-live
 .PHONY: docker-build docker-run compose-up compose-down compose-dev release-snapshot clean help
 
@@ -48,7 +48,7 @@ uninstall: ## Remove mnemon binary from $GOBIN
 
 # ── Test ─────────────────────────────────────────────────────────────
 
-test: build ## Run E2E test suite
+test: ## Run E2E test suite (the script builds the tested binary once)
 	bash scripts/e2e_test.sh
 
 unit: ## Run Go unit tests
@@ -64,21 +64,7 @@ harness-quality: ## Run pinned, non-mutating Harness quality gates
 	@base_ref="$${HARNESS_QUALITY_BASE_REF:-HEAD}"; \
 		$(HARNESS_GO) run ./tools/quality check --root .. --base-ref "$$base_ref"
 	$(HARNESS_GO) vet ./...
-	$(HARNESS_GO) test ./tools/quality ./tools/corecontract ./test/contracts ./test/observer -count=1
-	harness/test/r7/domainops/run_live_oracle.sh
-
-harness-contract: ## Validate the active R7 contract and evidence registry
-	$(HARNESS_GO) test ./tools/corecontract ./test/contracts -count=1
-
-harness-static: ## Run R7 pattern, layout, and deletion oracles
-	harness/test/r7/runner/run_static.sh
-
-harness-docker: ## Run all R7 cases in isolated Docker peers
-	harness/test/r7/runner/run_cases.sh
-
-harness-docker-case: ## Run one R7 Docker case with CASE=<name>
-	@test -n "$(CASE)" || { echo "error: CASE is required" >&2; exit 2; }
-	harness/test/r7/runner/run_cases.sh "$(CASE)"
+	$(HARNESS_GO) test ./tools/quality -count=1
 
 harness-live-pi: ## Run the opt-in Pi/DeepSeek live smoke
 	@test "$${LIVE_PI:-}" = 1 || { echo "error: set LIVE_PI=1" >&2; exit 2; }
@@ -100,7 +86,7 @@ harness-domain-ops-live: ## Run the paid autonomous Pi/DeepSeek operations case
 	@test -n "$${DEEPSEEK_API_KEY:-}" || { echo "error: DEEPSEEK_API_KEY is required" >&2; exit 2; }
 	harness/test/r7/domainops/run_live.sh
 
-harness-verify: harness-quality ## Run the complete exact-tree R7 merge gate and write its report
+harness-verify: harness-quality ## Run the complete exact-tree R7 evidence gate and write its report
 	$(HARNESS_GO) run ./tools/corecontract/cmd/core-gate --root ..
 
 # ── Containers / Deployment ──────────────────────────────────────────

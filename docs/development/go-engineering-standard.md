@@ -335,14 +335,17 @@ go -C harness test -race ./...
 go -C harness vet ./...
 make harness-validate        # managed-asset and action-declaration validation
 make harness-quality         # pinned format/static/dependency/debt ratchets
-make harness-verify          # three builds, declarations, quality, vet, and unit tests
+make harness-verify          # complete exact-tree R7 evidence report
 ```
 
 `make harness-validate` is not a full Harness quality or verification gate.
-R5 uses the pinned, tracked `make harness-quality` target for format/static
-analysis, dependency/registry checks, and complexity/duplication ratchets.
-`make harness-verify` composes it with build, managed-declaration validation,
-vet, and Harness tests.
+The Harness uses the pinned, tracked `make harness-quality` target for
+format/static analysis, dependency checks, and complexity/duplication ratchets.
+`make harness-verify` remains the complete R7 evidence gate, including the
+expensive race, Docker-case, and deletion proofs; it is run for
+Harness-affecting changes and scheduled deep verification rather than every
+release-path change. Focused package and scenario checks should be invoked
+directly instead of adding overlapping umbrella targets.
 
 Any added analyzer MUST have a repository-owned version and configuration and
 be reproducible in CI. Do not depend on a developer's global tool version or

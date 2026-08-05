@@ -100,11 +100,21 @@ arbitrary same-UID code with local shell and file access.
 
 ```sh
 make harness-build
-make harness-validate
 make harness-quality
+```
+
+For managed integration asset changes:
+
+```sh
+make harness-validate
+```
+
+For the complete evidence gate:
+
+```sh
 make harness-verify
 ```
 
-`make harness-verify` is the complete local R7 gate. See
+`make harness-verify` is the complete local R7 evidence gate. See
 [r7-core-contract.md](r7-core-contract.md) for normative behavior and
 [r7-module-layout.md](r7-module-layout.md) for the enforced package boundary.

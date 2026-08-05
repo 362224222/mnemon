@@ -84,6 +84,9 @@ Repository maintainers run:
 make harness-verify
 ```
 
+During local iteration, run the focused Go package or scenario being changed;
+do not add another umbrella Make target for each test grouping.
+
 The gate proves the ten R7 invariants, local continuity, federated
 re-admission, three data-only collaboration cases, and that deleting all case
 descriptions leaves the generic Core conformance suite working.

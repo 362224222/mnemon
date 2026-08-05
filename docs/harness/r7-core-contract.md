@@ -717,7 +717,9 @@ model:
 - the contract tool parses `PROPOSED | ACTIVE | RETIRED`, rejects an activation
   candidate tree without exactly one ACTIVE Core contract, and binds reports to
   the exact candidate tree;
-- CI runs the same gate set as the local merge gate.
+- the fast release-path CI gate cannot generate or claim a complete R7 evidence
+  report; Harness-affecting changes and scheduled verification run the complete
+  `make harness-verify` gate.
 
 Without them the ledger cannot be produced on the maintainer's own machine or
 enforced on merge, and `10/10` would be a number in a document.

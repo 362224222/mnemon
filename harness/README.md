@@ -21,14 +21,23 @@ Collaboration patterns are data-only descriptions and fixtures. The Core does
 not contain a Channel model, Teamwork registry, workflow engine, or semantic
 dispatch by Event kind.
 
-Build and verify the Harness with:
+Use the fast development path for ordinary changes:
 
 ```sh
 make harness-build
-make harness-validate
 make harness-quality
+```
+
+Run `make harness-validate` when changing managed integration assets. Run the
+complete evidence path only when required:
+
+```sh
 make harness-verify
 ```
+
+`harness-verify` is the full exact-tree evidence gate, including race, Docker
+case, and deletion proofs. Observer, domain-operations, and R8 checks remain
+focused suites rather than additional umbrella Make targets.
 
 See [the Harness documentation](../docs/harness/README.md), the
 [quickstart](../docs/harness/QUICKSTART.md), and the active
