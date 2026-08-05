@@ -999,7 +999,7 @@ assert_synthetic_probes() {
     .role == "edge" and .result.limit == 32 and
     (.result.entries | type == "array" and length <= 16) and
     ($charges | length == 1 and $charges[0].role == "data" and
-      ($charges[0].result | type == "array" and length <= 32)) and
+      ($charges[0].result | type == "array" and length <= 64)) and
     (.result.entries as $receipts | $charges[0].result as $records |
       ([ $receipts[].business_id ] | unique | length) == ($receipts | length) and
       all($receipts[];
@@ -1014,7 +1014,7 @@ assert_synthetic_probes() {
       all($receipts[];
         . as $receipt |
         [ $records[] | select(.business_id == $receipt.business_id) ] as $related |
-        ($related | length) <= 2 and
+        ($related | length) <= 4 and
         if $receipt.status == "succeeded" then
           ([ $related[] | select(.state == "active") ] | length) == 1 and
           any($related[]; .state == "active" and .sequence == $receipt.capture_id) and

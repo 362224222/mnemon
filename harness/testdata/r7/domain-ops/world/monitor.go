@@ -10,8 +10,10 @@ import (
 )
 
 const (
-	MonitorProbeLimit  = 16
-	monitorProbeSettle = 500 * time.Millisecond
+	MonitorProbeLimit       = 16
+	MonitorProbeChargeLimit = 4
+	monitorProbeSettle      = 500 * time.Millisecond
+	monitorProbeVoidReason  = "synthetic-probe-reconciliation"
 )
 
 type MonitorStatus struct {
@@ -22,10 +24,13 @@ type MonitorStatus struct {
 // MonitorProbeResult is one bounded customer-like observation. The monitor,
 // not the caller, chooses the identity and cardinality. Receipt is copied from
 // the public gateway boundary; Ledger is an aggregate observation for that
-// exact synthetic identity.
+// exact synthetic identity. Observed is captured before the monitor reconciles
+// effects owned by the probe; Ledger is the verified postcondition returned to
+// the caller. Production identities are never eligible for this lifecycle.
 type MonitorProbeResult struct {
-	Receipt GatewayReceipt `json:"receipt"`
-	Ledger  LedgerStatus   `json:"ledger"`
+	Receipt  GatewayReceipt `json:"receipt"`
+	Observed LedgerStatus   `json:"observed"`
+	Ledger   LedgerStatus   `json:"ledger"`
 }
 
 type Monitor struct {
@@ -114,13 +119,116 @@ func (monitor *Monitor) probe(writer http.ResponseWriter, request *http.Request)
 			map[string]string{"error": "probe receipt unavailable"})
 		return
 	}
-	var ledger LedgerStatus
-	ledgerTarget := monitor.ledgerURL + "/status?prefix=" + url.QueryEscape(businessID)
-	if err := GetJSON(ctx, monitor.client, ledgerTarget, &ledger); err != nil {
+	observed, ledger, err := monitor.reconcileProbe(ctx, businessID, history.Entries[0])
+	if err != nil {
 		WriteJSON(writer, http.StatusBadGateway,
-			map[string]string{"error": "probe ledger observation unavailable"})
+			map[string]string{"error": "probe reconciliation incomplete"})
 		return
 	}
 	WriteJSON(writer, http.StatusOK,
-		MonitorProbeResult{Receipt: history.Entries[0], Ledger: ledger})
+		MonitorProbeResult{Receipt: history.Entries[0], Observed: observed, Ledger: ledger})
+}
+
+func (monitor *Monitor) reconcileProbe(ctx context.Context, businessID string,
+	receipt GatewayReceipt,
+) (LedgerStatus, LedgerStatus, error) {
+	charges, observed, err := monitor.readProbeLedger(ctx, businessID)
+	if err != nil {
+		return LedgerStatus{}, LedgerStatus{}, err
+	}
+	if err := validateProbeReceipt(receipt, businessID); err != nil {
+		return LedgerStatus{}, LedgerStatus{}, err
+	}
+	for _, charge := range charges {
+		if charge.State != ChargeActive ||
+			(receipt.Status == GatewayReceiptSucceeded && charge.Sequence == receipt.CaptureID) {
+			continue
+		}
+		var voided Charge
+		if err := PostJSON(ctx, monitor.client, monitor.ledgerURL+"/admin/void",
+			VoidRequest{Sequence: charge.Sequence, Reason: monitorProbeVoidReason}, &voided); err != nil {
+			return LedgerStatus{}, LedgerStatus{}, fmt.Errorf("void probe charge: %w", err)
+		}
+		if voided.Sequence != charge.Sequence || voided.BusinessID != businessID ||
+			voided.State != ChargeVoided || voided.VoidReason != monitorProbeVoidReason {
+			return LedgerStatus{}, LedgerStatus{}, fmt.Errorf("invalid probe void receipt")
+		}
+	}
+
+	settledCharges, settled, err := monitor.readProbeLedger(ctx, businessID)
+	if err != nil {
+		return LedgerStatus{}, LedgerStatus{}, err
+	}
+	if err := validateSettledProbe(receipt, settledCharges, settled); err != nil {
+		return LedgerStatus{}, LedgerStatus{}, err
+	}
+	return observed, settled, nil
+}
+
+func (monitor *Monitor) readProbeLedger(ctx context.Context, businessID string) (
+	[]Charge, LedgerStatus, error,
+) {
+	query := url.QueryEscape(businessID)
+	var charges []Charge
+	if err := GetJSON(ctx, monitor.client, monitor.ledgerURL+"/charges?prefix="+query,
+		&charges); err != nil {
+		return nil, LedgerStatus{}, fmt.Errorf("read probe charges: %w", err)
+	}
+	if len(charges) > MonitorProbeChargeLimit {
+		return nil, LedgerStatus{}, fmt.Errorf("probe charge bound exceeded")
+	}
+	for _, charge := range charges {
+		if charge.BusinessID != businessID || charge.Sequence <= 0 ||
+			(charge.State != ChargeActive && charge.State != ChargeVoided) {
+			return nil, LedgerStatus{}, fmt.Errorf("invalid probe charge")
+		}
+	}
+	var status LedgerStatus
+	if err := GetJSON(ctx, monitor.client, monitor.ledgerURL+"/status?prefix="+query,
+		&status); err != nil {
+		return nil, LedgerStatus{}, fmt.Errorf("read probe ledger status: %w", err)
+	}
+	if status.Charges != len(charges) {
+		return nil, LedgerStatus{}, fmt.Errorf("probe ledger observation is inconsistent")
+	}
+	return charges, status, nil
+}
+
+func validateProbeReceipt(receipt GatewayReceipt, businessID string) error {
+	if receipt.BusinessID != businessID || receipt.RequestID <= 0 ||
+		(receipt.Route != "east" && receipt.Route != "west") {
+		return fmt.Errorf("invalid probe receipt")
+	}
+	if receipt.Status == GatewayReceiptSucceeded && receipt.CaptureID > 0 {
+		return nil
+	}
+	if receipt.Status == GatewayReceiptFailed && receipt.CaptureID == 0 {
+		return nil
+	}
+	return fmt.Errorf("invalid probe receipt outcome")
+}
+
+func validateSettledProbe(receipt GatewayReceipt, charges []Charge, status LedgerStatus) error {
+	active := 0
+	captureActive := false
+	for _, charge := range charges {
+		if charge.State != ChargeActive {
+			continue
+		}
+		active++
+		captureActive = captureActive || charge.Sequence == receipt.CaptureID
+	}
+	if status.ActiveCharges != active || status.VoidedCharges != len(charges)-active ||
+		status.DuplicateBusinesses != 0 {
+		return fmt.Errorf("probe ledger postcondition is inconsistent")
+	}
+	if receipt.Status == GatewayReceiptSucceeded && active == 1 && captureActive &&
+		status.UniqueBusinesses == 1 {
+		return nil
+	}
+	if receipt.Status == GatewayReceiptFailed && active == 0 &&
+		status.UniqueBusinesses == 0 {
+		return nil
+	}
+	return fmt.Errorf("probe ledger postcondition is not reconciled")
 }

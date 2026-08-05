@@ -6,7 +6,10 @@ import (
 	"strings"
 )
 
-const maxSyntheticProbes = 16
+const (
+	maxSyntheticProbes          = 16
+	maxSyntheticChargesPerProbe = 4
+)
 
 func validateWorld(report liveReport) error {
 	if len(report.World.Episodes) != 2 || report.World.Episodes[0].ID != "episode-1" ||
@@ -109,7 +112,7 @@ func validateSyntheticProbes(audit syntheticProbeAudit) error {
 		audit.Succeeded+audit.Failed != audit.Observed ||
 		ledger.Charges < 0 || ledger.ActiveCharges < 0 || ledger.VoidedCharges < 0 ||
 		ledger.UniqueBusinesses < 0 || ledger.DuplicateBusinesses != 0 ||
-		ledger.Charges > 2*audit.Observed ||
+		ledger.Charges > maxSyntheticChargesPerProbe*audit.Observed ||
 		ledger.ActiveCharges != audit.Succeeded ||
 		ledger.ActiveCharges+ledger.VoidedCharges != ledger.Charges ||
 		ledger.UniqueBusinesses < audit.Succeeded ||

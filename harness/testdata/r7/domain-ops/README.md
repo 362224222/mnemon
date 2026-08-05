@@ -59,10 +59,14 @@ service credentials or merge the five Runtime contexts.
 
 The lead may ask its existing monitor for one server-shaped synthetic checkout
 at a time. The monitor chooses the identity, submits exactly one request through
-the public gateway, and returns the exact gateway receipt plus an aggregate
-ledger observation. It serializes calls and enforces a global limit; the Agent
-cannot select a route, request count, timeout, retry policy, or repair. This is
-an environmental observation affordance, not service-administration authority.
+the public gateway, and returns the exact gateway receipt plus aggregate ledger
+observations before and after reconciliation. It serializes calls and enforces
+global effect bounds; the Agent cannot select a route, request count, timeout,
+retry policy, or repair. The monitor owns only its server-generated synthetic
+identity: it preserves the exact capture acknowledged by a successful receipt,
+explicitly voids its other captures, and verifies that postcondition before
+returning. It never reconciles a production identity. This is an environmental
+observation affordance, not service-administration authority.
 
 ## What is deliberately not scripted
 
@@ -87,7 +91,9 @@ records, and two fresh evaluation batches complete without duplicate active
 captures. Accepted collaboration effects retain their R7 causality and receipt.
 Any optional `synthetic-*` checkout is audited separately: successful public
 receipts retain exactly their acknowledged active capture, failed receipts leave
-no active capture, and all other side effects remain explicit void records.
+no active capture, and all other side effects remain explicit void records. Its
+pre-reconciliation observation remains visible to the caller, while independent
+fresh production traffic—not probe cleanup—decides whether the incident is fixed.
 Pi runs with a fresh process and no session for every attention opportunity,
 while the five mnemond authority stores and their References survive both
 episodes. Before Episode 2, all five Runtime containers and writable workspaces

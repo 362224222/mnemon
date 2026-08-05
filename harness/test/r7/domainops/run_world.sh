@@ -119,6 +119,8 @@ jq -e '
   .result.receipt.business_id == "synthetic-001" and
   .result.receipt.status == "succeeded" and
   .result.receipt.capture_id > 0 and
+  .result.observed.charges == 1 and .result.observed.active_charges == 1 and
+  .result.observed.voided_charges == 0 and
   .result.ledger.charges == 1 and .result.ledger.active_charges == 1 and
   .result.ledger.voided_charges == 0 and
   .result.ledger.unique_businesses == 1 and
