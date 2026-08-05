@@ -298,6 +298,14 @@ jq -e '
   .submit_denials == 1 and .post_accept_denials == 1
 ' "$scratch/accounted.json" >/dev/null
 
+write_submit_stream "$scratch/duplicate-rendering.jsonl" \
+  "$closed_denial"$'\n'"$closed_denial"
+sanitize_turn lead oracle-duplicate-rendering "$scratch/duplicate-rendering.jsonl" \
+  "$scratch/duplicate-rendering.json"
+jq -e '
+  .submit_attempts == 1 and .intent_submits == 0 and .submit_denials == 1
+' "$scratch/duplicate-rendering.json" >/dev/null
+
 contained=("$accepted_receipt")
 for _ in $(seq 1 13); do contained+=("$closed_denial"); done
 write_submit_stream "$scratch/contained.jsonl" "${contained[@]}"

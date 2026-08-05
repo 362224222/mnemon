@@ -515,6 +515,8 @@ sanitize_turn() {
     ([$stream[] | select(.type == "tool_execution_start" and .toolName == "bash" and
       invokes("submit"))]) as $submit_starts |
     ([$submit_starts[].toolCallId] | unique) as $submit_calls |
+    ([$stream[] | select(.type == "tool_execution_end" and .toolName == "bash" and
+      belongs($submit_calls))]) as $submit_ends |
     ([$stream[] | select(.type == "tool_execution_start" and
       .toolName == "delegate") | .toolCallId] | unique) as $delegate_attempts |
     ([$stream[] | select(.type == "tool_execution_end" and
@@ -523,12 +525,11 @@ sanitize_turn() {
       {accepted_seen:false, denials:0};
       if ($record.type == "tool_execution_end" and $record.toolName == "bash" and
           ($record | belongs($submit_calls))) then
-        ($record | [result_objects[]]) as $objects |
         .denials += (if .accepted_seen then
-          ([$objects[] | select(valid_control_error)] | length)
+          (if ($record | any(result_objects[]; valid_control_error)) then 1 else 0 end)
         else 0 end) |
         .accepted_seen = (.accepted_seen or
-          any($objects[]; valid_receipt and .outcome == "accepted"))
+          ($record | any(result_objects[]; valid_receipt and .outcome == "accepted")))
       else . end
     )) as $post_accept |
     {
@@ -547,19 +548,15 @@ sanitize_turn() {
         belongs($current_calls) and
         any(result_objects[]; .schema == "mnemon.agent.view" and .version == 4 and
           (.view | type == "string" and length > 0)))] | length),
-      submit_attempts: ([$submit_starts[] | invocation_count("submit")] | add // 0),
-      intent_submits: ([$stream[] | select(
-        .type == "tool_execution_end" and .toolName == "bash" and belongs($submit_calls)) |
-        result_objects[] | select(valid_receipt)] | length),
-      accepted_receipts: ([$stream[] | select(
-        .type == "tool_execution_end" and .toolName == "bash" and belongs($submit_calls)) |
-        result_objects[] | select(valid_receipt and .outcome == "accepted")] | length),
-      rejected_receipts: ([$stream[] | select(
-        .type == "tool_execution_end" and .toolName == "bash" and belongs($submit_calls)) |
-        result_objects[] | select(valid_receipt and .outcome == "rejected")] | length),
-      submit_denials: ([$stream[] | select(
-        .type == "tool_execution_end" and .toolName == "bash" and belongs($submit_calls)) |
-        result_objects[] | select(valid_control_error)] | length),
+      submit_attempts: ($submit_starts | length),
+      intent_submits: ([$submit_ends[] |
+        select(any(result_objects[]; valid_receipt))] | length),
+      accepted_receipts: ([$submit_ends[] |
+        select(any(result_objects[]; valid_receipt and .outcome == "accepted"))] | length),
+      rejected_receipts: ([$submit_ends[] |
+        select(any(result_objects[]; valid_receipt and .outcome == "rejected"))] | length),
+      submit_denials: ([$submit_ends[] |
+        select(any(result_objects[]; valid_control_error))] | length),
       post_accept_denials: $post_accept.denials,
       private_binding_probes: ([$stream[] | select(.type == "tool_execution_start" and
         .toolName == "bash" and
@@ -580,6 +577,13 @@ sanitize_turn() {
         ($delegate_ends | length) == ($delegate_attempts | length) and
         ([$delegate_ends[].toolCallId] | unique | sort) == ($delegate_attempts | sort) and
         all($delegate_ends[]; valid_delegate_result) and
+        all($submit_starts[]; invocation_count("submit") == 1) and
+        ($submit_ends | length) == ($submit_calls | length) and
+        ([$submit_ends[].toolCallId] | unique | sort) == ($submit_calls | sort) and
+        all($submit_ends[];
+          ([(if any(result_objects[]; valid_receipt and .outcome == "accepted") then 1 else 0 end),
+            (if any(result_objects[]; valid_receipt and .outcome == "rejected") then 1 else 0 end),
+            (if any(result_objects[]; valid_control_error) then 1 else 0 end)] | add) == 1) and
         .accepted_receipts <= 1 and
         .post_accept_denials <= .submit_denials and
         (.post_accept_denials == 0 or .accepted_receipts == 1) and
@@ -618,6 +622,10 @@ summarize_partial_turn() {
         "operation_pending", "mnemond_unavailable", "internal"
       ] | index($code) != null) and
       (.retryable == (.code == "operation_pending" or .code == "mnemond_unavailable"));
+    . as $stream |
+    ([$stream[] | select(.type == "tool_execution_start" and .toolName == "bash" and
+      (command | test("mnemon-harness[[:space:]]+agent[[:space:]]+submit"))) |
+      .toolCallId] | unique) as $submit_calls |
     {
       stream_records:length,
       record_types:(reduce .[] as $record ({};
@@ -653,8 +661,9 @@ summarize_partial_turn() {
         .toolName == "bash" and any(result_strings;
           contains("\"schema\":\"mnemon.agent.receipt\"") and
           contains("\"outcome\":\"rejected\"")))] | length),
-      submit_denials:([.[] | select(.type == "tool_execution_end" and
-        .toolName == "bash") | result_objects[] | select(valid_control_error)] | length),
+      submit_denials:([$stream[] | select(.type == "tool_execution_end" and
+        .toolName == "bash" and (.toolCallId as $id | $submit_calls | index($id) != null) and
+        any(result_objects[]; valid_control_error))] | length),
       hook_cues:([.[] | select(
         (.type == "message_start" or .type == "message_end") and
         .message.role == "custom" and .message.customType == "mnemond")] | length),
