@@ -84,8 +84,50 @@ func assertGuideTerminalSurface(t *testing.T, guide string) {
 			t.Errorf("guide lacks complete, bounded terminal surface %q", required)
 		}
 	}
+	normalized := strings.Join(strings.Fields(guide), " ")
+	for _, required := range []string{
+		"A local Receipt never needs a reply",
+		"Never acknowledge an acknowledgement",
+		"to match the actual outcome",
+		"only while the same local responsibility truly remains open",
+	} {
+		if !strings.Contains(normalized, required) {
+			t.Errorf("guide lacks response convergence rule %q", required)
+		}
+	}
 	if strings.Contains(guide, "$INTENT_JSON") {
 		t.Error("guide relies on an undefined cross-tool shell variable")
+	}
+}
+
+func TestGuideResponseExampleIsTerminalCorrelatedEvidence(t *testing.T) {
+	projection, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`(?m)^(\{"kind":"work\.response"[^\n]+\})$`).
+		FindStringSubmatch(string(projection.Guide()))
+	if len(match) != 2 {
+		t.Fatal("guide lacks one complete work.response example")
+	}
+	intent, err := agency.ParseAgentIntentJSON([]byte(match[1]))
+	if err != nil {
+		t.Fatalf("guide work.response is not a valid AgentIntent: %v", err)
+	}
+	switch intent.Consequence() {
+	case agency.ConsequenceResolveCompleted, agency.ConsequenceResolveDeclined,
+		agency.ConsequenceResolveUnresolved:
+	default:
+		t.Fatalf("guide work.response consequence = %q; want terminal resolve", intent.Consequence())
+	}
+	successors := intent.Successors()
+	if intent.SubjectHandling().IsZero() || len(successors) != 1 || successors[0].IsSelf() ||
+		successors[0].Alias().IsZero() || intent.CorrelationHandle().IsZero() || len(intent.Artifacts()) == 0 {
+		t.Fatal("guide work.response does not bind one subject, reply, correlation, and evidence")
+	}
+	if intent.Consequence() == agency.ConsequenceResolveCompleted &&
+		!strings.Contains(intent.Payload().String(), "successfully completed") {
+		t.Fatal("guide completed response does not state that the actual outcome succeeded")
 	}
 }
 
