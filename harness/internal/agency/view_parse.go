@@ -49,6 +49,11 @@ func machineViewSpecFromWire(wire machineViewWire, attachment Attachment) (Machi
 	if spec.Targets, err = parseViewTargets(wire.Targets); err != nil {
 		return MachineViewSpec{}, err
 	}
+	if wire.ReplyTo != "" {
+		if spec.ReplyTo, err = NewOpaqueHandle(wire.ReplyTo); err != nil {
+			return MachineViewSpec{}, err
+		}
+	}
 	if spec.ReplyTarget, err = parseViewReplyTarget(wire.ReplyTarget); err != nil {
 		return MachineViewSpec{}, err
 	}

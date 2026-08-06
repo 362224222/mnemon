@@ -221,20 +221,29 @@ Peer delivery is not a declarable consequence. For a local target, admission
 creates a local Handling. For a remote target, the same admission atomically
 creates a durable PeerDelivery obligation; it does not create a locally
 claimable Handling for a remote Principal. An accepted request that creates any
-PeerDelivery must also leave at least one open local Handling representing the
-causal responsibility: either the advanced current Handling or a local
+PeerDelivery normally also leaves at least one open local Handling representing
+the causal responsibility: either the advanced current Handling or a local
 successor. A request that would export its only responsibility fails closed.
+The sole exception is a terminal disposition of an imported current: it may
+close the responder's Handling while returning exactly one PeerDelivery to the
+View-sealed `reply_target`, correlated through the exact View-sealed `reply_to`.
+The requester already retains the original local responsibility anchor.
 
 ```
 remote-directed action = open local responsibility anchor + PeerDelivery(s)
 
-root-handling:    at least one local successor + remote successor(s)
-subject advance: the still-open current Handling is the local anchor
-subject resolve: at least one local successor + remote successor(s)
+root-handling:     at least one local successor + remote successor(s)
+subject advance:  the still-open current Handling is the local anchor
+ordinary resolve: at least one local successor + remote successor(s)
+terminal reply:   exactly reply_target + exactly reply_to; no local successor
 ```
 
-The local anchor is not closed by a remote Receipt, rejection, or delivery
-expiry. A later local Intent must advance or resolve it explicitly.
+The requester's local anchor is not closed by a remote Receipt, rejection,
+delivery expiry, or returning disposition. A later local Intent must advance or
+resolve it explicitly. The terminal-reply exception closes only the responder's
+imported current and cannot be used for root initiation, advance, fan-out,
+redirect, or a different provenance handle that happens to resolve to the same
+Event.
 The target node re-admits the signed delivery and creates its own local Event
 and local Handling. An Agent that wants a peer to consider a description
 targets that peer and references the Artifact; whether the peer adopts it is
@@ -416,9 +425,13 @@ own Event identity, digest, sequence, and Receipt. A peer may begin a local caus
 only when the local peer policy authorizes both initiation and the resolved
 target Principal. Inbound peer admission is limited to the consequence subset
 in section 4.1. Origin admission may create a PeerDelivery only when the same
-transaction leaves at least one causal local Handling open. Therefore remote
-rejection, missing Artifact, or delivery expiry cannot erase the origin's
-accepted responsibility.
+transaction leaves at least one causal local Handling open. The only exception
+is a terminal Intent over an imported current with exactly one remote successor
+equal to its sealed `reply_target` and an exact correlation handle equal to its
+sealed `reply_to`; that transaction may close the responder's current without a
+local successor because the requester retains the causal anchor. Therefore
+remote rejection, missing Artifact, delivery expiry, or a returning disposition
+cannot erase the requester's accepted responsibility.
 
 Peer delivery has one closed internal lifecycle. The origin atomically creates
 an outbox record with a stable delivery ID derived from origin Event, enrolled
@@ -439,8 +452,10 @@ independently derives `reply_target` from that inbox route's public alias. A
 local advance changes the Handling head but not this creation-bound reply
 context. A later Intent can therefore preserve one conversation root and
 address its authenticated sender without a transport rewrite or semantic target
-inference. A returning delivery is re-admitted as a new local Event; only then
-may it appear as read-only related evidence beside the origin Handling.
+inference. The terminal exception requires those exact opaque handles, not
+merely another handle resolving to the same Event or route. A returning delivery
+is re-admitted as a new local Event; only then may it appear as read-only related
+evidence beside the still-open origin Handling.
 
 **P-07 Exactly-once effect.**
 Every attachment-begin request, CurrentRequest, AdmissionRequest, and machine disposition carries a
@@ -669,7 +684,7 @@ unbound, partially proven, or failing.
 | P-03 | Interactive root initiation succeeds; a private Host-boundary nonce binds one attachment; authority permits one unended attachment per Principal; same-boundary begin exactly replays and must match the private journal across response loss, missing journal commit, and restart; a fresh nonce atomically replaces its predecessor even when the journal is absent; expired, ended, or divergent outcomes never report ready; Pi retries only the same nonce and emits no cue on failure; a new boundary or Hook end finishes a presented terminal without replaying its old Intent; T0 exposes no managed-wake issuance path; every accepted local target creates exactly one Handling; wrong-Principal and wrong-attachment claim fail. |
 | P-04 | At most one live claim exists; a fresh operation with stale fence fails; accepted advance updates the Handling head and releases the claim; bounded lease-expiry and Host-boundary-end dispositions, including transactional boundary replacement, clear occupancy but cannot change domain state, create an Event, or create completion; repeated fresh boundaries over a fixed bounded open set select the least previously claimed Handling and cannot be monopolized by one old responsibility. |
 | P-05 | Fault injection at each BoundIntent and VerifiedPeerDelivery transaction boundary yields either the whole local outcome or none, including outbox obligation and Reference head where allowed. |
-| P-06 | Authenticated delivery is re-admitted under the restricted peer subset; rejection creates no receiving fact; acceptance creates a new receiving Event, preserves provenance and an unchanged stable correlation root, resolves the target locally, and follows the bounded outbox/inbox lifecycle; an imported Handling preserves its authenticated reply context across local advances; an origin request exporting its sole responsibility fails, while remote rejection or expiry leaves the required local Handling open. |
+| P-06 | Authenticated delivery is re-admitted under the restricted peer subset; rejection creates no receiving fact; acceptance creates a new receiving Event, preserves provenance and an unchanged stable correlation root, resolves the target locally, and follows the bounded outbox/inbox lifecycle; an imported Handling preserves its authenticated reply context across local advances; root and ordinary remote terminal actions cannot export their sole responsibility, while an exact correlated terminal disposition may atomically close only the responder's imported Handling, create exactly one return delivery, and leave the requester's original Handling open; wrong handles, targets, stale routes, remote rejection, and expiry fail closed. |
 | P-07 | Same key/same digest replays the byte-stable attachment-begin proof, frozen View including its focus projection, admission Receipt, or internal outcome before the relevant mutable validation; same key/different digest conflicts; Host retries reuse one nonce and compare replayed proof with private journal authority; response loss, missing journal commit, restart, and retry create at most one attachment, claim, local Event, or machine disposition; begin replay never renews expiry or revives an ended boundary. |
 | P-08 | Valid first-publish key creation without a prior handle, invalid key rejection, first-publish CAS, concurrent first publish, active supersede, tombstone retract/reactivation, stale head, forward reference, concurrent mutation, and replay all match section 5; a provenance citation records the exact head, mutates nothing, and cannot stand in for a Reference action. |
 | P-09 | Any missing or mismatched Artifact keeps peer input unadmitted and cannot activate a Reference or complete; every Agent/peer resource bound fails closed independently and payload cannot raise it; the maximum accepted payload, Artifact, Reference, route, current, and related combination remains representable; related evidence has explicit prefix/count/truncation, and JSON-escaped current plus related payloads cannot overflow the focus or canonical View budget; more than the expiry-maintenance limit settles only the bounded prefix and leaves all excess claims unchanged for later natural turns. |

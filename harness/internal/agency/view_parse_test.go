@@ -41,6 +41,7 @@ func newViewParserFixture(t *testing.T) viewParserFixture {
 			mustReference(t, retractedHead, "playbook-retracted", "event:retracted", "retracted"),
 		},
 		Targets:     []ResolvedTarget{remote, self},
+		ReplyTo:     subject,
 		ReplyTarget: remoteRef,
 		Artifacts: []ViewArtifactOffer{
 			mustViewOffer(t, currentArtifact, "current bytes"),
@@ -125,20 +126,28 @@ func TestParseViewAuthorityCanonicalJSONRejectsUnboundOrMalformedData(t *testing
 	wrongReplyTarget := wire
 	wrongReplyTarget.ReplyTarget = &targetWire{Self: true}
 	wrongReplyTargetBytes, _ := json.Marshal(wrongReplyTarget)
+	missingReplyTo := wire
+	missingReplyTo.ReplyTo = ""
+	missingReplyToBytes, _ := json.Marshal(missingReplyTo)
+	unofferedReplyTo := wire
+	unofferedReplyTo.ReplyTo = "reply-to:unoffered"
+	unofferedReplyToBytes, _ := json.Marshal(unofferedReplyTo)
 
 	cases := map[string][]byte{
 		"leading whitespace": append([]byte(" "), canonical...),
 		"trailing value":     append(append([]byte(nil), canonical...), []byte("{}")...),
-		"duplicate key": bytes.Replace(canonical, []byte(`"schema_version":3`),
-			[]byte(`"schema_version":3,"schema_version":3`), 1),
-		"unknown top field": bytes.Replace(canonical, []byte(`{"schema_version":3`),
-			[]byte(`{"schema_version":3,"unknown":true`), 1),
+		"duplicate key": bytes.Replace(canonical, []byte(`"schema_version":4`),
+			[]byte(`"schema_version":4,"schema_version":4`), 1),
+		"unknown top field": bytes.Replace(canonical, []byte(`{"schema_version":4`),
+			[]byte(`{"schema_version":4,"unknown":true`), 1),
 		"unknown nested field": bytes.Replace(canonical, []byte(`"binding":{`),
 			[]byte(`"binding":{"unknown":true,`), 1),
 		"duplicate typed handle": duplicateBytes,
 		"mixed target authority": malformedTargetBytes,
 		"malformed digest":       badDigestBytes,
 		"local reply target":     wrongReplyTargetBytes,
+		"missing reply-to":       missingReplyToBytes,
+		"unoffered reply-to":     unofferedReplyToBytes,
 	}
 	for name, data := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -205,6 +214,10 @@ func TestParseAgentViewCanonicalJSONRejectsNoncanonicalAndDivergentProjection(t 
 	wrongReplyTarget.Current = cloneAgentViewCurrent(wire.Current)
 	wrongReplyTarget.Current.Facts.ReplyTarget = "self"
 	wrongReplyTargetBytes, _ := json.Marshal(wrongReplyTarget)
+	wrongReplyTo := wire
+	wrongReplyTo.Current = cloneAgentViewCurrent(wire.Current)
+	wrongReplyTo.Current.Facts.ReplyTo = "cause:prior"
+	wrongReplyToBytes, _ := json.Marshal(wrongReplyTo)
 
 	cases := map[string][]byte{
 		"leading whitespace": append([]byte("\n"), canonical...),
@@ -220,6 +233,7 @@ func TestParseAgentViewCanonicalJSONRejectsNoncanonicalAndDivergentProjection(t 
 		"outcome divergence":      wrongOutcomeBytes,
 		"shape divergence":        wrongShapeBytes,
 		"duplicate handle":        duplicateArtifactBytes,
+		"reply-to divergence":     wrongReplyToBytes,
 		"reply target divergence": wrongReplyTargetBytes,
 	}
 	for name, data := range cases {
@@ -251,7 +265,7 @@ func cloneAgentViewCurrent(source *agentViewCurrentWire) *agentViewCurrentWire {
 
 func TestViewParsersEnforceCanonicalByteBounds(t *testing.T) {
 	fixture := newViewParserFixture(t)
-	private := []byte(`{"schema_version":3,"source_principal":"agent:parse","may_initiate":true,"padding":"` +
+	private := []byte(`{"schema_version":4,"source_principal":"agent:parse","may_initiate":true,"padding":"` +
 		strings.Repeat("x", MaxViewCanonicalBytes) + `"}`)
 	if _, err := ParseViewAuthorityCanonicalJSON(private, fixture.attachment); !errors.Is(err, ErrLimit) {
 		t.Fatalf("private byte bound error = %v, want ErrLimit", err)
@@ -266,7 +280,7 @@ func TestViewParsersEnforceCanonicalByteBounds(t *testing.T) {
 func FuzzParseViewAuthorityCanonicalJSON(f *testing.F) {
 	attachment, authority, _ := minimalParserFixture()
 	f.Add(authority.CanonicalJSON())
-	f.Add([]byte(`{"schema_version":3}`))
+	f.Add([]byte(`{"schema_version":4}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		view, err := ParseViewAuthorityCanonicalJSON(data, attachment)
 		if err != nil {

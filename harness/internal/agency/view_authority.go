@@ -2,7 +2,7 @@ package agency
 
 import "sort"
 
-const viewAuthorityVersion = 3
+const viewAuthorityVersion = 4
 
 // MachineViewSpec is the complete machine-owned authority behind one bounded
 // Agent View. Its typed offers prevent an opaque handle from being repurposed
@@ -13,6 +13,7 @@ type MachineViewSpec struct {
 	Subjects     []SubjectBinding
 	References   []ReferenceExpectation
 	Targets      []ResolvedTarget
+	ReplyTo      OpaqueHandle
 	ReplyTarget  TargetRef
 	Artifacts    []ViewArtifactOffer
 	Provenance   []ProvenanceOffer
@@ -28,6 +29,7 @@ type ViewAuthority struct {
 	subjects     map[string]SubjectBinding
 	references   map[string]ReferenceExpectation
 	targets      map[string]ResolvedTarget
+	replyTo      OpaqueHandle
 	replyTarget  TargetRef
 	artifacts    map[string]ViewArtifactOffer
 	provenance   map[string]EventRef
@@ -109,32 +111,48 @@ func (view *ViewAuthority) load(spec MachineViewSpec) error {
 	if err := loadTargets(view.targets, spec.Targets, spec.Attachment); err != nil {
 		return err
 	}
-	if err := loadReplyTarget(&view.replyTarget, spec.ReplyTarget, view.subjects, view.targets); err != nil {
-		return err
-	}
 	if err := loadArtifacts(view.artifacts, spec.Artifacts); err != nil {
 		return err
 	}
 	if err := loadProvenance(view.provenance, spec.Provenance); err != nil {
 		return err
 	}
+	if err := loadReplyContext(&view.replyTo, &view.replyTarget, spec.ReplyTo,
+		spec.ReplyTarget, view.subjects, view.targets, view.provenance); err != nil {
+		return err
+	}
 	return nil
 }
 
-func loadReplyTarget(destination *TargetRef, requested TargetRef,
+func loadReplyContext(replyTo *OpaqueHandle, replyTarget *TargetRef,
+	requestedReplyTo OpaqueHandle, requestedTarget TargetRef,
 	subjects map[string]SubjectBinding, targets map[string]ResolvedTarget,
+	provenance map[string]EventRef,
 ) error {
-	if requested.IsZero() {
+	if requestedReplyTo.IsZero() {
+		if !requestedTarget.IsZero() {
+			return invalid("View reply context", "target requires a reply-to offer")
+		}
 		return nil
 	}
-	if requested.IsSelf() || len(subjects) != 1 {
-		return invalid("View reply target", "requires one current subject and one remote alias")
+	if len(subjects) != 1 {
+		return invalid("View reply context", "requires one current subject")
 	}
-	resolved, offered := targets[requested.canonicalKey()]
-	if !offered || resolved.destination != TargetDestinationRemote || resolved.requested != requested {
+	if _, offered := provenance[requestedReplyTo.String()]; !offered {
+		return invariant("View reply context", "reply-to must be one exact provenance offer")
+	}
+	*replyTo = requestedReplyTo
+	if requestedTarget.IsZero() {
+		return nil
+	}
+	if requestedTarget.IsSelf() {
+		return invalid("View reply target", "must be a remote alias")
+	}
+	resolved, offered := targets[requestedTarget.canonicalKey()]
+	if !offered || resolved.destination != TargetDestinationRemote || resolved.requested != requestedTarget {
 		return invariant("View reply target", "must be one exact offered remote target")
 	}
-	*destination = requested
+	*replyTarget = requestedTarget
 	return nil
 }
 
@@ -275,6 +293,7 @@ type machineViewWire struct {
 	Subjects        []viewSubjectWire         `json:"subjects,omitempty"`
 	References      []viewReferenceWire       `json:"references,omitempty"`
 	Targets         []viewTargetWire          `json:"targets,omitempty"`
+	ReplyTo         string                    `json:"reply_to,omitempty"`
 	ReplyTarget     *targetWire               `json:"reply_target,omitempty"`
 	Artifacts       []viewArtifactOfferWire   `json:"artifacts,omitempty"`
 	Provenance      []viewProvenanceOfferWire `json:"provenance,omitempty"`
@@ -340,6 +359,9 @@ func (view ViewAuthority) wire() machineViewWire {
 			Requested: targetWire{Self: target.requested.self, Alias: target.requested.alias.String()},
 			Resolved:  target.resolvedWire(),
 		})
+	}
+	if !view.replyTo.IsZero() {
+		wire.ReplyTo = view.replyTo.String()
 	}
 	if !view.replyTarget.IsZero() {
 		wire.ReplyTarget = &targetWire{Alias: view.replyTarget.Alias().String()}

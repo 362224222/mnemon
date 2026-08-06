@@ -206,6 +206,7 @@ func projectClaim(claim *projectedClaim, replyRoot agency.EventRef, spec *agency
 		}
 		spec.Provenance = append(spec.Provenance, replyOffer)
 	}
+	spec.ReplyTo = replyHandle
 	current := agency.AgentViewCurrentSpec{Subject: subjectHandle, ReplyTo: replyHandle,
 		Kind: claim.kind, Payload: claim.payload}
 	for _, digest := range claim.artifacts {

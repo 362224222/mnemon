@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
@@ -123,6 +124,7 @@ func TestGuideResponseExampleAtomicallyClosesAndReturnsCorrelatedEvidence(t *tes
 		successors[0].Alias().IsZero() || intent.CorrelationHandle().IsZero() || len(intent.Artifacts()) == 0 {
 		t.Fatal("guide work.response does not close its subject while returning correlated evidence")
 	}
+	bindGuideTerminalIntent(t, intent, "completed")
 }
 
 func TestGuideDeclineExampleReturnsCorrelatedDisposition(t *testing.T) {
@@ -145,6 +147,108 @@ func TestGuideDeclineExampleReturnsCorrelatedDisposition(t *testing.T) {
 		intent.CorrelationHandle().IsZero() {
 		t.Fatal("guide work.declined does not close while returning a correlated disposition")
 	}
+	bindGuideTerminalIntent(t, intent, "declined")
+}
+
+func bindGuideTerminalIntent(t *testing.T, intent agency.AgentIntent, suffix string) {
+	t.Helper()
+	operation, err := agency.NewOperationKey("operation:guide-" + suffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates := guideTerminalCandidates(t, intent, operation, suffix)
+	view := guideTerminalView(t, intent)
+	if _, err = agency.BindIntent(agency.BoundIntentSpec{Intent: intent,
+		OperationKey: operation, View: view, Candidates: candidates}); err != nil {
+		t.Fatalf("copyable guide terminal Intent cannot bind to imported View: %v", err)
+	}
+}
+
+func guideTerminalView(t *testing.T, intent agency.AgentIntent) agency.ViewAuthority {
+	t.Helper()
+	principal, err := agency.NewAgentPrincipalID("agent:guide-responder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachmentID, err := agency.NewAttachmentID("attachment:guide-responder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuedAt := time.Unix(1, 0).UTC()
+	attachment, err := agency.NewAttachment(attachmentID, principal, false,
+		issuedAt, issuedAt.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := guideEventRef(t, "event:guide-current", "guide current")
+	handlingID, err := agency.NewHandlingID("handling:guide-current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject, err := agency.NewSubjectBinding(intent.SubjectHandling(), handlingID, head, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replyEvent := guideEventRef(t, "event:guide-request", "guide request")
+	replyOffer, err := agency.NewProvenanceOffer(intent.CorrelationHandle(), replyEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := intent.Successors()
+	if len(targets) != 1 {
+		t.Fatal("guide terminal Intent does not have one reply target")
+	}
+	routeID, err := agency.NewRouteID("route:guide-requester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteAlias, err := agency.NewOpaqueHandle("peer:guide-requester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := agency.ResolveRemoteTarget(targets[0], routeID, remoteAlias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := agency.NewViewAuthority(agency.MachineViewSpec{
+		Attachment: attachment, Consequences: []agency.Consequence{intent.Consequence()},
+		Subjects: []agency.SubjectBinding{subject}, Targets: []agency.ResolvedTarget{resolved},
+		ReplyTo: intent.CorrelationHandle(), ReplyTarget: targets[0],
+		Provenance: []agency.ProvenanceOffer{replyOffer},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return view
+}
+
+func guideTerminalCandidates(t *testing.T, intent agency.AgentIntent,
+	operation agency.OperationKey, suffix string,
+) []agency.CapturedCandidate {
+	t.Helper()
+	candidates := make([]agency.CapturedCandidate, 0, len(intent.Artifacts()))
+	for _, input := range intent.Artifacts() {
+		candidate, err := agency.NewCapturedCandidate(operation, input,
+			agency.Sum([]byte("guide "+suffix+" evidence")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates
+}
+
+func guideEventRef(t *testing.T, idValue, content string) agency.EventRef {
+	t.Helper()
+	id, err := agency.NewEventID(idValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := agency.NewEventRef(id, agency.Sum([]byte(content)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ref
 }
 
 func TestGuideProgressExampleAdvancesExistingAnchorWithoutSuccessor(t *testing.T) {

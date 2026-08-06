@@ -372,6 +372,98 @@ func TestRemoteEffectsRequireLocalResponsibilityAnchor(t *testing.T) {
 	}
 }
 
+func TestExactCorrelatedTerminalReplyMayCloseResponderAnchor(t *testing.T) {
+	principal := mustPrincipal(t, "agent:reply-responder")
+	attachment := mustAttachment(t, "attachment:reply-responder", principal, true)
+	subjectHandle := mustHandle(t, "handling:reply-current")
+	subject := mustSubject(t, subjectHandle, "handling:reply-actual",
+		"event:reply-current", "current", 4)
+	replyHandle := mustHandle(t, "reply-to:request")
+	replyEvent := mustEventRef(t, "event:request-root", "request")
+	replyOffer, err := NewProvenanceOffer(replyHandle, replyEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exactRef := mustAliasTarget(t, "target:requester")
+	exact, _ := ResolveRemoteTarget(exactRef, mustRoute(t, "route:requester"),
+		mustHandle(t, "peer:requester"))
+	otherRef := mustAliasTarget(t, "target:other")
+	other, _ := ResolveRemoteTarget(otherRef, mustRoute(t, "route:other"),
+		mustHandle(t, "peer:other"))
+	otherHandle := mustHandle(t, "reply-to:other")
+	otherOffer, err := NewProvenanceOffer(otherHandle, mustEventRef(t, "event:other", "other"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameEventHandle := mustHandle(t, "reply-to:same-event-other-handle")
+	sameEventOffer, err := NewProvenanceOffer(sameEventHandle, replyEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewFor := func(consequence Consequence) ViewAuthority {
+		return mustView(t, MachineViewSpec{Attachment: attachment,
+			Consequences: []Consequence{consequence}, Subjects: []SubjectBinding{subject},
+			Targets: []ResolvedTarget{exact, other}, ReplyTo: replyHandle, ReplyTarget: exactRef,
+			Provenance: []ProvenanceOffer{replyOffer, otherOffer, sameEventOffer}})
+	}
+
+	for _, consequence := range []Consequence{
+		ConsequenceResolveCompleted, ConsequenceResolveDeclined, ConsequenceResolveUnresolved,
+	} {
+		spec := IntentSpec{Kind: mustLabel(t, "work.reply"), Consequence: consequence,
+			SubjectHandling: subjectHandle, Successors: []TargetRef{exactRef},
+			CorrelationHandle: replyHandle}
+		operation := mustOperation(t, "operation:reply-"+strings.ReplaceAll(consequence.String(), ".", "-"))
+		var captures []CapturedCandidate
+		if consequence == ConsequenceResolveCompleted {
+			spec.Artifacts = []ArtifactInput{mustCandidate(t, "candidate:reply")}
+			captures = []CapturedCandidate{mustCaptured(t, operation, spec.Artifacts[0], "reply evidence")}
+		}
+		intent, err := NewAgentIntent(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bound, err := BindIntent(BoundIntentSpec{Intent: intent, OperationKey: operation,
+			View: viewFor(consequence), Candidates: captures})
+		if err != nil {
+			t.Fatalf("exact %s reply: %v", consequence.String(), err)
+		}
+		correlation, present := bound.Correlation()
+		if targets := bound.Targets(); len(targets) != 1 || targets[0].Requested() != exactRef ||
+			!present || correlation != replyEvent {
+			t.Fatalf("exact reply authority = targets:%#v correlation:%#v/%t", targets,
+				correlation, present)
+		}
+	}
+
+	base := IntentSpec{Kind: mustLabel(t, "work.reply"),
+		Consequence: ConsequenceResolveDeclined, SubjectHandling: subjectHandle,
+		Successors: []TargetRef{exactRef}, CorrelationHandle: replyHandle}
+	for name, mutate := range map[string]func(*IntentSpec){
+		"missing correlation": func(spec *IntentSpec) { spec.CorrelationHandle = OpaqueHandle{} },
+		"wrong correlation":   func(spec *IntentSpec) { spec.CorrelationHandle = otherHandle },
+		"other handle for same correlation": func(spec *IntentSpec) {
+			spec.CorrelationHandle = sameEventHandle
+		},
+		"wrong target":        func(spec *IntentSpec) { spec.Successors = []TargetRef{otherRef} },
+		"extra remote target": func(spec *IntentSpec) { spec.Successors = []TargetRef{exactRef, otherRef} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			spec := base
+			mutate(&spec)
+			intent, err := NewAgentIntent(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := BindIntent(BoundIntentSpec{Intent: intent,
+				OperationKey: mustOperation(t, "operation:invalid-"+strings.ReplaceAll(name, " ", "-")),
+				View:         viewFor(ConsequenceResolveDeclined)}); !errors.Is(err, ErrInvariant) {
+				t.Fatalf("error = %v, want ErrInvariant", err)
+			}
+		})
+	}
+}
+
 func TestReceiptBindsExactOperationAndMonotonicTime(t *testing.T) {
 	first := mustBoundRoot(t, "op:first")
 	second := mustBoundRoot(t, "op:second")

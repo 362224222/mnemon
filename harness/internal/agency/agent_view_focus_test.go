@@ -19,6 +19,7 @@ func TestAgentViewProjectsRelatedEvidenceWithoutWritableSubjectAuthority(t *test
 			mustSubject(t, current, "handling:focus", "event:focus-root", "focus-root", 3),
 		},
 		Artifacts: []ViewArtifactOffer{mustViewOffer(t, artifact, "review result")},
+		ReplyTo:   current,
 		Provenance: []ProvenanceOffer{
 			mustProvenance(t, current, "event:focus-root", "focus-root"),
 			mustProvenance(t, related, "event:focus-result", "focus-result"),

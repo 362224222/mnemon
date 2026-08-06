@@ -149,7 +149,8 @@ func (view AgentView) CanonicalJSON() []byte { return copyBytes(view.canonical) 
 func projectCurrent(spec *AgentViewCurrentSpec, authority ViewAuthority) (*agentViewCurrentWire, map[string]struct{}, error) {
 	artifacts := make(map[string]struct{})
 	if spec == nil {
-		if len(authority.subjects) != 0 || !authority.replyTarget.IsZero() {
+		if len(authority.subjects) != 0 || !authority.replyTo.IsZero() ||
+			!authority.replyTarget.IsZero() {
 			return nil, nil, invariant("Agent View current", "sealed subject must be projected")
 		}
 		return nil, artifacts, nil
@@ -162,6 +163,9 @@ func projectCurrent(spec *AgentViewCurrentSpec, authority ViewAuthority) (*agent
 	}
 	if _, offered := authority.subjects[spec.Subject.String()]; !offered || len(authority.subjects) != 1 {
 		return nil, nil, invariant("Agent View current", "subject was not the sealed current subject")
+	}
+	if spec.ReplyTo != authority.replyTo {
+		return nil, nil, invariant("Agent View current", "reply-to does not match sealed reply authority")
 	}
 	if _, offered := authority.provenance[spec.ReplyTo.String()]; !offered {
 		return nil, nil, invariant("Agent View current", "reply-to was not offered as provenance")

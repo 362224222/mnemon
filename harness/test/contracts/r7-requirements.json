@@ -165,6 +165,10 @@
           "test": "./internal/authority::TestBoundIntentFaultMatrixCommitsWholeOriginOutcomeOrNone"
         },
         {
+          "id": "correlated-terminal-reply-transaction-fault",
+          "test": "./internal/authority::TestCorrelatedTerminalReplyOutboxFaultRestoresResponderHandling"
+        },
+        {
           "id": "peer-delivery-transaction-fault-matrix",
           "test": "./internal/authority::TestVerifiedPeerDeliveryFaultMatrixCommitsWholeReceiverOutcomeOrNone"
         },
@@ -178,16 +182,40 @@
       "id": "P-06",
       "oracles": [
         {
+          "id": "correlated-terminal-reply-revalidates-route",
+          "test": "./internal/authority::TestCorrelatedTerminalReplyRejectsRevokedBoundRoute"
+        },
+        {
           "id": "delivery-id-envelope-conflict",
           "test": "./internal/authority::TestPeerInboxRejectsSameDeliveryIDDifferentEnvelope"
+        },
+        {
+          "id": "exact-correlated-terminal-reply-shape",
+          "test": "./internal/agency::TestExactCorrelatedTerminalReplyMayCloseResponderAnchor"
+        },
+        {
+          "id": "guide-completed-terminal-binds",
+          "test": "./internal/attach::TestGuideResponseExampleAtomicallyClosesAndReturnsCorrelatedEvidence"
+        },
+        {
+          "id": "guide-declined-terminal-binds",
+          "test": "./internal/attach::TestGuideDeclineExampleReturnsCorrelatedDisposition"
         },
         {
           "id": "imported-handling-preserves-reply-context-across-advance",
           "test": "./internal/authority::TestImportedHandlingKeepsReplyContextAcrossLocalAdvance"
         },
         {
+          "id": "imported-terminal-reply-round-trip",
+          "test": "./internal/authority::TestImportedTerminalDispositionClosesResponderAndReturnsToRequester"
+        },
+        {
           "id": "missing-artifact-creates-no-fact",
           "test": "./internal/authority::TestMissingPeerArtifactExpiresWithoutCreatingDomainState"
+        },
+        {
+          "id": "ordinary-remote-effects-retain-anchor",
+          "test": "./internal/agency::TestRemoteEffectsRequireLocalResponsibilityAnchor"
         },
         {
           "id": "peer-response-preserves-correlation-root",
@@ -487,14 +515,18 @@
             "test:./internal/agency::TestAgentViewMaximumReferenceAndPayloadShapeRemainsReadable",
             "test:./internal/agency::TestAgentViewProjectsRelatedEvidenceWithoutWritableSubjectAuthority",
             "test:./internal/agency::TestCanonicalObjectsHaveHardTotalByteLimits",
+            "test:./internal/agency::TestExactCorrelatedTerminalReplyMayCloseResponderAnchor",
             "test:./internal/agency::TestParseAgentIntentJSONRejectsAuthorityAndMalformedShapes",
             "test:./internal/agency::TestPeerDeliveryRejectsOversizeCanonicalInputs",
             "test:./internal/agency::TestR7GapP01UnofferedHandlesFailClosed",
             "test:./internal/agency::TestR7GapP02OpenLabelsAndClosedShapes",
             "test:./internal/agency::TestR7GapP08InvalidReferenceKeysFailClosed",
             "test:./internal/agency::TestR7GapP09SuccessorBoundFailsClosed",
+            "test:./internal/agency::TestRemoteEffectsRequireLocalResponsibilityAnchor",
             "test:./internal/agency::TestVerifiedPeerArtifactBounds",
             "test:./internal/agency::TestVerifiedPeerDeliveryRequiresParsedEnvelopeAndCompleteArtifacts",
+            "test:./internal/attach::TestGuideDeclineExampleReturnsCorrelatedDisposition",
+            "test:./internal/attach::TestGuideResponseExampleAtomicallyClosesAndReturnsCorrelatedEvidence",
             "test:./internal/attach::TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface",
             "test:./internal/attach::TestPiHookRetriesOnePrivateBoundaryAndEmitsNoCueOnFailure",
             "test:./internal/authority::TestAcceptedOperationReplayPrecedesStaleSubjectAndReferenceAuthority",
@@ -510,6 +542,8 @@
             "test:./internal/authority::TestConcurrentDifferentCurrentOperationsCreateOneLiveClaim",
             "test:./internal/authority::TestConcurrentExistingReferenceHeadCASAcceptsExactlyOneMutation",
             "test:./internal/authority::TestConcurrentReferenceCASAcceptsExactlyOneCandidate",
+            "test:./internal/authority::TestCorrelatedTerminalReplyOutboxFaultRestoresResponderHandling",
+            "test:./internal/authority::TestCorrelatedTerminalReplyRejectsRevokedBoundRoute",
             "test:./internal/authority::TestCurrentKeepsEscapedCurrentAndOmitsRelatedBeyondEncodedBudget",
             "test:./internal/authority::TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult",
             "test:./internal/authority::TestCurrentLeastAttendedSelectionSurvivesBoundaryWithoutAdvance",
@@ -523,6 +557,7 @@
             "test:./internal/authority::TestFreshBoundaryAtomicallyReplacesPredecessorWithoutDomainEffect",
             "test:./internal/authority::TestFreshCurrentDurablySettlesExpiredClaimWithoutDomainEffect",
             "test:./internal/authority::TestImportedHandlingKeepsReplyContextAcrossLocalAdvance",
+            "test:./internal/authority::TestImportedTerminalDispositionClosesResponderAndReturnsToRequester",
             "test:./internal/authority::TestInteractiveAttachmentBeginCannotReviveEndedBoundary",
             "test:./internal/authority::TestInteractiveAttachmentBeginExactlyReplaysAcrossRestart",
             "test:./internal/authority::TestInteractiveAttachmentBeginRejectsSameOperationDifferentPrincipal",

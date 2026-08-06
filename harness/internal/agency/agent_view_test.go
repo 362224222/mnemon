@@ -23,6 +23,7 @@ func TestAgentViewProjectsOnlyBoundedPublicWorld(t *testing.T) {
 
 	authority := mustView(t, MachineViewSpec{
 		Attachment: attachment,
+		ReplyTo:    currentHandle,
 		Consequences: []Consequence{
 			ConsequenceCreateHandlings, ConsequenceAdvanceHandling,
 			ConsequenceResolveCompleted, ConsequenceSupersedeReference, ConsequenceRetractReference,
@@ -123,6 +124,7 @@ func TestAgentViewRejectsProjectionThatDivergesFromAuthority(t *testing.T) {
 	viewHandle := mustHandle(t, "view:projection-check")
 	authority := mustView(t, MachineViewSpec{
 		Attachment:   attachment,
+		ReplyTo:      currentHandle,
 		Consequences: []Consequence{ConsequenceAdvanceHandling},
 		Subjects: []SubjectBinding{
 			mustSubject(t, currentHandle, "handling:private", "event:head", "head", 3),
@@ -201,6 +203,7 @@ func TestAgentViewHasByteAndApproximateTokenRegressionBudget(t *testing.T) {
 	artifact := mustHandle(t, "artifact:current")
 	authority := mustView(t, MachineViewSpec{
 		Attachment: attachment,
+		ReplyTo:    current,
 		Consequences: []Consequence{
 			ConsequenceCreateHandlings, ConsequenceAdvanceHandling, ConsequenceResolveCompleted,
 			ConsequenceResolveDeclined, ConsequenceResolveUnresolved, ConsequencePublishReference,
@@ -287,8 +290,12 @@ func TestAgentViewMaximumReferenceAndPayloadShapeRemainsReadable(t *testing.T) {
 		t.Fatal(err)
 	}
 	targets := []ResolvedTarget{self}
+	var replyTarget TargetRef
 	for index := 0; index < 8; index++ { // R7 freezes eight active Peer routes.
 		requested := mustAliasTarget(t, longToken("target", index, MaxOpaqueHandleBytes))
+		if index == 0 {
+			replyTarget = requested
+		}
 		remote := mustHandle(t, longToken("remote", index, MaxOpaqueHandleBytes))
 		resolved, err := ResolveRemoteTarget(requested,
 			mustRoute(t, longToken("route", index, MaxOpaqueHandleBytes)), remote)
@@ -298,9 +305,10 @@ func TestAgentViewMaximumReferenceAndPayloadShapeRemainsReadable(t *testing.T) {
 		targets = append(targets, resolved)
 	}
 	authority := mustView(t, MachineViewSpec{
-		Attachment: attachment, Consequences: []Consequence{ConsequenceAdvanceHandling},
-		Subjects:   []SubjectBinding{mustSubject(t, current, "handling:private", "event:head", "head", 1)},
-		References: references, Artifacts: artifacts, Targets: targets,
+		Attachment: attachment, ReplyTo: current, ReplyTarget: replyTarget,
+		Consequences: []Consequence{ConsequenceAdvanceHandling},
+		Subjects:     []SubjectBinding{mustSubject(t, current, "handling:private", "event:head", "head", 1)},
+		References:   references, Artifacts: artifacts, Targets: targets,
 		Provenance: []ProvenanceOffer{mustProvenance(t, current, "event:head", "head"),
 			mustProvenance(t, relatedEvent, "event:related", "related")},
 	})
@@ -330,6 +338,7 @@ func TestAgentViewFailsClosedAboveCanonicalByteLimit(t *testing.T) {
 	attachment := mustAttachment(t, "attachment:view-last-line-bound", principal, true)
 	current := mustHandle(t, "subject:view-last-line-bound")
 	authority := mustView(t, MachineViewSpec{Attachment: attachment,
+		ReplyTo:      current,
 		Consequences: []Consequence{ConsequenceAdvanceHandling},
 		Subjects: []SubjectBinding{mustSubject(t, current, "handling:last-line",
 			"event:last-line", "last-line", 1)},

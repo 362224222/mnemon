@@ -103,6 +103,9 @@ func agentViewCurrentSpecFromWire(wire *agentViewCurrentWire, authority ViewAuth
 	if err != nil {
 		return nil, err
 	}
+	if replyTo != authority.replyTo {
+		return nil, invariant("Agent View current", "reply-to does not match sealed reply authority")
+	}
 	if _, offered := authority.provenance[replyTo.String()]; !offered {
 		return nil, invariant("Agent View current", "reply-to does not match sealed provenance")
 	}
