@@ -405,6 +405,58 @@ func TestPiHookRetriesOnePrivateBoundaryAndEmitsNoCueOnFailure(t *testing.T) {
 	}
 }
 
+func TestPiHookBoundsGovernedToolAttemptsAndRestoresAtSettlement(t *testing.T) {
+	projection, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(projection.PiExtension())
+	for _, required := range []string{
+		"const MAX_TOOL_CALL_ATTEMPTS_PER_RUN = 16;",
+		`pi.on("tool_call"`, `pi.on("turn_start"`, `pi.on("agent_settled"`,
+		"toolCallAttempts < MAX_TOOL_CALL_ATTEMPTS_PER_RUN",
+		"savedActiveTools = [...pi.getActiveTools()];",
+		"ownsToolOverride = true;",
+		"pi.setActiveTools([]);",
+		"return { block: true, reason: ATTENTION_EXHAUSTED_REASON };",
+		"if (postBudgetTurns > 1) abortOnce(ctx);",
+		"pi.setActiveTools(savedActiveTools);",
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("Pi bounded attention lacks %q", required)
+		}
+	}
+	if strings.Count(source, `pi.on("agent_settled"`) != 1 ||
+		strings.Contains(source, `pi.on("agent_end"`) {
+		t.Fatal("Pi attention may reset only after the complete run settles")
+	}
+	if strings.Count(source, "resetAttention()") != 4 ||
+		!strings.Contains(source, "if (!resetAttention()) return undefined;") {
+		t.Fatal("Pi attention is not reset at run start, settlement, and shutdown")
+	}
+	before := regexp.MustCompile(`(?s)pi\.on\("before_agent_start".*?if \(!resetAttention\(\)\) return undefined;.*?` +
+		`if \(!attachBoundary\(boundary\)\) return undefined;.*?governedRun = true;`)
+	if !before.MatchString(source) {
+		t.Fatal("Pi attachment failure can inherit or activate a governed tool budget")
+	}
+	restore := regexp.MustCompile(`(?s)try \{\s*pi\.setActiveTools\(savedActiveTools\);\s*` +
+		`ownsToolOverride = false;\s*savedActiveTools = undefined;\s*return true;\s*` +
+		`} catch \{.*?return false;\s*}`)
+	if !restore.MatchString(source) {
+		t.Fatal("Pi failed restore can discard the exact tool snapshot or open a new run")
+	}
+	reason := regexp.MustCompile(`(?s)const ATTENTION_EXHAUSTED_REASON =\s*"([^"]+)";`).
+		FindStringSubmatch(source)
+	if len(reason) != 2 || len(reason[1]) > 192 {
+		t.Fatalf("Pi attention diagnostic is absent or unbounded: %q", reason)
+	}
+	for _, forbidden := range []string{"accepted", "completed", "receipt", "event", "handling"} {
+		if strings.Contains(strings.ToLower(reason[1]), forbidden) {
+			t.Fatalf("Pi attention diagnostic claims protocol meaning %q", forbidden)
+		}
+	}
+}
+
 func TestInstallPiIsProjectLocalExactAndPreservesAdjacentFiles(t *testing.T) {
 	workspace := testWorkspace(t)
 	legacy := filepath.Join(workspace, ".pi", "skills", "mnemon", "SKILL.md")

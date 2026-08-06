@@ -357,6 +357,10 @@
           "test": "./internal/agency::TestVerifiedPeerArtifactBounds"
         },
         {
+          "id": "pi-tool-call-budget-fails-closed",
+          "test": "./internal/attach::TestPiHookBoundsGovernedToolAttemptsAndRestoresAtSettlement"
+        },
+        {
           "id": "reference-projection-bound-fails-closed",
           "test": "./internal/authority::TestReferenceProjectionBoundDoesNotOfferPublishAboveLimit"
         },
@@ -528,6 +532,7 @@
             "test:./internal/attach::TestGuideDeclineExampleReturnsCorrelatedDisposition",
             "test:./internal/attach::TestGuideResponseExampleAtomicallyClosesAndReturnsCorrelatedEvidence",
             "test:./internal/attach::TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface",
+            "test:./internal/attach::TestPiHookBoundsGovernedToolAttemptsAndRestoresAtSettlement",
             "test:./internal/attach::TestPiHookRetriesOnePrivateBoundaryAndEmitsNoCueOnFailure",
             "test:./internal/authority::TestAcceptedOperationReplayPrecedesStaleSubjectAndReferenceAuthority",
             "test:./internal/authority::TestAdmissionRejectsSameOperationKeyWithDifferentRequestDigest",

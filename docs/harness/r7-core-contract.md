@@ -513,6 +513,16 @@ per Event, keeps at most eight active References and eight active Peer routes,
 and limits semantic payload to 4 KiB of JSON-encoded string content; larger
 content belongs in an Artifact. Agent and peer input that exceeds a bound fails
 closed rather than being truncated, and no semantic payload can raise a bound.
+The Pi reference attachment admits at most sixteen tool calls in one governed
+run. The next call is blocked before execution, later calls in the same batch
+remain blocked, and the Runtime receives one tool-free turn to summarize
+existing evidence before a repeated turn is aborted. Automatic retry or
+compaction cannot refresh this budget: the attachment restores the exact tool
+set captured at cutoff only after Pi reports the whole run settled. Attachment
+failure leaves an ordinary Pi run untouched. A failed tool restore retains the
+exact snapshot and prevents a later governed run until restoration succeeds.
+This is a Runtime attention bound; it creates no Event, Receipt, completion, or
+other domain fact.
 These cross-field maxima are tested together, not only one at a time, so every
 accepted responsibility remains representable within the 16 KiB private and
 Agent View envelopes. Internal
@@ -687,7 +697,7 @@ unbound, partially proven, or failing.
 | P-06 | Authenticated delivery is re-admitted under the restricted peer subset; rejection creates no receiving fact; acceptance creates a new receiving Event, preserves provenance and an unchanged stable correlation root, resolves the target locally, and follows the bounded outbox/inbox lifecycle; an imported Handling preserves its authenticated reply context across local advances; root and ordinary remote terminal actions cannot export their sole responsibility, while an exact correlated terminal disposition may atomically close only the responder's imported Handling, create exactly one return delivery, and leave the requester's original Handling open; wrong handles, targets, stale routes, remote rejection, and expiry fail closed. |
 | P-07 | Same key/same digest replays the byte-stable attachment-begin proof, frozen View including its focus projection, admission Receipt, or internal outcome before the relevant mutable validation; same key/different digest conflicts; Host retries reuse one nonce and compare replayed proof with private journal authority; response loss, missing journal commit, restart, and retry create at most one attachment, claim, local Event, or machine disposition; begin replay never renews expiry or revives an ended boundary. |
 | P-08 | Valid first-publish key creation without a prior handle, invalid key rejection, first-publish CAS, concurrent first publish, active supersede, tombstone retract/reactivation, stale head, forward reference, concurrent mutation, and replay all match section 5; a provenance citation records the exact head, mutates nothing, and cannot stand in for a Reference action. |
-| P-09 | Any missing or mismatched Artifact keeps peer input unadmitted and cannot activate a Reference or complete; every Agent/peer resource bound fails closed independently and payload cannot raise it; the maximum accepted payload, Artifact, Reference, route, current, and related combination remains representable; related evidence has explicit prefix/count/truncation, and JSON-escaped current plus related payloads cannot overflow the focus or canonical View budget; more than the expiry-maintenance limit settles only the bounded prefix and leaves all excess claims unchanged for later natural turns. |
+| P-09 | Any missing or mismatched Artifact keeps peer input unadmitted and cannot activate a Reference or complete; every Agent/peer resource bound fails closed independently and payload cannot raise it; Pi executes no more than sixteen tool calls per governed run, blocks the excess batch, permits one tool-free settlement turn, and cannot refresh the budget through automatic continuation; the maximum accepted payload, Artifact, Reference, route, current, and related combination remains representable; related evidence has explicit prefix/count/truncation, and JSON-escaped current plus related payloads cannot overflow the focus or canonical View budget; more than the expiry-maintenance limit settles only the bounded prefix and leaves all excess claims unchanged for later natural turns. |
 | P-10 | Only explicit completed with attached verified Artifact projects completed; other terminal outcomes close without Artifact; final/exit/idle/provider/ACK/disposition cannot complete. |
 
 Ten rows is the point. A row may bind several test symbols, but it is verified
