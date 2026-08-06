@@ -86,12 +86,12 @@ func assertGuideTerminalSurface(t *testing.T, guide string) {
 	}
 	normalized := strings.Join(strings.Fields(guide), " ")
 	for _, required := range []string{
-		"current remains the local causal anchor",
-		"A `self` successor creates another responsibility; never use it as reply keepalive",
-		"The anchor awaits the outcome; sending does not complete the work",
-		"A request for evidence, action, or decision returns exactly one correlated terminal disposition",
+		"The current is the local anchor",
+		"Self creates responsibility, never reply keepalive",
+		"The sender anchor waits for the outcome; sending is not completion",
+		"Every imported request for evidence, action, or decision returns exactly one correlated terminal disposition",
 		"including declined or unresolved; never close it silently",
-		"A one-way report, duplicate/stale input, or correlated response needing no new remote work closes locally without successors",
+		"A report, duplicate/stale input, or correlated response needing no new remote work closes locally",
 		"Never acknowledge a report or Receipt",
 	} {
 		if !strings.Contains(normalized, required) {
