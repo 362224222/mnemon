@@ -150,6 +150,23 @@ payload, or episode ancestry to prioritize work. A stale responsibility may
 therefore cause a bounded budget failure, and the report preserves that result
 instead of silently draining or cancelling it.
 
+## Evidence interpretation
+
+This fixture separately reports accepted peer observations, observations
+projected into bounded Views, Event citations submitted by Agents, and the
+independent service outcome. The first three prove protocol transport,
+projection, and provenance; none proves that a model read, understood, or
+considered every peer contribution. A rotated View fence proves issuance, not
+model consumption, and `truncated` means only that the current View omitted
+related evidence. It is not an unread-message counter or an all-peer barrier.
+
+Agent summaries remain untrusted semantic content, and forwarding an Artifact
+does not imply local adoption by its receiver. Therefore only the independent
+service postcondition can close the global recovery claim. The current protocol
+supports bounded fan-in reasoning with direct-outcome closure; exhaustive
+review coverage would require a separate explicit capability and is not inferred
+from Event causation or reply delivery.
+
 ## Fixture boundary
 
 Files under `domains/` are projected into the corresponding Agent workspaces.
