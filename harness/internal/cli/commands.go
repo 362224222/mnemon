@@ -181,7 +181,7 @@ func (app *App) runSubmit(ctx context.Context, store *journalStore, client agenc
 		}
 		candidates, err := journal.bindCandidates(intent)
 		if err != nil {
-			return err
+			return candidateBindingControlError(err)
 		}
 		operation, err := deriveAdmissionOperation(journal.CurrentOperation, intent, candidates)
 		if err != nil {
@@ -232,6 +232,19 @@ func (app *App) runSubmit(ctx context.Context, store *journalStore, client agenc
 	defer terminal.clear()
 	app.finishPresentedReceipt(ctx, store, client, terminal)
 	return 0
+}
+
+func candidateBindingControlError(err error) error {
+	switch {
+	case errors.Is(err, errCandidateNotCaptured):
+		return newControlError(codeArtifactInvalid,
+			"Artifact candidate handle was not returned by capture in this Hook boundary; use view_handle for a View-offered Artifact")
+	case errors.Is(err, errCandidateRepeated):
+		return newControlError(codeInvalidArgument,
+			"Intent repeats an Artifact candidate")
+	default:
+		return err
+	}
 }
 
 func intentInputControlError(err error) *controlError {

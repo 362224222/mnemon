@@ -103,6 +103,42 @@ func TestAgentSubmitCommandAndStdinDiagnosticsAreActionable(t *testing.T) {
 	}
 }
 
+func TestAgentSubmitReportsUncapturedCandidateAsArtifactInput(t *testing.T) {
+	fixture := newAppFixture(t)
+	fixture.attach(t)
+	if exit := fixture.app(strings.NewReader(""), io.Discard).
+		Run(context.Background(), []string{"agent", "current", "--json"}); exit != 0 {
+		t.Fatalf("Current exit = %d", exit)
+	}
+
+	var output bytes.Buffer
+	exit := fixture.app(bytes.NewReader(candidateRootIntent(t, "artifact:not-captured")), &output).
+		Run(context.Background(), []string{"agent", "submit", "--json"})
+	if exit != codeArtifactInvalid.exitStatus() ||
+		!strings.Contains(output.String(), `"code":"artifact_invalid"`) ||
+		!strings.Contains(output.String(), "not returned by capture") ||
+		!strings.Contains(output.String(), "use view_handle") ||
+		strings.Contains(output.String(), string(codeAuthenticationFailed)) {
+		t.Fatalf("uncaptured candidate diagnostic = exit %d output %q", exit, output.String())
+	}
+	fixture.client.mu.Lock()
+	submitCalls := len(fixture.client.submitOperations)
+	fixture.client.mu.Unlock()
+	if submitCalls != 0 {
+		t.Fatalf("uncaptured candidate reached authority %d times", submitCalls)
+	}
+	if exit := fixture.app(strings.NewReader("captured after correction"), io.Discard).
+		Run(context.Background(), []string{"artifact", "capture", "--json"}); exit != 0 {
+		t.Fatalf("capture after candidate diagnostic exit = %d", exit)
+	}
+	output.Reset()
+	exit = fixture.app(bytes.NewReader(candidateRootIntent(t, "artifact:test-candidate")), &output).
+		Run(context.Background(), []string{"agent", "submit", "--json"})
+	if exit != 0 || !strings.Contains(output.String(), `"outcome":"accepted"`) {
+		t.Fatalf("corrected candidate submit = exit %d output %q", exit, output.String())
+	}
+}
+
 func TestIntentInputDiagnosticDoesNotEchoUnknownValidationText(t *testing.T) {
 	err := &agency.ValidationError{Category: agency.ErrInvariant,
 		Field: "secret-field-sentinel", Problem: "secret-problem-sentinel"}
