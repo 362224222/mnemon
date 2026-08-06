@@ -63,6 +63,10 @@ func (app *App) Run(ctx context.Context, args []string) int {
 	}
 	command := classify(args)
 	if !validArguments(command, args) {
+		if command == commandSubmit {
+			return app.writeError(newControlError(codeInvalidArgument,
+				"use exactly mnemon-harness agent submit --json and provide Intent JSON on stdin"))
+		}
 		return app.writeError(newControlError(codeInvalidArgument,
 			"R7 Agent command requires its exact --json form"))
 	}

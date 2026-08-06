@@ -14,7 +14,7 @@ const (
 	cueAsset       = "assets/hook-cue.txt"
 	extensionAsset = "assets/pi/mnemond.ts"
 
-	MaxGuideBytes     = 8 << 10
+	MaxGuideBytes     = 6 << 10
 	MaxCueBytes       = 160
 	MaxExtensionBytes = 8 << 10
 )

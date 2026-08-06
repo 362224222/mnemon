@@ -148,6 +148,32 @@ func TestGuideTracksCanonicalAgentIntentFieldsAndClosedShapes(t *testing.T) {
 	}
 }
 
+func TestGuideFirstSubmitExampleIsAValidCompleteIntent(t *testing.T) {
+	projection, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	guide := string(projection.Guide())
+	match := regexp.MustCompile(`(?s)mnemon-harness agent submit --json <<'JSON'\n([^\n]+)\nJSON`).
+		FindStringSubmatch(guide)
+	if len(match) != 2 {
+		t.Fatal("guide lacks one complete quoted-heredoc submit example")
+	}
+	intent, err := agency.ParseAgentIntentJSON([]byte(match[1]))
+	if err != nil {
+		t.Fatalf("guide's first submit example is not a valid AgentIntent: %v", err)
+	}
+	if intent.Consequence() != agency.ConsequenceCreateHandlings || len(intent.Successors()) == 0 {
+		t.Fatal("guide's first submit example is not a complete root Intent")
+	}
+	for _, forbidden := range []string{`VIEW_OFFERED_CONSEQUENCE`, `"kind":"MEANING"`,
+		`"reference_key":"NEW_KEY"`} {
+		if strings.Contains(guide, forbidden) {
+			t.Fatalf("guide contains an invalid copyable placeholder %q", forbidden)
+		}
+	}
+}
+
 func TestPiHookTimeoutCoversEnsureAndCleanupWithinOneFixedBound(t *testing.T) {
 	projection, err := Load()
 	if err != nil {

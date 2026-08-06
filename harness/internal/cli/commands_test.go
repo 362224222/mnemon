@@ -29,7 +29,26 @@ func TestAgentSubmitReturnsBoundedInputDiagnostics(t *testing.T) {
 		{name: "duplicate", input: `{"kind":"work","kind":"work","payload":"brief","consequence":"handling.create"}`,
 			code: codeInvalidArgument, message: "contains a duplicate JSON field"},
 		{name: "shape", input: `{"kind":"work","payload":"brief","consequence":"not.closed"}`,
-			code: codeInvalidArgument, message: "invalid canonical field or structural shape"},
+			code: codeInvalidArgument, message: "copied exactly from the current View allowed_intents"},
+		{name: "root-shape", input: `{"kind":"work","payload":"brief","consequence":"handling.create"}`,
+			code: codeInvalidArgument, message: "requires at least one View-offered successor"},
+		{name: "subject-shape", input: `{"kind":"work","payload":"brief","consequence":"handling.advance"}`,
+			code: codeInvalidArgument, message: "requires current.facts.handle as subject_handling"},
+		{name: "reference-publish-shape",
+			input: `{"kind":"work","payload":"brief","consequence":"reference.publish","reference_key":"knowledge.current"}`,
+			code:  codeInvalidArgument, message: "requires one new reference_key, exactly one Artifact"},
+		{name: "reference-supersede-shape",
+			input: `{"kind":"work","payload":"brief","consequence":"reference.supersede","reference_head":"reference:head"}`,
+			code:  codeInvalidArgument, message: "requires one View-offered reference_head, exactly one Artifact"},
+		{name: "reference-retract-shape",
+			input: `{"kind":"work","payload":"brief","consequence":"reference.retract","reference_head":"reference:head","artifacts":[{"kind":"view_handle","handle":"artifact:offered"}]}`,
+			code:  codeInvalidArgument, message: "requires one View-offered reference_head, no Artifact"},
+		{name: "target-shape",
+			input: `{"kind":"work","payload":"brief","consequence":"handling.create","successors":[{"self":true,"alias":"target:peer"}]}`,
+			code:  codeInvalidArgument, message: "exactly one of self:true or one View-offered alias"},
+		{name: "artifact-kind",
+			input: `{"kind":"work","payload":"brief","consequence":"reference.publish","reference_key":"knowledge.current","artifacts":[{"kind":"other","handle":"artifact:candidate"}]}`,
+			code:  codeInvalidArgument, message: "Artifact kind must be exactly candidate or view_handle"},
 		{name: "field-bound",
 			input: `{"kind":"work","payload":"` + strings.Repeat("x", agency.MaxSemanticPayloadBytes+1) +
 				`","consequence":"handling.create"}`,
@@ -54,6 +73,45 @@ func TestAgentSubmitReturnsBoundedInputDiagnostics(t *testing.T) {
 				t.Fatalf("invalid input reached authority %d times", submitCalls)
 			}
 		})
+	}
+}
+
+func TestAgentSubmitCommandAndStdinDiagnosticsAreActionable(t *testing.T) {
+	fixture := newAppFixture(t)
+	fixture.attach(t)
+	for _, test := range []struct {
+		name    string
+		args    []string
+		message string
+	}{
+		{name: "json passed as argument",
+			args:    []string{"agent", "submit", "--json", `{}`},
+			message: "use exactly mnemon-harness agent submit --json and provide Intent JSON on stdin"},
+		{name: "empty stdin", args: []string{"agent", "submit", "--json"},
+			message: "provide exactly one Intent JSON object on stdin with a quoted heredoc"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			exit := fixture.app(strings.NewReader(""), &output).Run(context.Background(), test.args)
+			if exit != codeInvalidArgument.exitStatus() && exit != codeContentRequired.exitStatus() {
+				t.Fatalf("submit diagnostic exit = %d output %q", exit, output.String())
+			}
+			if !strings.Contains(output.String(), test.message) {
+				t.Fatalf("submit diagnostic output = %q, want %q", output.String(), test.message)
+			}
+		})
+	}
+}
+
+func TestIntentInputDiagnosticDoesNotEchoUnknownValidationText(t *testing.T) {
+	err := &agency.ValidationError{Category: agency.ErrInvariant,
+		Field: "secret-field-sentinel", Problem: "secret-problem-sentinel"}
+	diagnostic := intentInputControlError(err)
+	if strings.Contains(diagnostic.Message, "secret-field-sentinel") ||
+		strings.Contains(diagnostic.Message, "secret-problem-sentinel") ||
+		diagnostic.Code != codeInvalidArgument ||
+		!strings.Contains(diagnostic.Message, "invalid canonical field or structural shape") {
+		t.Fatalf("unknown validation diagnostic = %#v", diagnostic)
 	}
 }
 

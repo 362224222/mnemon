@@ -60,7 +60,9 @@ envelope collapse by precedence to accepted, rejected, control denial, or
 invocation failure. `turns[].submit_invocation_failures` therefore counts
 envelopes that exposed no Receipt or admission diagnostic. These Runtime
 observations never prove or contribute evidence of an Effect; only stopped
-authority state does that.
+authority state does that. `turns[].submit_control_diagnostics` retains only the
+bounded, deduplicated control code and safe CLI message needed to diagnose an
+Agent-surface failure; it contains no submitted Intent or provider prose.
 
 The passed runner report is `mnemon.r7.domain-ops.live-report` version 2. It
 contains two ordered service-world episodes and a bounded authority boundary

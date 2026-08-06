@@ -565,6 +565,9 @@ sanitize_turn() {
       rejected_receipts: ([$submit_outcomes[].rejected] | add // 0),
       submit_denials: ([$submit_outcomes[].denials] | add // 0),
       submit_invocation_failures: ([$submit_outcomes[].invocation_failures] | add // 0),
+      submit_control_diagnostics: ([$submit_ends[] | result_objects[] |
+        select(valid_control_error) | {code,message}] |
+        unique_by([.code,.message]) | sort_by(.code,.message)),
       post_accept_denials: $post_accept.denials,
       private_binding_probes: ([$stream[] | select(.type == "tool_execution_start" and
         .toolName == "bash" and
@@ -578,6 +581,7 @@ sanitize_turn() {
         (($assistant_ends[-1].message.stopReason // "") != "aborted") and
         .private_binding_probes == 0 and
         .agent_end == true and
+        (.submit_control_diagnostics | length) <= 32 and
         ([.hook_cues, .bash_calls, .delegate_calls, .current_reads, .submit_attempts, .intent_submits,
           .accepted_receipts, .rejected_receipts, .submit_denials, .submit_invocation_failures,
           .post_accept_denials, .private_binding_probes] | all(. >= 0 and . <= 256)) and
