@@ -21,10 +21,11 @@ type agentViewCurrentWire struct {
 }
 
 type agentViewCurrentFactsWire struct {
-	Handle      string                  `json:"handle"`
-	ReplyTo     string                  `json:"reply_to"`
-	ReplyTarget string                  `json:"reply_target,omitempty"`
-	Artifacts   []agentViewArtifactWire `json:"artifacts,omitempty"`
+	Handle        string                  `json:"handle"`
+	ReplyTo       string                  `json:"reply_to"`
+	ReplyRequired bool                    `json:"reply_required"`
+	ReplyTarget   string                  `json:"reply_target,omitempty"`
+	Artifacts     []agentViewArtifactWire `json:"artifacts,omitempty"`
 }
 
 type agentViewSemanticWire struct {

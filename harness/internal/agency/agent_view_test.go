@@ -82,6 +82,7 @@ func assertAgentViewProjection(t *testing.T, view AgentView, currentHandle Opaqu
 		t.Fatalf("Agent View envelope = %#v", wire)
 	}
 	if wire.Current == nil || wire.Current.Facts.Handle != currentHandle.String() ||
+		wire.Current.Facts.ReplyRequired ||
 		wire.Current.Semantic.Kind != "custom.agent.signal" || len(wire.Current.Facts.Artifacts) != 1 {
 		t.Fatalf("current projection = %#v", wire.Current)
 	}

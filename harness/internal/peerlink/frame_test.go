@@ -244,7 +244,8 @@ func testDelivery(t *testing.T, routeName string, artifact []byte) (agency.PeerD
 	acceptedAt := time.Date(2026, 8, 3, 8, 0, 0, 0, time.UTC)
 	delivery, err := agency.NewPeerDelivery(route, agency.PeerDeliverySpec{
 		OriginEvent: event, OriginSequence: 1, OriginAcceptedAt: acceptedAt,
-		OriginSource: principal, TargetAlias: target, Kind: kind, Payload: payload,
+		OriginSource: principal, OriginConsequence: agency.ConsequenceCreateHandlings,
+		OriginTargetCount: 2, TargetAlias: target, Kind: kind, Payload: payload,
 		Artifacts: []agency.Digest{agency.Sum(artifact)}, CausalDepth: 1,
 		ExpiresAt: acceptedAt.Add(time.Hour),
 	})

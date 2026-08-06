@@ -45,6 +45,13 @@ func currentReplyContextTx(ctx context.Context, tx *sql.Tx,
 			result.root = delivery.OriginEvent()
 		}
 	}
+	// A terminal reply was already correlated and re-admitted against an open
+	// local responsibility. Its integration Handling remains explicit local
+	// work, but it never acquires a reply capability that could echo the
+	// terminal disposition back to its sender.
+	if imported && delivery.RequiresTerminalReplyMatch() {
+		return result, nil
+	}
 	if !imported || !route.Active() {
 		return result, nil
 	}

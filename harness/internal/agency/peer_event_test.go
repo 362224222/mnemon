@@ -176,6 +176,7 @@ func TestNewPeerEventKeepsOnlyDirectCauseFromMaximumRemoteChain(t *testing.T) {
 	delivery, err := NewPeerDelivery(route, PeerDeliverySpec{
 		OriginEvent: mustEventRef(t, "event:provenance-origin", "origin"), OriginSequence: 1,
 		OriginAcceptedAt: testTime, OriginSource: mustPrincipal(t, "agent:origin"),
+		OriginConsequence: ConsequenceCreateHandlings, OriginTargetCount: 2,
 		OriginCausation: remoteChain, TargetAlias: mustHandle(t, "remote/target"),
 		Kind: mustLabel(t, "opaque.request"), CausalDepth: 1, ExpiresAt: testTime.Add(time.Hour),
 	})

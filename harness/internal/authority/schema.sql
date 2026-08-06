@@ -96,6 +96,9 @@ CREATE TABLE peer_outbox (
 CREATE INDEX peer_outbox_pending
 ON peer_outbox(state, expires_at, created_at);
 
+CREATE UNIQUE INDEX peer_outbox_origin_route
+ON peer_outbox(origin_event_id, route_id);
+
 CREATE TABLE peer_inbox (
     delivery_id TEXT PRIMARY KEY,
     route_id TEXT NOT NULL REFERENCES peer_routes(route_id),

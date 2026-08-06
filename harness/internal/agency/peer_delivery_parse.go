@@ -33,8 +33,8 @@ func ParsePeerDeliveryCanonicalJSON(data []byte, enrolledRoute RouteID) (ParsedP
 }
 
 func peerDeliveryFromWire(wire peerDeliveryWire, enrolledRoute RouteID) (PeerDelivery, error) {
-	if wire.SchemaVersion != 1 {
-		return PeerDelivery{}, invalid("PeerDelivery schema version", "must be 1")
+	if wire.SchemaVersion != 2 {
+		return PeerDelivery{}, invalid("PeerDelivery schema version", "must be 2")
 	}
 	encodedID, err := ParseDeliveryID(wire.DeliveryID)
 	if err != nil {
@@ -49,6 +49,10 @@ func peerDeliveryFromWire(wire peerDeliveryWire, enrolledRoute RouteID) (PeerDel
 		return PeerDelivery{}, err
 	}
 	originSource, err := NewAgentPrincipalID(wire.Origin.Source)
+	if err != nil {
+		return PeerDelivery{}, err
+	}
+	originConsequence, err := parseConsequence(wire.Origin.Consequence)
 	if err != nil {
 		return PeerDelivery{}, err
 	}
@@ -83,6 +87,7 @@ func peerDeliveryFromWire(wire peerDeliveryWire, enrolledRoute RouteID) (PeerDel
 	delivery, err := NewPeerDelivery(enrolledRoute, PeerDeliverySpec{
 		OriginEvent: originEvent, OriginSequence: wire.Origin.Sequence,
 		OriginAcceptedAt: originAcceptedAt, OriginSource: originSource,
+		OriginConsequence: originConsequence, OriginTargetCount: wire.Origin.TargetCount,
 		OriginCausation: causation, OriginCorrelation: correlation,
 		TargetAlias: target, Kind: kind, Payload: payload, Artifacts: artifacts,
 		CausalDepth: wire.CausalDepth, ExpiresAt: expiresAt,

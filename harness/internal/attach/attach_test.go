@@ -87,13 +87,17 @@ func assertGuideTerminalSurface(t *testing.T, guide string) {
 	}
 	normalized := strings.Join(strings.Fields(guide), " ")
 	for _, required := range []string{
-		"The current is the local anchor",
-		"Self creates responsibility, never reply keepalive",
-		"The sender anchor waits for the outcome; sending is not completion",
-		"Every imported request for evidence, action, or decision returns exactly one correlated terminal disposition",
-		"including declined or unresolved; never close it silently",
-		"A report, duplicate/stale input, or correlated response needing no new remote work closes locally",
-		"Never acknowledge a report or Receipt",
+		"Current is the local anchor; self creates responsibility, not reply keepalive",
+		"self anchors the outcome. Sending is not completion",
+		"Artifact is only the completed floor: locally verify the requested contribution first",
+		"`current.facts.reply_required` is machine-owned",
+		"When true and current asks for evidence, action, or a decision, return one correlated terminal disposition",
+		"including declined or unresolved; never close silently",
+		"When false, no response is owed to the authenticated sender: do not echo receipt",
+		"New remote work remains allowed under ordinary anchor rules",
+		"A report, duplicate/stale input, Receipt, or correlated response closes locally if no work remains; never acknowledge it",
+		"If evidence is missing but a View target can obtain it, advance and ask that target rather than claim completion",
+		"References stay local; publish/supersede never sends them to peers",
 	} {
 		if !strings.Contains(normalized, required) {
 			t.Errorf("guide lacks response convergence rule %q", required)

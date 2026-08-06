@@ -606,7 +606,7 @@ sanitize_turn() {
       current_reads: ([$stream[] | select(
         .type == "tool_execution_end" and .toolName == "bash" and .isError == false and
         belongs($current_calls) and
-        any(result_objects[]; .schema == "mnemon.agent.view" and .version == 4 and
+        any(result_objects[]; .schema == "mnemon.agent.view" and .version == 5 and
           (.view | type == "string" and length > 0)))] | length),
       submit_attempts: ($submit_outcomes | length),
       intent_submits: ([$submit_outcomes[] | .accepted + .rejected] | add // 0),

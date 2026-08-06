@@ -15,10 +15,11 @@ func TestPeerAdmissionReceiptCanonicalRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const golden = `{"schema_version":1,"delivery_id":"delivery:3239968453a0063b4e0eb6fa407cdc819f5d881894fc4564fcce514a00d6ad55","envelope_digest":"sha256:5366f0b055b62080a699f64f027d02481e7f1b5c89bedcf63cfa70ba99d0f05f","outcome":"accepted","recorded_at":"2026-08-03T08:01:00Z","local_event":{"id":"event:local-accepted","digest":"sha256:a7a91f9231215908d7eaa05d07e1498abe76f6c43aa053a7acb809fab4d8b5a7"}}`
+	const golden = `{"schema_version":1,"delivery_id":"delivery:3239968453a0063b4e0eb6fa407cdc819f5d881894fc4564fcce514a00d6ad55","envelope_digest":"sha256:9c06736a0fd9ef0ef0fd627eb188e129f5b321f2dc8a89e3ff5ef707bdda7f00","outcome":"accepted","recorded_at":"2026-08-03T08:01:00Z","local_event":{"id":"event:local-accepted","digest":"sha256:a7a91f9231215908d7eaa05d07e1498abe76f6c43aa053a7acb809fab4d8b5a7"}}`
 	if string(accepted.CanonicalJSON()) != golden ||
-		accepted.Digest().String() != "sha256:c26f661a0f526cd6e251f5bde0d88631f9af8c1a0ba5ed03e5d5bf163ce8bf57" {
-		t.Fatalf("PeerAdmissionReceipt golden drift\n got: %s", accepted.CanonicalJSON())
+		accepted.Digest().String() != "sha256:a1bc52f2901132e3d7ac210e8f395867a8d41fd6877d1a4ff5d9d7f1a2f90b26" {
+		t.Fatalf("PeerAdmissionReceipt golden drift\n got: %s\ndigest: %s",
+			accepted.CanonicalJSON(), accepted.Digest().String())
 	}
 	rejected, err := NewRejectedPeerAdmissionReceipt(delivery, mustLabel(t, "peer.denied"),
 		"Target policy denied this candidate.", testTime.Add(2*time.Minute))
@@ -91,6 +92,7 @@ func TestPeerAdmissionReceiptRejectsMalformedOrUnboundData(t *testing.T) {
 	changed, err := NewPeerDelivery(mustRoute(t, "route:receipt-strict"), PeerDeliverySpec{
 		OriginEvent: delivery.OriginEvent(), OriginSequence: delivery.OriginSequence(),
 		OriginAcceptedAt: delivery.OriginAcceptedAt(), OriginSource: delivery.OriginSource(),
+		OriginConsequence: delivery.OriginConsequence(), OriginTargetCount: uint8(delivery.OriginTargetCount()),
 		OriginCausation: delivery.OriginCausation(), TargetAlias: delivery.TargetAlias(),
 		Kind: delivery.Kind(), Payload: mustPayload(t, "Changed envelope under the same logical ID."),
 		Artifacts: delivery.Artifacts(), CausalDepth: delivery.CausalDepth(), ExpiresAt: delivery.ExpiresAt(),
@@ -160,6 +162,7 @@ func FuzzParsePeerAdmissionReceiptCanonicalJSON(f *testing.F) {
 	payload, _ := NewSemanticPayload("bounded")
 	delivery, err := NewPeerDelivery(route, PeerDeliverySpec{
 		OriginEvent: origin, OriginSequence: 1, OriginAcceptedAt: testTime, OriginSource: source,
+		OriginConsequence: ConsequenceCreateHandlings, OriginTargetCount: 2,
 		TargetAlias: target, Kind: kind, Payload: payload, CausalDepth: 1, ExpiresAt: testTime.Add(time.Hour),
 	})
 	if err != nil {

@@ -196,6 +196,18 @@ func preparePeerAdmissionTx(ctx context.Context, tx *sql.Tx, deliveryID agency.D
 	if err != nil {
 		return preparedPeerAdmission{}, false, err
 	}
+	if verified.Delivery().RequiresTerminalReplyMatch() {
+		matched, err := hasOpenTerminalReplyAnchorTx(ctx, tx, verified, route.RouteID())
+		if err != nil {
+			return preparedPeerAdmission{}, false, err
+		}
+		if !matched {
+			rejected, err := settleRejectedPeerInboxTx(ctx, tx, result.delivery,
+				"peer.terminal_reply_unmatched",
+				"terminal reply does not match an open local responsibility", now)
+			return preparedPeerAdmission{result: rejected}, true, err
+		}
+	}
 	return preparedPeerAdmission{result: result, verified: verified}, false, nil
 }
 

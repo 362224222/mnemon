@@ -60,6 +60,9 @@ func projectTargetsTx(ctx context.Context, tx *sql.Tx, attachment agency.Attachm
 		return err
 	}
 	for _, route := range routes {
+		if route.LocalTargetPrincipal() != attachment.Principal() {
+			continue
+		}
 		requested, err := agency.AliasTarget(route.PublicAlias())
 		if err != nil {
 			return errors.New("current View: corrupt peer route public alias")

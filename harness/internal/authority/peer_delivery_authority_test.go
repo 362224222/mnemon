@@ -150,7 +150,9 @@ func TestPeerInboxRejectsSameDeliveryIDDifferentEnvelope(t *testing.T) {
 	conflict, err := agency.NewPeerDelivery(fixture.originRoute.RouteID, agency.PeerDeliverySpec{
 		OriginEvent: delivery.OriginEvent(), OriginSequence: delivery.OriginSequence(),
 		OriginAcceptedAt: delivery.OriginAcceptedAt(), OriginSource: delivery.OriginSource(),
-		OriginCausation: delivery.OriginCausation(), OriginCorrelation: correlation,
+		OriginConsequence: delivery.OriginConsequence(),
+		OriginTargetCount: uint8(delivery.OriginTargetCount()),
+		OriginCausation:   delivery.OriginCausation(), OriginCorrelation: correlation,
 		TargetAlias: delivery.TargetAlias(), Kind: delivery.Kind(),
 		Payload:   mustPayload(t, "same identity with different immutable semantics"),
 		Artifacts: delivery.Artifacts(), CausalDepth: delivery.CausalDepth(),

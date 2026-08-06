@@ -18,7 +18,7 @@ func TestImportedCurrentProjectsOneAuthenticatedReplyTarget(t *testing.T) {
 
 	requestDelivery := fixture.admitOrigin(t)
 	local := decodeFocusView(t, fixture.origin.current(t))
-	if local.Current == nil || local.Current.Facts.ReplyTarget != "" {
+	if local.Current == nil || local.Current.Facts.ReplyRequired || local.Current.Facts.ReplyTarget != "" {
 		t.Fatalf("local current reply target = %#v, want omitted", local.Current)
 	}
 	fixture.admitReceiver(t, requestDelivery)
@@ -32,7 +32,7 @@ func TestImportedCurrentProjectsOneAuthenticatedReplyTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	public := decodeFocusView(t, receiverView)
-	if public.Current == nil ||
+	if public.Current == nil || !public.Current.Facts.ReplyRequired ||
 		public.Current.Facts.ReplyTarget != fixture.receiverRoute.PublicAlias.String() {
 		t.Fatalf("imported current reply target = %#v, want %s",
 			public.Current, fixture.receiverRoute.PublicAlias.String())
@@ -62,7 +62,7 @@ func TestImportedCurrentProjectsOneAuthenticatedReplyTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := decodeFocusView(t, replayed); got.Current == nil ||
+	if got := decodeFocusView(t, replayed); got.Current == nil || !got.Current.Facts.ReplyRequired ||
 		got.Current.Facts.ReplyTarget != fixture.receiverRoute.PublicAlias.String() {
 		t.Fatalf("replayed imported reply target = %#v", got.Current)
 	}
@@ -76,11 +76,59 @@ func TestImportedCurrentProjectsOneAuthenticatedReplyTarget(t *testing.T) {
 			t.Fatal(err)
 		}
 		view := decodeFocusView(t, fixture.receiver.current(t))
-		if view.Current == nil || view.Current.Facts.ReplyTarget != "" ||
+		if view.Current == nil || view.Current.Facts.ReplyRequired || view.Current.Facts.ReplyTarget != "" ||
 			containsString(view.Targets, fixture.receiverRoute.PublicAlias.String()) {
 			t.Fatalf("revoked route projection = current:%#v targets:%v", view.Current, view.Targets)
 		}
 	})
+}
+
+func TestPeerRouteProjectionIsScopedToAttachmentPrincipal(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:route-projection-owner")
+	route := peerRouteSpec(t, fixture.principal, "projection-scope")
+	mustEnrollPeerRoute(t, fixture, route)
+
+	owner := decodeFocusView(t, fixture.current(t))
+	if !containsString(owner.Targets, route.PublicAlias.String()) {
+		t.Fatalf("owner View targets = %v; want route %s", owner.Targets, route.PublicAlias.String())
+	}
+
+	other := mustPrincipal(t, "principal:route-projection-other")
+	if err := fixture.store.EnrollPrincipal(fixture.ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, other,
+		nextAttachmentBoundary(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := NewCurrentOperation(mustOperation(t, "operation:other-route-view"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := fixture.store.Current(fixture.ctx, proof, operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected := decodeFocusView(t, view)
+	if containsString(projected.Targets, route.PublicAlias.String()) {
+		t.Fatalf("other Principal View leaked route target: %v", projected.Targets)
+	}
+}
+
+func TestOrdinaryImportedWorkCannotBecomeNoReplyBySemanticKind(t *testing.T) {
+	fixture := newPeerRoundTripFixture(t)
+	original := fixture.admitOrigin(t)
+	ordinary := rebuildPeerDelivery(t, fixture.originRoute.RouteID, original,
+		original.OriginEvent(), agency.EventRef{}, agency.ConsequenceCreateHandlings, 2,
+		mustLabel(t, "work.response"))
+	fixture.admitReceiver(t, ordinary)
+	view := decodeFocusView(t, fixture.receiver.current(t))
+	if view.Current == nil || !view.Current.Facts.ReplyRequired ||
+		view.Current.Facts.ReplyTarget != fixture.receiverRoute.PublicAlias.String() {
+		t.Fatalf("ordinary imported work projection = %#v; semantic kind changed reply role",
+			view.Current)
+	}
 }
 
 func TestImportedHandlingKeepsReplyContextAcrossLocalAdvance(t *testing.T) {
@@ -260,6 +308,7 @@ func requireReplyContext(t *testing.T, view BoundView, wantTarget, wantPayload s
 	t.Helper()
 	result := decodeFocusView(t, view)
 	if result.Current == nil || result.Current.Facts.ReplyTo == "" ||
+		(result.Current.Facts.ReplyRequired != (wantTarget != "")) ||
 		result.Current.Facts.ReplyTarget != wantTarget ||
 		(wantPayload != "" && result.Current.Semantic.Payload != wantPayload) {
 		t.Fatalf("imported reply context = %#v; want target %q payload %q",
@@ -570,6 +619,7 @@ func admitCorrelatedPeerResponse(t *testing.T, fixture *peerRoundTripFixture,
 	receiverView := fixture.receiver.current(t)
 	receiverPublic := decodeFocusView(t, receiverView)
 	if receiverPublic.Current == nil || receiverPublic.Current.Facts.ReplyTo == "" ||
+		!receiverPublic.Current.Facts.ReplyRequired ||
 		receiverPublic.Current.Facts.ReplyTo == receiverPublic.Current.Facts.Handle ||
 		receiverPublic.Current.Facts.ReplyTarget != fixture.receiverRoute.PublicAlias.String() {
 		t.Fatal("receiver did not claim the imported request")
@@ -636,9 +686,10 @@ func admitSignedResponse(t *testing.T, fixture *peerRoundTripFixture, delivery a
 type focusViewWire struct {
 	Current *struct {
 		Facts struct {
-			Handle      string `json:"handle"`
-			ReplyTo     string `json:"reply_to"`
-			ReplyTarget string `json:"reply_target"`
+			Handle        string `json:"handle"`
+			ReplyTo       string `json:"reply_to"`
+			ReplyRequired bool   `json:"reply_required"`
+			ReplyTarget   string `json:"reply_target"`
 		} `json:"facts"`
 		Semantic struct {
 			Kind    string `json:"kind"`

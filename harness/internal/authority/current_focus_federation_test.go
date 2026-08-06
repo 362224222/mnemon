@@ -239,6 +239,7 @@ func admitFederatedFocusObservation(t *testing.T, origin *authorityFixture,
 	view := peer.receiver.current(t)
 	public := decodeFocusView(t, view)
 	if public.Current == nil || public.Current.Facts.ReplyTo == "" ||
+		!public.Current.Facts.ReplyRequired ||
 		public.Current.Facts.ReplyTarget != peer.receiverRoute.PublicAlias.String() {
 		t.Fatalf("peer reply authority = %#v", public.Current)
 	}

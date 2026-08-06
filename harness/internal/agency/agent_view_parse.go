@@ -116,6 +116,9 @@ func agentViewCurrentSpecFromWire(wire *agentViewCurrentWire, authority ViewAuth
 	if wire.Facts.ReplyTarget != replyTarget {
 		return nil, invariant("Agent View current", "reply-target does not match sealed target authority")
 	}
+	if wire.Facts.ReplyRequired != (replyTarget != "") {
+		return nil, invariant("Agent View current", "reply requirement does not match sealed target authority")
+	}
 	kind, err := NewSemanticLabel(wire.Semantic.Kind)
 	if err != nil {
 		return nil, err
