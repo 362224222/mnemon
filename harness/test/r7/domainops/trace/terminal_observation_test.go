@@ -96,6 +96,22 @@ func newTerminalObservationValidationFixture() terminalObservationValidationFixt
 		"route:lead-data", testDigest("request-envelope"))
 	request.ReplyAnchorHandlingID = "handling:request-anchor"
 	request.ExpectedReplyRootID, request.ExpectedReplyRootDigest = root.ID, root.Digest
+	requestRemote := eventEvidence{Node: "data", ID: "event:data-request",
+		Digest: testDigest("data-request"), AcceptedAt: accepted.Add(30 * time.Second),
+		OriginSequence: 1, CausalDepth: request.OriginCausalDepth,
+		SourcePrincipal: "principal:lead-surrogate", OperationKey: request.ID,
+		RequestDigest: request.EnvelopeDigest, SemanticKind: root.SemanticKind,
+		PayloadBytes: root.PayloadBytes, Consequence: "handling.create",
+		Targets:   []string{"principal:data"},
+		Causation: []eventRefWire{{ID: root.ID, Digest: root.Digest}}}
+	requestInbox := request
+	requestInbox.Node, requestInbox.Direction = "data", "inbox"
+	requestInbox.ReplyAnchorHandlingID = ""
+	requestInbox.ExpectedReplyRootID, requestInbox.ExpectedReplyRootDigest = "", ""
+	request.LocalEventID, request.LocalEventDigest, request.Accepted =
+		requestRemote.ID, requestRemote.Digest, true
+	requestInbox.LocalEventID, requestInbox.LocalEventDigest, requestInbox.Accepted =
+		requestRemote.ID, requestRemote.Digest, true
 
 	correlation := &eventRefWire{ID: root.ID, Digest: root.Digest}
 	terminal := eventEvidence{Node: "data", ID: "event:data-terminal", Digest: testDigest("data-terminal"),
@@ -104,6 +120,7 @@ func newTerminalObservationValidationFixture() terminalObservationValidationFixt
 		SemanticKind: "ops.response", PayloadBytes: len("database is healthy"),
 		Consequence: "handling.resolve.completed", Targets: []string{"remote/lead"},
 		SubjectHandling: "handling:data-request", Correlation: correlation,
+		Causation:         []eventRefWire{{ID: requestRemote.ID, Digest: requestRemote.Digest}},
 		InReplyToDelivery: requestDeliveryID}
 	replyEnvelope := testDigest("reply-envelope")
 	reply := deliveryFromOrigin(terminal, "lead", "inbox",
@@ -113,19 +130,26 @@ func newTerminalObservationValidationFixture() terminalObservationValidationFixt
 	observation := eventEvidence{Node: "lead", ID: "event:lead-observation",
 		Digest: testDigest("lead-observation"), AcceptedAt: accepted.Add(2 * time.Minute),
 		OriginSequence: 3, CausalDepth: reply.OriginCausalDepth,
-		SourcePrincipal: "principal:data-surrogate", RequestDigest: replyEnvelope,
-		SemanticKind: terminal.SemanticKind, PayloadBytes: terminal.PayloadBytes,
+		SourcePrincipal: "principal:data-surrogate", OperationKey: reply.ID,
+		RequestDigest: replyEnvelope,
+		SemanticKind:  terminal.SemanticKind, PayloadBytes: terminal.PayloadBytes,
 		Consequence: "observation.completed", Correlation: correlation,
 		Causation:         []eventRefWire{{ID: terminal.ID, Digest: terminal.Digest}},
 		InReplyToDelivery: requestDeliveryID}
 	reply.LocalEventID, reply.LocalEventDigest, reply.Accepted = observation.ID, observation.Digest, true
+	replyOutbox := reply
+	replyOutbox.Node, replyOutbox.Direction = "data", "outbox"
 
 	nodes := []nodeEvidence{{Role: "lead", Events: []eventEvidence{root, observation},
 		Handlings: []handlingEvidence{{ID: request.ReplyAnchorHandlingID, HeadEventID: root.ID,
 			State: "open", CreatedSequence: root.OriginSequence}},
 		Deliveries: []deliveryEvidence{request, reply}},
-		{Role: "data", Events: []eventEvidence{terminal}}}
-	global := map[string]eventEvidence{root.ID: root, terminal.ID: terminal, observation.ID: observation}
+		{Role: "data", Events: []eventEvidence{requestRemote, terminal},
+			Handlings: []handlingEvidence{{ID: "handling:data-request", HeadEventID: terminal.ID,
+				State: "terminal", CreatedSequence: requestRemote.OriginSequence}},
+			Deliveries: []deliveryEvidence{requestInbox, replyOutbox}}}
+	global := map[string]eventEvidence{root.ID: root, requestRemote.ID: requestRemote,
+		terminal.ID: terminal, observation.ID: observation}
 	return terminalObservationValidationFixture{accepted: accepted, request: request, root: root,
 		terminal: terminal, observation: observation, nodes: nodes, global: global}
 }
@@ -220,22 +244,28 @@ func TestGlobalDeliveryValidationKeepsOrdinaryDeliveryAsOneHandling(t *testing.T
 		SemanticKind: "ops.request", PayloadBytes: len("inspect logs"),
 		Consequence: "handling.create", Targets: []string{"remote/data"}}
 	envelope := testDigest("ordinary-envelope")
-	delivery := deliveryFromOrigin(origin, "data", "inbox",
+	outbox := deliveryFromOrigin(origin, "lead", "outbox",
 		"delivery:"+strings.Repeat("d", 64), "route:data-lead", envelope)
+	inbox := outbox
+	inbox.Node, inbox.Direction = "data", "inbox"
 	local := eventEvidence{Node: "data", ID: "event:ordinary-local", Digest: testDigest("ordinary-local"),
-		AcceptedAt: accepted.Add(time.Minute), OriginSequence: 1, CausalDepth: delivery.OriginCausalDepth,
-		SourcePrincipal: "principal:lead-surrogate", RequestDigest: envelope,
-		SemanticKind: origin.SemanticKind, PayloadBytes: origin.PayloadBytes,
+		AcceptedAt: accepted.Add(time.Minute), OriginSequence: 1, CausalDepth: outbox.OriginCausalDepth,
+		SourcePrincipal: "principal:lead-surrogate", OperationKey: outbox.ID,
+		RequestDigest: envelope,
+		SemanticKind:  origin.SemanticKind, PayloadBytes: origin.PayloadBytes,
 		Consequence: "handling.create", Targets: []string{"principal:data"},
 		Causation: []eventRefWire{{ID: origin.ID, Digest: origin.Digest}}}
-	delivery.LocalEventID, delivery.LocalEventDigest, delivery.Accepted = local.ID, local.Digest, true
-	nodes := []nodeEvidence{{Role: "data", Events: []eventEvidence{local},
-		Deliveries: []deliveryEvidence{delivery}}}
+	outbox.LocalEventID, outbox.LocalEventDigest, outbox.Accepted = local.ID, local.Digest, true
+	inbox.LocalEventID, inbox.LocalEventDigest, inbox.Accepted = local.ID, local.Digest, true
+	nodes := []nodeEvidence{{Role: "lead", Events: []eventEvidence{origin},
+		Deliveries: []deliveryEvidence{outbox}}, {Role: "data", Events: []eventEvidence{local},
+		Deliveries: []deliveryEvidence{inbox}}}
 	global := map[string]eventEvidence{origin.ID: origin, local.ID: local}
 	if err := validateGlobalDeliveries(nodes, global); err != nil {
 		t.Fatalf("validateGlobalDeliveries(ordinary) error = %v", err)
 	}
 	local.Consequence = "observation.completed"
+	nodes[1].Events[0] = local
 	global[local.ID] = local
 	if err := validateGlobalDeliveries(nodes, global); err == nil {
 		t.Fatal("ordinary Delivery disguised as a zero-target observation passed validation")

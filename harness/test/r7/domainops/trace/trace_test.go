@@ -161,7 +161,8 @@ func TestValidateGlobalAuthorityRefsRequiresExactDigests(t *testing.T) {
 
 func TestValidateGlobalDeliveriesRequiresCollectedExactOrigin(t *testing.T) {
 	digest := agency.Sum([]byte("origin")).String()
-	delivery := deliveryEvidence{OriginEventID: "event:origin", OriginEventDigest: digest}
+	delivery := deliveryEvidence{Direction: "outbox",
+		OriginEventID: "event:origin", OriginEventDigest: digest}
 	nodes := []nodeEvidence{{Role: "data", Deliveries: []deliveryEvidence{delivery}}}
 	if err := validateGlobalDeliveries(nodes, nil); err == nil {
 		t.Fatal("validateGlobalDeliveries() accepted a missing origin Event")

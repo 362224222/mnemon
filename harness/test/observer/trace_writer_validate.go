@@ -246,7 +246,8 @@ func validateFactFields(fields FactFields, sequence int) error {
 		{"consequence", fields.Consequence, []string{
 			"handling.create", "handling.advance", "handling.resolve.completed",
 			"handling.resolve.declined", "handling.resolve.unresolved", "reference.publish",
-			"reference.supersede", "reference.retract",
+			"reference.supersede", "reference.retract", "observation.completed",
+			"observation.declined", "observation.unresolved",
 		}},
 		{"outcome", fields.Outcome, []string{"accepted", "rejected", "replayed", "completed", "declined", "unresolved"}},
 		{"phase", fields.Phase, []string{"awaiting_seed", "active", "observed"}},

@@ -187,6 +187,8 @@ r7_live_start_workspace() {
     "$setup" >/dev/null || r7_live_fail 'setup did not return the exact ready receipt'
   test -f "$R7_LIVE_WORKSPACE/.pi/extensions/mnemond.ts" ||
     r7_live_fail 'the project-local Pi hook was not installed'
+  test -f "$R7_LIVE_WORKSPACE/.pi/extensions/mnemond-current.ts" ||
+    r7_live_fail 'the project-local Pi Current tool was not installed'
   test -f "$R7_LIVE_WORKSPACE/.pi/skills/mnemond/SKILL.md" ||
     r7_live_fail 'the project-local mnemond guide was not installed'
 }
@@ -234,7 +236,7 @@ r7_live_pi_process() {
     PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0 \
     "$R7_LIVE_PI_BIN" --mode json --print --no-session --approve --no-context-files \
       --no-prompt-templates --no-themes --provider deepseek --model "$R7_LIVE_PI_MODEL" \
-      --thinking off --tools bash "$prompt"
+      --thinking off --tools mnemond_current,mnemond_submit "$prompt"
 }
 
 r7_live_run_pi() {
@@ -244,7 +246,7 @@ r7_live_run_pi() {
   # the Hook/View/Intent/Receipt path against a real provider; it is not used as
   # evidence that a model can derive an arbitrary collaboration from a business
   # prompt. Natural scenario evidence is evaluated separately.
-  prompt='Perform exactly one R7 protocol smoke action. Do not invoke `mnemon-harness hook attach` yourself; the installed runtime hook must establish the context. Do not inspect environment variables. Use the bash tool only. First run `mnemon-harness agent current --json`. Then submit one root Intent with kind `live.pi.probe`, payload `persist one Pi-originated responsibility`, consequence `handling.create`, and successor `self`. Read the Receipt and stop. Do not edit files, run unrelated commands, or claim that the responsibility is completed.'
+  prompt='Perform exactly one R7 protocol smoke action. The installed runtime hook establishes context. Use mnemond_current exactly once. Then use mnemond_submit exactly once with one root Intent: kind `live.pi.probe`, payload `persist one Pi-originated responsibility`, consequence `handling.create`, and successor `self`. Read the Receipt and stop. Do not claim that the responsibility is completed.'
 
   r7_live_start_key_writer
   if r7_live_with_deadline "$R7_LIVE_TIMEOUT_SECONDS" r7_live_pi_process "$prompt" \
@@ -273,7 +275,7 @@ r7_live_run_pi() {
 
 r7_live_assert_pi_trace() {
   local events=$R7_LIVE_ROOT/pi-events.jsonl cue
-  cue='mnemond state is available; read .pi/skills/mnemond/SKILL.md and use mnemon-harness from PATH.'
+  cue='mnemond state is available; read .pi/skills/mnemond/SKILL.md and use its exact Pi tools and artifact commands.'
 
   jq -s -e --arg cue "$cue" '
     any(.[];
@@ -283,33 +285,31 @@ r7_live_assert_pi_trace() {
   ' "$events" >/dev/null || r7_live_fail 'Pi did not expose the exact installed mnemond cue'
 
   jq -s -e '
-    any(.[]; .type == "tool_execution_start" and .toolName == "bash" and
-      ((.args.command // "") | contains("mnemon-harness agent current --json")))
-  ' "$events" >/dev/null || r7_live_fail 'Pi did not obtain an R7 View through the Agent terminal'
-  jq -s -e '
-    any(.[]; .type == "tool_execution_start" and
-      (.toolName == "mnemond_submit" or
-       (.toolName == "bash" and
-        ((.args.command // "") | contains("mnemon-harness agent submit --json")))))
-  ' "$events" >/dev/null || r7_live_fail 'Pi did not submit an Intent through the Agent terminal'
+    ([.[] | select(.type == "tool_execution_start" and
+      .toolName == "mnemond_current" and .args == {})] | length) == 1
+  ' "$events" >/dev/null || r7_live_fail 'Pi did not obtain exactly one native R7 View'
   jq -s -e '
     ([.[] | select(.type == "tool_execution_start" and
-      (.toolName == "mnemond_submit" or
-       (.toolName == "bash" and
-        ((.args.command // "") | contains("mnemon-harness agent submit --json"))))) |
+      .toolName == "mnemond_submit" and
+      (.args | type == "object" and (keys | sort) == ["intent"]) and
+      (.args.intent | type == "object"))] | length) == 1
+  ' "$events" >/dev/null || r7_live_fail 'Pi did not submit exactly one native Intent'
+  jq -s -e '
+    ([.[] | select(.type == "tool_execution_start" and
+      .toolName == "mnemond_submit") |
       .toolCallId] | unique) as $submits |
     ([.[] | select(.type == "tool_execution_end" and
+      .toolName == "mnemond_submit" and
       (.toolCallId as $id | $submits | index($id) != null) and .isError == false and
+      .result.details == {schema:"mnemon.pi.effect",version:1,status:"settled"} and
       any((.result | .. | strings);
         contains("\"schema\":\"mnemon.agent.receipt\"") and
         contains("\"outcome\":\"accepted\"")))] | length) == 1
   ' "$events" >/dev/null || r7_live_fail 'Pi did not observe exactly one accepted R7 Receipt'
   jq -s -e '
-    all(.[] | select(.type == "tool_execution_start" and .toolName == "bash");
-      ((.args.command // "") | contains("mnemon-harness hook attach") | not) and
-      ((.args.command // "") | contains("DEEPSEEK_API_KEY") | not) and
-      ((.args.command // "") | contains("printenv") | not))
-  ' "$events" >/dev/null || r7_live_fail 'Pi bypassed the hook boundary or inspected provider credentials'
+    all(.[] | select(.type == "tool_execution_start");
+      .toolName == "mnemond_current" or .toolName == "mnemond_submit")
+  ' "$events" >/dev/null || r7_live_fail 'Pi used a tool outside the two native protocol surfaces'
   jq -s -e 'any(.[]; .type == "agent_end")' "$events" >/dev/null ||
     r7_live_fail 'Pi did not finish its bounded Agent turn'
 }

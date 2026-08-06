@@ -24,7 +24,8 @@ func TestLoadHasOneFixedCueOneBoundedReceiptAndNoAuthorityOrSecretSurface(t *tes
 	guide, cue, extension := projection.Guide(), projection.HookCue(), projection.PiExtension()
 	if len(guide) == 0 || len(guide) > MaxGuideBytes || cue == "" || len(cue) > MaxCueBytes ||
 		len(extension) == 0 || len(extension) > MaxExtensionBytes {
-		t.Fatalf("asset sizes = guide %d, cue %d, extension %d", len(guide), len(cue), len(extension))
+		t.Fatalf("asset sizes = guide %d, cue %d, extension %d",
+			len(guide), len(cue), len(extension))
 	}
 	if !strings.Contains(cue, ".pi/skills/mnemond/SKILL.md") {
 		t.Fatal("fixed cue does not name the installed, bounded guide projection")
@@ -72,21 +73,20 @@ func TestLoadHasOneFixedCueOneBoundedReceiptAndNoAuthorityOrSecretSurface(t *tes
 
 func assertGuideTerminalSurface(t *testing.T, guide string) {
 	t.Helper()
+	normalized := strings.Join(strings.Fields(guide), " ")
 	for _, required := range []string{
-		"`mnemon-harness` is already on",
-		"mnemon-harness agent current --json",
+		"mnemond_current {}",
+		"Pass one Intent to `mnemond_submit`",
 		"mnemon-harness artifact capture --json < PATH",
 		"mnemon-harness artifact read \"$HANDLE\"",
-		"mnemon-harness agent submit --json <<'JSON'",
 		"exactly one nonempty",
 		"no Markdown",
 		"VIEW_TARGET", "VIEW_REPLY_TARGET", "CURRENT_HANDLE", "CAPTURE_HANDLE",
 	} {
-		if !strings.Contains(guide, required) {
+		if !strings.Contains(normalized, required) {
 			t.Errorf("guide lacks complete, bounded terminal surface %q", required)
 		}
 	}
-	normalized := strings.Join(strings.Fields(guide), " ")
 	for _, required := range []string{
 		"Current is the local anchor; self creates responsibility, not reply keepalive",
 		"self anchors the outcome. Sending is not completion",
@@ -96,8 +96,8 @@ func assertGuideTerminalSurface(t *testing.T, guide string) {
 		"including declined or unresolved; never close silently",
 		"When false, no response is owed; do not echo receipt",
 		"New remote work follows ordinary anchor rules",
-		"Reports, duplicates, Receipts, and terminal replies may justify resolving current locally; never acknowledge them",
-		"If evidence is missing but a View target can obtain it, advance and ask rather than claim completion",
+		"Reports, duplicates, Receipts, and terminal replies are evidence, not reply requests",
+		"Missing evidence: advance and ask a View target; do not complete",
 		"References stay local; publish/supersede never sends them to peers",
 	} {
 		if !strings.Contains(normalized, required) {
@@ -346,10 +346,10 @@ func TestGuideFirstSubmitExampleIsAValidCompleteIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 	guide := string(projection.Guide())
-	match := regexp.MustCompile(`(?s)mnemon-harness agent submit --json <<'JSON'\n([^\n]+)\nJSON`).
+	match := regexp.MustCompile(`(?m)^(\{"kind":"work\.request"[^\n]+\})$`).
 		FindStringSubmatch(guide)
 	if len(match) != 2 {
-		t.Fatal("guide lacks one complete quoted-heredoc submit example")
+		t.Fatal("guide lacks one complete root Intent example")
 	}
 	intent, err := agency.ParseAgentIntentJSON([]byte(match[1]))
 	if err != nil {
@@ -490,6 +490,7 @@ func TestInstallPiIsProjectLocalExactAndPreservesAdjacentFiles(t *testing.T) {
 	}
 	assertFile(t, receipt.GuidePath, projection.Guide(), projectedMode)
 	assertFile(t, receipt.ExtensionPath, projection.PiExtension(), projectedMode)
+	assertFile(t, receipt.CurrentExtensionPath, projection.PiCurrentExtension(), projectedMode)
 	assertFile(t, receipt.JournalPath, mustPlan(t, workspace).journalBytes, journalMode)
 	assertFile(t, legacy, []byte("legacy memory\n"), 0o644)
 	assertFile(t, custom, []byte("custom extension\n"), 0o644)
@@ -505,7 +506,8 @@ func TestInstallPiExactReplayDoesNotRewriteOwnedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths := []string{first.GuidePath, first.ExtensionPath, first.JournalPath}
+	paths := []string{first.GuidePath, first.ExtensionPath, first.CurrentExtensionPath,
+		first.JournalPath}
 	identities := make([]os.FileInfo, len(paths))
 	for index, path := range paths {
 		identities[index], err = os.Lstat(path)
@@ -528,6 +530,7 @@ func TestInstallPiExactReplayDoesNotRewriteOwnedFiles(t *testing.T) {
 func TestInstallPiRecoversEveryDurableInterruption(t *testing.T) {
 	stages := []string{
 		"after_journal",
+		"after_file:.pi/extensions/mnemond-current.ts",
 		"after_file:.pi/extensions/mnemond.ts",
 		"after_file:.pi/skills/mnemond/SKILL.md",
 	}
@@ -735,6 +738,7 @@ func (info foreignOwnerInfo) Sys() any {
 func assertInstallPaths(t *testing.T, workspace string, receipt InstallReceipt) {
 	t.Helper()
 	if receipt.GuidePath != filepath.Join(workspace, ".pi", "skills", "mnemond", "SKILL.md") ||
+		receipt.CurrentExtensionPath != filepath.Join(workspace, ".pi", "extensions", "mnemond-current.ts") ||
 		receipt.ExtensionPath != filepath.Join(workspace, ".pi", "extensions", "mnemond.ts") ||
 		receipt.JournalPath != filepath.Join(workspace, ".mnemon", "harness", "attach", "pi",
 			"ownership.json") {

@@ -660,7 +660,7 @@
     function validateFacts(facts, label) {
       exactObject(facts, FACT_FIELDS, [], label);
       if (facts.action !== undefined) requireEnum(facts.action, ["current", "submit", "capture", "read", "probe", "mutation", "other"], label + ".action");
-      if (facts.consequence !== undefined) requireEnum(facts.consequence, ["handling.create", "handling.advance", "handling.resolve.completed", "handling.resolve.declined", "handling.resolve.unresolved", "reference.publish", "reference.supersede", "reference.retract"], label + ".consequence");
+      if (facts.consequence !== undefined) requireEnum(facts.consequence, ["handling.create", "handling.advance", "handling.resolve.completed", "handling.resolve.declined", "handling.resolve.unresolved", "reference.publish", "reference.supersede", "reference.retract", "observation.completed", "observation.declined", "observation.unresolved"], label + ".consequence");
       if (facts.outcome !== undefined) requireEnum(facts.outcome, ["accepted", "rejected", "replayed", "completed", "declined", "unresolved"], label + ".outcome");
       if (facts.phase !== undefined) requireEnum(facts.phase, ["awaiting_seed", "active", "observed"], label + ".phase");
       if (facts.preference_after !== undefined) requireEnum(facts.preference_after, ["A", "B"], label + ".preference_after");

@@ -30,6 +30,7 @@ persisted_evidence_max_blocks=$((persisted_evidence_max_bytes / 1024))
 peer_quiescence_seconds=30
 open_attention_turn_limit=16
 attention_exhausted_reason='Attention budget exhausted. This tool did not run. Only mnemond_submit may remain.'
+current_failed_reason='Current unavailable.'
 report_path=${DOMAIN_OPS_REPORT:-$repository_root/.testdata/r7-domain-ops-live/last-report.json}
 trace_path=${DOMAIN_OPS_TRACE:-$repository_root/.testdata/r7-domain-ops-live/last.trace}
 failure_report_path=${DOMAIN_OPS_FAILURE_REPORT:-$repository_root/.testdata/r7-domain-ops-live/last-failure.json}
@@ -402,7 +403,7 @@ pi_process() {
       setsid pi --mode json --print --no-session --approve --no-prompt-templates --no-themes \
         --extension /opt/mnemon/pi-delegate/delegate.ts \
         --provider deepseek --model "$model" --thinking off \
-        --tools bash,delegate,mnemond_submit \
+        --tools bash,delegate,mnemond_current,mnemond_submit \
         @/workspace/.mnemon/live/turn-prompt.md &
       child=$!
       printf "%s\n" "$child" >"$pid_file"
@@ -462,6 +463,7 @@ sanitize_turn() {
   local role=$1 tag=$2 raw=$3 output=$4
   jq -s -e --arg role "$role" --arg turn "$tag" \
     --arg attention_exhausted "$attention_exhausted_reason" \
+    --arg current_failed "$current_failed_reason" \
     --arg captured_at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" '
     def command: (.args.command // "");
     def invocation_pattern($verb):
@@ -639,6 +641,94 @@ sanitize_turn() {
     def belongs($ids):
       (.toolCallId // null) as $id |
       $id != null and (($ids | index($id)) != null);
+    def exact_empty_object:
+      type == "object" and (keys | length) == 0;
+    def shell_current_protocol($calls):
+      reduce .[] as $record (
+        {seen:[], open:[], starts:[], ends:[], violations:[]};
+        if $record.type == "tool_execution_start" and
+            $record.toolName == "bash" and ($record | invokes_exact_current) then
+          ($record.toolCallId // null) as $id |
+          if (($id | type) != "string" or ($id | length) == 0) then
+            .violations += ["invalid_start_id"]
+          elif (.seen | index($id)) != null then
+            .violations += ["duplicate_start"]
+          else
+            .seen += [$id] | .open += [$id] | .starts += [$record]
+          end
+        elif $record.type == "tool_execution_end" and
+            $record.toolName == "bash" and ($record | belongs($calls)) then
+          ($record.toolCallId // null) as $id |
+          if (.open | index($id)) == null then
+            .violations += [if (.seen | index($id)) == null then
+              "orphan_or_early_end" else "duplicate_end" end]
+          else
+            .open = [.open[] | select(. != $id)] | .ends += [$record]
+          end
+        else . end
+      ) |
+      .valid = ((.violations | length) == 0 and (.open | length) == 0) |
+      .unfinished = (.open | length);
+    def submit_protocol($calls):
+      reduce .[] as $record (
+        {seen:[], open:{}, starts:[], ends:[], violations:[]};
+        if ($record | is_submit_start) then
+          ($record.toolCallId // null) as $id |
+          if (($id | type) != "string" or ($id | length) == 0) then
+            .violations += ["invalid_start_id"]
+          elif (.seen | index($id)) != null then
+            .violations += ["duplicate_start"]
+          else
+            .seen += [$id] | .open[$id] = $record.toolName |
+            .starts += [$record]
+          end
+        elif $record.type == "tool_execution_end" and
+            ($record.toolName == "mnemond_submit" or ($record | belongs($calls))) then
+          ($record.toolCallId // null) as $id |
+          if (($id | type) != "string" or ($id | length) == 0) then
+            .violations += ["invalid_end_id"]
+          elif (.open | has($id) | not) then
+            .violations += [if (.seen | index($id)) == null then
+              "orphan_or_early_end" else "duplicate_end" end]
+          elif .open[$id] != $record.toolName then
+            .open |= del(.[$id]) | .violations += ["mismatched_surface"]
+          else
+            .open |= del(.[$id]) | .ends += [$record]
+          end
+        else . end
+      ) |
+      .valid = ((.violations | length) == 0 and (.open | length) == 0) |
+      .unfinished = (.open | length);
+    def native_current_protocol:
+      reduce .[] as $record (
+        {seen:[], open:[], starts:[], ends:[], violations:[]};
+        if $record.type == "tool_execution_start" and
+            $record.toolName == "mnemond_current" then
+          ($record.toolCallId // null) as $id |
+          if (($id | type) != "string" or ($id | length) == 0) then
+            .violations += ["invalid_start_id"]
+          elif ($record.args | exact_empty_object | not) then
+            .violations += ["invalid_start_args"]
+          elif (.seen | index($id)) != null then
+            .violations += ["duplicate_start"]
+          else
+            .seen += [$id] | .open += [$id] | .starts += [$record]
+          end
+        elif $record.type == "tool_execution_end" and
+            $record.toolName == "mnemond_current" then
+          ($record.toolCallId // null) as $id |
+          if (($id | type) != "string" or ($id | length) == 0) then
+            .violations += ["invalid_end_id"]
+          elif (.open | index($id)) == null then
+            .violations += [if (.seen | index($id)) == null then
+              "orphan_or_early_end" else "duplicate_end" end]
+          else
+            .open = [.open[] | select(. != $id)] | .ends += [$record]
+          end
+        else . end
+      ) |
+      .valid = ((.violations | length) == 0 and (.open | length) == 0) |
+      .unfinished = (.open | length);
     def valid_delegate_result:
       (.result.details? // null) as $details |
       host_attention_disposition or
@@ -648,6 +738,22 @@ sanitize_turn() {
         (($details.status as $status |
           ["slot_used", "task_invalid", "model_unavailable", "auth_unavailable", "failed"] |
           index($status)) != null and .isError == true)));
+    def valid_native_current_result:
+      . as $end |
+      host_attention_disposition or
+      (($end.result | exact_object(["content", "details"]; [])) and
+       ($end.result.details | exact_object(["schema", "status", "version"]; [])) and
+       $end.result.details.schema == "mnemon.pi.current" and
+       $end.result.details.version == 1 and
+       ($end.result.content | type == "array" and length == 1) and
+       ($end.result.content[0] | exact_object(["text", "type"]; [])) and
+       $end.result.content[0].type == "text" and
+       ($end.result.content[0].text | type == "string") and
+       ($end.result.content[0].text | contains("\n") | not) and
+       (if $end.result.details.status == "projected" then $end.isError == false
+        elif $end.result.details.status == "failed" then
+          $end.isError == true and $end.result.content[0].text == $current_failed
+        else false end));
     . as $stream |
     ([$stream[] | select(.type == "message_end" and .message.role == "assistant")]) as
       $assistant_ends |
@@ -655,35 +761,89 @@ sanitize_turn() {
       mentions_current) | .toolCallId] | unique) as $observed_current_calls |
     ([$stream[] | select(.type == "tool_execution_start" and .toolName == "bash" and
       invokes_exact_current) | .toolCallId] | unique) as $current_calls |
-    ([$stream[] | select(.type == "tool_execution_end" and
-      belongs($current_calls))]) as $current_ends |
+    ($stream | shell_current_protocol($current_calls)) as $shell_current_protocol |
+    ($shell_current_protocol.starts) as $shell_current_starts |
+    ($shell_current_protocol.ends) as $current_ends |
+    ($stream | native_current_protocol) as $native_current_protocol |
+    ($native_current_protocol.starts) as $native_current_starts |
+    ([$native_current_starts[].toolCallId]) as $native_current_calls |
+    ($native_current_protocol.ends) as $native_current_ends |
     ([$current_ends[] | select(.isError == false) |
       ([result_objects[] | select(.schema? == "mnemon.agent.view")]) as $views |
       select(($views | length) == 1 and ($views[0] | valid_agent_view)) |
-      $views[0]]) as $agent_views |
-    ([$stream[] | select(is_submit_start)]) as $submit_starts |
-    ([$submit_starts[].toolCallId] | unique) as $submit_calls |
-    ([$stream[] | select(.type == "tool_execution_end" and
-      belongs($submit_calls))]) as $submit_ends |
+      $views[0]]) as $shell_agent_views |
+    ([$current_ends[] | . as $end | select(.isError == false) |
+      ([result_objects[] | select(.schema? == "mnemon.agent.view")]) as $views |
+      select(($views | length) == 1 and ($views[0] | valid_agent_view)) |
+      $end.toolCallId]) as $shell_agent_view_calls |
+    ([$native_current_ends[] | select(
+      .isError == false and .result.details.status == "projected") |
+      ([result_objects[] | select(.schema? == "mnemon.agent.view")]) as $views |
+      select(($views | length) == 1 and ($views[0] | valid_agent_view)) |
+      $views[0]]) as $native_agent_views |
+    ([$native_current_ends[] | . as $end | select(
+      .isError == false and .result.details.status == "projected") |
+      ([result_objects[] | select(.schema? == "mnemon.agent.view")]) as $views |
+      select(($views | length) == 1 and ($views[0] | valid_agent_view)) |
+      $end.toolCallId]) as $native_agent_view_calls |
+    (if ($native_current_starts | length) > 0 then
+       $native_agent_views
+     else
+       $shell_agent_views
+     end) as $agent_views |
+    (if ($native_current_starts | length) > 0 then
+       $native_agent_view_calls
+     else
+       $shell_agent_view_calls
+     end) as $trusted_view_calls |
+    ([range(0; $stream | length) as $index |
+      $stream[$index] |
+      select(.type == "tool_execution_end" and belongs($trusted_view_calls)) |
+      {index:$index, tool_call_id:.toolCallId}]) as $trusted_view_ends |
+    ([range(0; $stream | length) as $index |
+      $stream[$index] |
+      select(.type == "tool_execution_start" and
+        (.toolName == "mnemond_current" or
+         (.toolName == "bash" and mentions_current))) |
+      {index:$index, tool_call_id:.toolCallId}]) as $current_attempts |
+    ([$stream[] | select(is_submit_start) | .toolCallId] | unique) as $submit_calls |
+    ($stream | submit_protocol($submit_calls)) as $submit_protocol |
+    ($submit_protocol.starts) as $submit_starts |
+    ($submit_protocol.ends) as $submit_ends |
+    (reduce range(0; $stream | length) as $index ({};
+      ($stream[$index]) as $record |
+      if ($record | is_submit_start) then
+        .[$record.toolCallId] = $index
+      else . end
+    )) as $submit_start_indexes |
     ([$submit_ends[] |
-      (any(result_objects[];
-        valid_receipt and .outcome == "accepted")) as $accepted |
-      (if $accepted then false else
-        any(result_objects[]; valid_receipt and .outcome == "rejected") end) as $rejected |
+      ([result_objects[] | select(valid_receipt and .outcome == "accepted")]) as
+        $accepted_receipt_objects |
+      ([result_objects[] | select(valid_receipt and .outcome == "rejected")]) as
+        $rejected_receipt_objects |
+      ($accepted_receipt_objects | length) as $accepted_receipt_count |
+      ($rejected_receipt_objects | length) as $rejected_receipt_count |
+      ($accepted_receipt_count > 1 or
+        ($accepted_receipt_count > 0 and $rejected_receipt_count > 0)) as
+        $receipt_conflict |
+      ($accepted_receipt_count == 1 and $rejected_receipt_count == 0) as $accepted |
+      ($accepted_receipt_count == 0 and $rejected_receipt_count > 0) as $rejected |
       ([result_objects[] | select(valid_control_error) | .code] | unique) as $denial_codes |
-      (if $accepted or $rejected then false else
+      (if $receipt_conflict or $accepted or $rejected then false else
         ($denial_codes | length) > 0 end) as $denied |
-      (if $accepted or $rejected or $denied then false else
+      (if $receipt_conflict or $accepted or $rejected or $denied then false else
         .isError == true end) as $failed |
       {tool_call_id:.toolCallId,
+        accepted_receipt_objects:$accepted_receipt_count,
         accepted:(if $accepted then 1 else 0 end),
         rejected:(if $rejected then 1 else 0 end),
         denials:(if $denied then 1 else 0 end),
         denial_code:(if $denied and ($denial_codes | length) == 1 then
           $denial_codes[0] else "" end),
         invocation_failures:(if $failed then 1 else 0 end),
-        closed:($accepted or $rejected or $failed or
-          ($denied and ($denial_codes | length) == 1))}
+        closed:(($receipt_conflict | not) and
+          ($accepted or $rejected or $failed or
+           ($denied and ($denial_codes | length) == 1)))}
     ]) as $submit_outcomes |
     ([$stream[] | select(.type == "tool_execution_start" and
       .toolName == "delegate") | .toolCallId] | unique) as $delegate_attempts |
@@ -738,9 +898,7 @@ sanitize_turn() {
         .type == "tool_execution_start" and .toolName == "bash")] | length),
       delegate_calls: ([$delegate_ends[] |
         select(.result.details.status == "completed")] | length),
-      current_reads: ([$stream[] | select(
-        .type == "tool_execution_end" and .toolName == "bash" and .isError == false and
-        belongs($current_calls))] | length),
+      current_reads: ($agent_views | length),
       submit_attempts: ($submit_outcomes | length),
       intent_submits: ([$submit_outcomes[] | .accepted + .rejected] | add // 0),
       accepted_receipts: ([$submit_outcomes[].accepted] | add // 0),
@@ -781,25 +939,48 @@ sanitize_turn() {
           .accepted_receipts, .rejected_receipts, .submit_denials, .submit_invocation_failures,
           .post_accept_denials, .private_binding_probes] | all(. >= 0 and . <= 256)) and
         .delegate_calls <= 1 and
-        $observed_current_calls == $current_calls and
-        ($current_ends | length) == ($current_calls | length) and
-        ([$current_ends[].toolCallId] | unique | sort) == ($current_calls | sort) and
-        all($current_ends[]; .isError == true or .isError == false) and
-        ($agent_views | length) == ([ $current_ends[] | select(.isError == false) ] | length) and
+        (if ($native_current_starts | length) > 0 then true else
+          $observed_current_calls == $current_calls and
+          $shell_current_protocol.valid and
+          ($shell_current_starts | length) == ($current_calls | length) and
+          ($current_ends | length) == ($current_calls | length) and
+          ([$current_ends[].toolCallId] | unique | sort) == ($current_calls | sort) and
+          all($current_ends[]; .isError == true or .isError == false) and
+          ($shell_agent_views | length) ==
+            ([ $current_ends[] | select(.isError == false) ] | length)
+        end) and
         ($agent_views | unique | length) <= 1 and
+        $native_current_protocol.valid and
+        ($native_current_ends | length) == ($native_current_calls | length) and
+        ([$native_current_ends[].toolCallId] | unique | sort) ==
+          ($native_current_calls | sort) and
+        all($native_current_ends[]; valid_native_current_result) and
+        ($native_agent_views | length) == ([$native_current_ends[] | select(
+          .isError == false and .result.details.status == "projected")] | length) and
         ($delegate_ends | length) == ($delegate_attempts | length) and
         ([$delegate_ends[].toolCallId] | unique | sort) == ($delegate_attempts | sort) and
         all($delegate_ends[]; valid_delegate_result) and
         ($domain_starts | length) == ($domain_calls | length) and
         ($domain_ends | length) == ($domain_calls | length) and
         ([$domain_ends[].toolCallId] | unique | sort) == ($domain_calls | sort) and
+        $submit_protocol.valid and
         ($submit_starts | length) == ($submit_calls | length) and
         ($submit_ends | length) == ($submit_calls | length) and
         ([$submit_ends[].toolCallId] | unique | sort) == ($submit_calls | sort) and
         all($submit_outcomes[];
           .closed and
+          .accepted_receipt_objects <= 1 and
           (.accepted + .rejected + .denials + .invocation_failures) == 1) and
         .accepted_receipts <= 1 and
+        all($submit_outcomes[];
+          .accepted == 0 or
+          (($submit_start_indexes[.tool_call_id] // -1) as $submit_index |
+           ([$current_attempts[] | select(.index < $submit_index)]) as
+             $prior_current_attempts |
+           ($prior_current_attempts | length) > 0 and
+           (($prior_current_attempts[-1].tool_call_id) as $last_current_call |
+            any($trusted_view_ends[];
+              .tool_call_id == $last_current_call and .index < $submit_index)))) and
         .post_accept_denials <= .submit_denials and
         (.post_accept_denials == 0 or .accepted_receipts == 1) and
         (.accepted_receipts + .rejected_receipts) == .intent_submits and
@@ -866,6 +1047,13 @@ summarize_partial_turn() {
       (("(^|[|;&\n][[:space:]]*)([^[:space:];|&]*/)?mnemon-harness" +
         "[[:space:]]+agent[[:space:]]+" + $verb + "([[:space:];|&]|$)"));
     def invocation_count($verb): [command | scan(invocation_pattern($verb))] | length;
+    def mentions_current:
+      (command | test(
+        "mnemon-harness[[:space:]]+agent[[:space:]]+current([[:space:]]|$)"));
+    def invokes_exact_current:
+      (command | test(
+        "^[[:space:]]*mnemon-harness[[:space:]]+agent" +
+        "[[:space:]]+current[[:space:]]+--json[[:space:]]*$"));
     def is_submit_start:
       .type == "tool_execution_start" and
       (.toolName == "mnemond_submit" or
@@ -903,6 +1091,48 @@ summarize_partial_turn() {
           ["slot_used", "task_invalid", "model_unavailable", "auth_unavailable", "failed"] |
           index($status)) != null and .isError == true)) then "delegate_error"
       else "invalid" end;
+    def native_current_result_class:
+      (.result.details? // null) as $details |
+      if host_attention_disposition then "host_attention_disposition"
+      elif (($details | type) == "object" and
+        $details.schema == "mnemon.pi.current" and $details.version == 1 and
+        $details.status == "projected" and .isError == false) then "projected"
+      elif (($details | type) == "object" and
+        $details.schema == "mnemon.pi.current" and $details.version == 1 and
+        $details.status == "failed" and .isError == true) then "current_error"
+      else "invalid" end;
+    def exact_empty_object:
+      type == "object" and (keys | length) == 0;
+    def native_current_protocol:
+      reduce .[] as $record (
+        {seen:[], open:[], starts:[], ends:[], violations:[]};
+        if $record.type == "tool_execution_start" and
+            $record.toolName == "mnemond_current" then
+          ($record.toolCallId // null) as $id |
+          if (($id | type) != "string" or ($id | length) == 0) then
+            .violations += ["invalid_start_id"]
+          elif ($record.args | exact_empty_object | not) then
+            .violations += ["invalid_start_args"]
+          elif (.seen | index($id)) != null then
+            .violations += ["duplicate_start"]
+          else
+            .seen += [$id] | .open += [$id] | .starts += [$record]
+          end
+        elif $record.type == "tool_execution_end" and
+            $record.toolName == "mnemond_current" then
+          ($record.toolCallId // null) as $id |
+          if (($id | type) != "string" or ($id | length) == 0) then
+            .violations += ["invalid_end_id"]
+          elif (.open | index($id)) == null then
+            .violations += [if (.seen | index($id)) == null then
+              "orphan_or_early_end" else "duplicate_end" end]
+          else
+            .open = [.open[] | select(. != $id)] | .ends += [$record]
+          end
+        else . end
+      ) |
+      .valid = ((.violations | length) == 0 and (.open | length) == 0) |
+      .unfinished = (.open | length);
     def valid_control_error:
       (keys | sort) == ["code", "message", "operation_id", "replayed", "retryable",
         "schema_version", "status"] and
@@ -921,6 +1151,22 @@ summarize_partial_turn() {
     ([$submit_starts[].toolCallId] | unique) as $submit_calls |
     ([$stream[] | select(.type == "tool_execution_end" and
       (.toolCallId as $id | $submit_calls | index($id) != null))]) as $submit_ends |
+    ([$stream[] | select(.type == "tool_execution_start" and .toolName == "bash" and
+      mentions_current)]) as $observed_current_starts |
+    ([$observed_current_starts[] | select(invokes_exact_current)]) as $exact_current_starts |
+    ([$exact_current_starts[].toolCallId] | unique) as $exact_current_calls |
+    ([$stream[] | select(.type == "tool_execution_end" and
+      (.toolCallId as $id | $exact_current_calls | index($id) != null))]) as $exact_current_ends |
+    ([$stream[] | select(.type == "tool_execution_start" and
+      .toolName == "mnemond_current")]) as $native_current_starts |
+    ([$stream[] | select(.type == "tool_execution_end" and
+      .toolName == "mnemond_current")]) as $native_current_raw_ends |
+    ($stream | native_current_protocol) as $native_current_protocol |
+    ($native_current_protocol.ends) as $native_current_ends |
+    ([$exact_current_ends[] | select(.isError == false) | result_objects[] |
+      select(.schema? == "mnemon.agent.view")] +
+     [$native_current_ends[] | select(native_current_result_class == "projected") |
+      result_objects[] | select(.schema? == "mnemon.agent.view")]) as $current_view_objects |
     {
       stream_records:length,
       record_types:(reduce .[] as $record ({};
@@ -947,8 +1193,32 @@ summarize_partial_turn() {
         .toolName == "delegate" and .isError == false and
         .result.details.schema == "mnemon.pi.delegate" and
         .result.details.version == 1 and .result.details.status == "completed")] | length),
-      current_attempts:([.[] | select(.type == "tool_execution_start" and
-        .toolName == "bash" and (command | test("mnemon-harness[[:space:]]+agent[[:space:]]+current")))] | length),
+      current_attempts:(($observed_current_starts | length) +
+        ($native_current_starts | length)),
+      current_boundary:{
+        observed_starts:($observed_current_starts | length),
+        exact_starts:($exact_current_starts | length),
+        exact_ends:($exact_current_ends | length),
+        exact_errors:([$exact_current_ends[] | select(.isError == true)] | length),
+        native_starts:($native_current_starts | length),
+        native_ends:($native_current_raw_ends | length),
+        native_protocol_valid:$native_current_protocol.valid,
+        native_unfinished:$native_current_protocol.unfinished,
+        native_violations:($native_current_protocol.violations | group_by(.) |
+          map({class:.[0],count:length})),
+        native_results:([$native_current_raw_ends[] |
+          {class:native_current_result_class,is_error:(.isError == true)}]),
+        mixed_surfaces:(($observed_current_starts | length) > 0 and
+          ($native_current_starts | length) > 0),
+        untrusted_shell_explorations:(if ($native_current_starts | length) > 0 then
+          ($observed_current_starts | length) else 0 end),
+        view_objects:($current_view_objects | length),
+        v6_view_objects:([$current_view_objects[] | select(
+          .schema == "mnemon.agent.view" and .version == 6)] | length),
+        unique_views:($current_view_objects | unique | length),
+        one_invocation_each:all($observed_current_starts[];
+          invocation_count("current") == 1)
+      },
       submit_command_occurrences:([$submit_starts[] | submit_count] | add // 0),
       submit_ends:($submit_ends | length),
       submit_command_cardinality:(reduce $submit_starts[] as $start ({};

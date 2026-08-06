@@ -6,12 +6,125 @@ import (
 )
 
 func validateGlobalDeliveries(nodes []nodeEvidence, global map[string]eventEvidence) error {
+	pairs, err := indexGlobalDeliveryPairs(nodes)
+	if err != nil {
+		return err
+	}
 	for _, node := range nodes {
-		if err := validateNodeDeliveries(node, global); err != nil {
+		if err := validateNodeDeliveries(node, global, pairs); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+type globalDeliveryPair struct {
+	outbox    deliveryEvidence
+	inbox     deliveryEvidence
+	hasOutbox bool
+	hasInbox  bool
+}
+
+func indexGlobalDeliveryPairs(nodes []nodeEvidence) (map[string]*globalDeliveryPair, error) {
+	pairs := make(map[string]*globalDeliveryPair)
+	for _, node := range nodes {
+		for _, delivery := range node.Deliveries {
+			if err := addGlobalDeliveryAuthority(pairs, delivery); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if err := validateGlobalDeliveryPairAuthorities(pairs); err != nil {
+		return nil, err
+	}
+	return pairs, nil
+}
+
+func addGlobalDeliveryAuthority(pairs map[string]*globalDeliveryPair,
+	delivery deliveryEvidence,
+) error {
+	pair := pairs[delivery.ID]
+	if pair == nil {
+		pair = &globalDeliveryPair{}
+		pairs[delivery.ID] = pair
+	}
+	switch delivery.Direction {
+	case "outbox":
+		return addGlobalOutboxAuthority(pair, delivery)
+	case "inbox":
+		return addGlobalInboxAuthority(pair, delivery)
+	default:
+		return errors.New("peer Delivery has an invalid evidence direction")
+	}
+}
+
+func addGlobalOutboxAuthority(pair *globalDeliveryPair, delivery deliveryEvidence) error {
+	if pair.hasOutbox {
+		return errors.New("peer Delivery has more than one outbox authority")
+	}
+	pair.outbox, pair.hasOutbox = delivery, true
+	return nil
+}
+
+func addGlobalInboxAuthority(pair *globalDeliveryPair, delivery deliveryEvidence) error {
+	if pair.hasInbox {
+		return errors.New("peer Delivery has more than one inbox authority")
+	}
+	pair.inbox, pair.hasInbox = delivery, true
+	return nil
+}
+
+func validateGlobalDeliveryPairAuthorities(pairs map[string]*globalDeliveryPair) error {
+	for _, pair := range pairs {
+		if pair.hasOutbox && pair.hasInbox && !sameDeliveryAuthority(pair.outbox, pair.inbox) {
+			return errors.New("peer Delivery outbox and inbox authority differ")
+		}
+		if err := validateGlobalDeliveryPairReceipts(pair); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateGlobalDeliveryPairReceipts(pair *globalDeliveryPair) error {
+	if pair.hasInbox && pair.inbox.Accepted && !pair.hasOutbox {
+		return errors.New("accepted inbox Receipt has no unique sender outbox authority")
+	}
+	if pair.hasOutbox && pair.outbox.State == "settled" &&
+		(!pair.hasInbox || pair.inbox.State != "settled") {
+		return errors.New("settled outbox Receipt has no settled receiver inbox authority")
+	}
+	if !pair.hasOutbox || !pair.hasInbox ||
+		pair.outbox.State != "settled" || pair.inbox.State != "settled" {
+		return nil
+	}
+	if pair.outbox.Accepted != pair.inbox.Accepted {
+		return errors.New("settled outbox and inbox Receipt outcomes differ")
+	}
+	if pair.outbox.Accepted && (pair.outbox.LocalEventID != pair.inbox.LocalEventID ||
+		pair.outbox.LocalEventDigest != pair.inbox.LocalEventDigest) {
+		return errors.New("accepted outbox and inbox Receipts name different local effects")
+	}
+	return nil
+}
+
+func sameDeliveryAuthority(outbox, inbox deliveryEvidence) bool {
+	return outbox.ID == inbox.ID && outbox.RouteID == inbox.RouteID &&
+		outbox.EnvelopeDigest == inbox.EnvelopeDigest &&
+		outbox.OriginEventID == inbox.OriginEventID &&
+		outbox.OriginEventDigest == inbox.OriginEventDigest &&
+		outbox.OriginSequence == inbox.OriginSequence &&
+		outbox.OriginAcceptedAt.Equal(inbox.OriginAcceptedAt) &&
+		outbox.OriginSource == inbox.OriginSource &&
+		outbox.OriginConsequence == inbox.OriginConsequence &&
+		outbox.OriginTargetCount == inbox.OriginTargetCount &&
+		outbox.OriginCausalDepth == inbox.OriginCausalDepth &&
+		outbox.OriginSemanticKind == inbox.OriginSemanticKind &&
+		outbox.OriginPayloadBytes == inbox.OriginPayloadBytes &&
+		slices.Equal(outbox.OriginArtifacts, inbox.OriginArtifacts) &&
+		eventRefsEqual(outbox.OriginCausation, inbox.OriginCausation) &&
+		optionalEventRefsEqual(outbox.OriginCorrelation, inbox.OriginCorrelation) &&
+		outbox.InReplyToDeliveryID == inbox.InReplyToDeliveryID
 }
 
 type nodeDeliveryValidation struct {
@@ -21,10 +134,12 @@ type nodeDeliveryValidation struct {
 	acceptedReplies map[string]struct{}
 }
 
-func validateNodeDeliveries(node nodeEvidence, global map[string]eventEvidence) error {
+func validateNodeDeliveries(node nodeEvidence, global map[string]eventEvidence,
+	pairs map[string]*globalDeliveryPair,
+) error {
 	validation := indexNodeDeliveryValidation(node)
 	for _, delivery := range node.Deliveries {
-		if err := validateCollectedDelivery(delivery, global, &validation); err != nil {
+		if err := validateCollectedDelivery(delivery, global, &validation, pairs[delivery.ID]); err != nil {
 			return err
 		}
 	}
@@ -53,7 +168,7 @@ func indexNodeDeliveryValidation(node nodeEvidence) nodeDeliveryValidation {
 }
 
 func validateCollectedDelivery(delivery deliveryEvidence, global map[string]eventEvidence,
-	validation *nodeDeliveryValidation,
+	validation *nodeDeliveryValidation, pair *globalDeliveryPair,
 ) error {
 	origin, exists := global[delivery.OriginEventID]
 	if !exists || origin.Digest != delivery.OriginEventDigest {
@@ -64,15 +179,28 @@ func validateCollectedDelivery(delivery deliveryEvidence, global map[string]even
 			return err
 		}
 	}
-	return validateDeliveryLocalEffect(delivery, global, validation)
+	return validateDeliveryLocalEffect(delivery, global, validation, pair)
 }
 
 func validateDeliveryLocalEffect(delivery deliveryEvidence, global map[string]eventEvidence,
-	validation *nodeDeliveryValidation,
+	validation *nodeDeliveryValidation, pair *globalDeliveryPair,
 ) error {
+	if delivery.Direction != "inbox" && delivery.Direction != "outbox" {
+		return errors.New("peer Delivery has an invalid evidence direction")
+	}
+	hasLocalEvent := delivery.LocalEventID != "" || delivery.LocalEventDigest != ""
+	if (delivery.LocalEventID == "") != (delivery.LocalEventDigest == "") {
+		return errors.New("peer Receipt has a partial local Event reference")
+	}
+	if delivery.Accepted && delivery.State != "settled" {
+		return errors.New("accepted Delivery does not have a settled Receipt")
+	}
+	if !delivery.Accepted && hasLocalEvent {
+		return errors.New("only an accepted Delivery may name a Receipt local Event")
+	}
 	if delivery.LocalEventID == "" {
 		if delivery.Accepted {
-			return errors.New("accepted inbox Delivery has no exact local Event")
+			return errors.New("accepted Delivery has no exact Receipt local Event")
 		}
 		return nil
 	}
@@ -80,10 +208,22 @@ func validateDeliveryLocalEffect(delivery deliveryEvidence, global map[string]ev
 	if !exists || local.Digest != delivery.LocalEventDigest {
 		return errors.New("peer Receipt local Event differs from collected Event")
 	}
-	if delivery.Direction != "inbox" || !delivery.Accepted {
-		return errors.New("only an accepted inbox Delivery may name a local Event")
+	if delivery.Direction == "outbox" {
+		return validateAcceptedOutboxEffect(delivery, local, pair)
 	}
 	return validateReadmittedEvent(local, delivery, validation)
+}
+
+func validateAcceptedOutboxEffect(outbox deliveryEvidence, local eventEvidence,
+	pair *globalDeliveryPair,
+) error {
+	if pair == nil || !pair.hasOutbox || !pair.hasInbox {
+		return errors.New("accepted outbox Receipt has no unique receiver inbox authority")
+	}
+	if local.Node != pair.inbox.Node || local.Node == outbox.Node {
+		return errors.New("accepted outbox Receipt local Event is not receiver-local")
+	}
+	return nil
 }
 
 func validateDeliveryOrigin(origin eventEvidence, delivery deliveryEvidence) error {
@@ -106,7 +246,9 @@ func validateDeliveryOrigin(origin eventEvidence, delivery deliveryEvidence) err
 func validateReadmittedEvent(local eventEvidence, delivery deliveryEvidence,
 	validation *nodeDeliveryValidation,
 ) error {
-	if local.RequestDigest != delivery.EnvelopeDigest ||
+	nodeLocal, exists := validation.events[local.ID]
+	if !exists || nodeLocal.Digest != local.Digest || local.Node != delivery.Node ||
+		local.OperationKey != delivery.ID || local.RequestDigest != delivery.EnvelopeDigest ||
 		local.CausalDepth != delivery.OriginCausalDepth ||
 		local.SemanticKind != delivery.OriginSemanticKind ||
 		local.PayloadBytes != delivery.OriginPayloadBytes ||

@@ -493,7 +493,8 @@ func validateClosedFacts(t *testing.T, sequence int, facts factsWire) {
 	checkEnum("consequence", facts.Consequence, []string{
 		"handling.create", "handling.advance", "handling.resolve.completed",
 		"handling.resolve.declined", "handling.resolve.unresolved", "reference.publish",
-		"reference.supersede", "reference.retract",
+		"reference.supersede", "reference.retract", "observation.completed",
+		"observation.declined", "observation.unresolved",
 	})
 	checkEnum("outcome", facts.Outcome, []string{"accepted", "rejected", "replayed", "completed", "declined", "unresolved"})
 	checkEnum("phase", facts.Phase, []string{"awaiting_seed", "active", "observed"})

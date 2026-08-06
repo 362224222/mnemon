@@ -2,7 +2,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const HOOK_CUE = "mnemond state is available; read .pi/skills/mnemond/SKILL.md and use mnemon-harness from PATH.";
+const HOOK_CUE = "mnemond state is available; read .pi/skills/mnemond/SKILL.md and use its exact Pi tools and artifact commands.";
 const MAX_OUTPUT_BYTES = 4096;
 const ATTACH_TIMEOUT_MS = 5000;
 const SUBMIT_TIMEOUT_MS = 5000;

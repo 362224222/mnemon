@@ -7,16 +7,11 @@ description: Use View.
 
 mnemond admits, not plans: `View -> Intent -> Receipt`.
 
-After cue `mnemon-harness` is already on `PATH`; read View:
+Read this Pi turn's View exactly once with `mnemond_current {}`. Never run
+Current through bash, switch surfaces, or retry after a failed Current.
 
-```sh
-mnemon-harness agent current --json
-```
-
-Choose one `allowed_intents` shape. Submit once; correct once; stop. No effect
-means no Intent.
-
-Pi uses `mnemond_submit`; Host may retain after cutoff.
+Choose one `allowed_intents` shape. Pass one Intent to `mnemond_submit`; correct
+once; stop. No effect means no Intent. Host may retain submit after cutoff.
 
 ## Shapes
 
@@ -32,13 +27,12 @@ Pi uses `mnemond_submit`; Host may retain after cutoff.
   `reference.supersede` takes offered `reference_head` plus one; and
   `reference.retract` takes only the head. Omit successors; none affects `current`.
 
-Send exactly one nonempty JSON object on stdin, with no Markdown or trailing
-text. Use bounded `kind`, `payload`, and an offered `consequence`:
+Pass exactly one nonempty JSON object as `mnemond_submit`'s `intent`, with no
+Markdown or trailing text. Use bounded `kind`, `payload`, and an offered
+`consequence`:
 
-```sh
-mnemon-harness agent submit --json <<'JSON'
+```json
 {"kind":"work.request","payload":"Request evidence.","consequence":"handling.create","successors":[{"self":true},{"alias":"VIEW_TARGET"}]}
-JSON
 ```
 
 ```json
@@ -63,12 +57,11 @@ evidence, action, or a decision, return one correlated terminal disposition,
 including declined or unresolved; never close silently. Copy `reply_target` to
 one successor and `reply_to` to `correlation_handle`. When false, no response is
 owed; do not echo receipt. New remote work follows ordinary anchor rules.
-Reports, duplicates, Receipts, and terminal replies may justify resolving
-current locally; never acknowledge them. If evidence is missing but a View
-target can obtain it, advance and ask rather than claim completion.
+Reports, duplicates, Receipts, and terminal replies are evidence, not reply
+requests. Missing evidence: advance and ask a View target; do not complete.
 `outstanding.open_total` includes `current`. `related` is bounded, read-only
-evidence, never a subject. A `terminal_reply` creates no Handling and never
-closes current; explicitly advance or resolve current after judging it.
+evidence, never a subject. A `terminal_reply` creates no Handling; judge it,
+then explicitly advance or resolve current.
 
 Agent fields: `kind`, `payload`, `consequence`, `subject_handling`,
 `successors`, `reference_key`, `reference_head`, `artifacts`,

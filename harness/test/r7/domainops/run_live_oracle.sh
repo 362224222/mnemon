@@ -17,6 +17,11 @@ test "$(grep -Fxc -- "  \"$attention_exhausted_reason\";" \
   printf 'runtime oracle: Host attention disposition drifted from the observer\n' >&2
   exit 1
 }
+test "$(grep -Fxc -- "const CURRENT_FAILED_TEXT = \"$current_failed_reason\";" \
+  "$harness_root/internal/attach/assets/pi/mnemond-current.ts")" = 1 || {
+  printf 'runtime oracle: native Current failure disposition drifted from the observer\n' >&2
+  exit 1
+}
 
 scratch=$(mktemp -d /tmp/mnr7-runtime-oracle.XXXXXX)
 cleanup_oracle() {
@@ -53,7 +58,7 @@ assert_domain_projection_boundary() {
     exit 1
   }
   printf '%s\n' "$pi_source" | grep -F -- \
-    '--tools bash,delegate,mnemond_submit' >/dev/null || {
+    '--tools bash,delegate,mnemond_current,mnemond_submit' >/dev/null || {
     printf 'runtime oracle: domainops Pi does not expose the exact bounded exploration and settlement surface\n' >&2
     exit 1
   }
@@ -439,6 +444,47 @@ write_current_stream_command() {
   jq -nc '{type:"agent_end"}' >>"$destination"
 }
 
+write_native_current_stream() {
+  local destination=$1
+  shift
+  local index=0 view
+  jq -nc '{type:"message_start",message:{role:"custom",customType:"mnemond"}}' \
+    >"$destination"
+  for view in "$@"; do
+    index=$((index + 1))
+    jq -nc --arg id "native-current-$index" \
+      '{type:"tool_execution_start",toolCallId:$id,toolName:"mnemond_current",args:{}}' \
+      >>"$destination"
+    jq -nc --arg id "native-current-$index" --arg text "$view" \
+      '{type:"tool_execution_end",toolCallId:$id,toolName:"mnemond_current",isError:false,
+        result:{content:[{type:"text",text:$text}],
+          details:{schema:"mnemon.pi.current",version:1,status:"projected"}}}' \
+      >>"$destination"
+  done
+  jq -nc '{type:"message_end",message:{role:"assistant",stopReason:"stop"}}' \
+    >>"$destination"
+  jq -nc '{type:"agent_end"}' >>"$destination"
+}
+
+assert_native_current_stream_rejected() {
+  local name=$1 source=$2 expected=$3 output partial
+  output="$scratch/$name.json"
+  if sanitize_turn lead "oracle-$name" "$source" "$output"; then
+    printf 'runtime oracle: malformed native Current stream %s was accepted\n' "$name" >&2
+    exit 1
+  fi
+  partial=$(summarize_partial_turn "$source")
+  jq -e --arg expected "$expected" '
+    .current_boundary.native_protocol_valid == false and
+    any(.current_boundary.native_violations[];
+      .class == $expected and .count >= 1)
+  ' <<<"$partial" >/dev/null || {
+    printf 'runtime oracle: malformed native Current stream %s lacked bounded diagnostics\n' \
+      "$name" >&2
+    exit 1
+  }
+}
+
 write_domain_observation_stream() {
   local destination=$1
   jq -nc '{type:"message_start",message:{role:"custom",customType:"mnemond"}}' \
@@ -502,6 +548,12 @@ write_submit_stream() {
   local index=0 result is_error
   jq -nc '{type:"message_start",message:{role:"custom",customType:"mnemond"}}' \
     >"$destination"
+  jq -nc '{type:"tool_execution_start",toolCallId:"submit-current",toolName:"bash",
+    args:{command:"mnemon-harness agent current --json"}}' >>"$destination"
+  jq -nc --arg text "$root_view" \
+    '{type:"tool_execution_end",toolCallId:"submit-current",toolName:"bash",isError:false,
+      result:{content:[{type:"text",text:$text}],details:{output:$text}}}' \
+    >>"$destination"
   for result in "$@"; do
     index=$((index + 1))
     is_error=false
@@ -528,6 +580,14 @@ write_native_submit_stream() {
   local destination=$1 result=$2
   jq -nc '{type:"message_start",message:{role:"custom",customType:"mnemond"}}' \
     >"$destination"
+  jq -nc '{type:"tool_execution_start",toolCallId:"native-submit-current",
+    toolName:"mnemond_current",args:{}}' >>"$destination"
+  jq -nc --arg text "$root_view" \
+    '{type:"tool_execution_end",toolCallId:"native-submit-current",
+      toolName:"mnemond_current",isError:false,
+      result:{content:[{type:"text",text:$text}],
+        details:{schema:"mnemon.pi.current",version:1,status:"projected"}}}' \
+    >>"$destination"
   jq -nc '{type:"tool_execution_start",toolCallId:"native-submit",toolName:"mnemond_submit",
     args:{intent:{kind:"opaque",payload:"bounded",consequence:"handling.advance"}}}' \
     >>"$destination"
@@ -556,6 +616,12 @@ write_sequential_submit_stream() {
   test "$is_error" = false || combined="$combined"$'\n\nCommand exited with code 3'
   jq -nc '{type:"message_start",message:{role:"custom",customType:"mnemond"}}' \
     >"$destination"
+  jq -nc '{type:"tool_execution_start",toolCallId:"submit-current",toolName:"bash",
+    args:{command:"mnemon-harness agent current --json"}}' >>"$destination"
+  jq -nc --arg text "$root_view" \
+    '{type:"tool_execution_end",toolCallId:"submit-current",toolName:"bash",isError:false,
+      result:{content:[{type:"text",text:$text}],details:{output:$text}}}' \
+    >>"$destination"
   jq -nc --arg command "$command" \
     '{type:"tool_execution_start",toolCallId:"submit-batch",toolName:"bash",
       args:{command:$command}}' >>"$destination"
@@ -610,6 +676,14 @@ jq -e '
     has_current:false,open_total:0,related_total:0,related_projected:0,truncated:false
   }
 ' "$scratch/root-view.json" >/dev/null
+jq -s -c '.[0], .[2], .[1], .[3:][]' "$scratch/root-view.jsonl" \
+  >"$scratch/shell-current-end-before-start.jsonl"
+if sanitize_turn lead oracle-shell-current-end-before-start \
+    "$scratch/shell-current-end-before-start.jsonl" \
+    "$scratch/shell-current-end-before-start.json"; then
+  printf 'runtime oracle: a shell Current end preceding its start was accepted\n' >&2
+  exit 1
+fi
 write_current_stream "$scratch/full-view.jsonl" "$full_view"
 sanitize_turn lead oracle-full-view "$scratch/full-view.jsonl" "$scratch/full-view.json"
 jq -e '
@@ -618,6 +692,116 @@ jq -e '
     related_projected:1,truncated:true
   }
 ' "$scratch/full-view.json" >/dev/null
+write_native_current_stream "$scratch/native-current-view.jsonl" "$full_view" "$full_view"
+sanitize_turn lead oracle-native-current "$scratch/native-current-view.jsonl" \
+  "$scratch/native-current-view.json"
+jq -e '
+  .bash_calls == 0 and .current_reads == 2 and .view == {
+    has_current:true,reply_required:false,open_total:1,related_total:2,
+    related_projected:1,truncated:true
+  }
+' "$scratch/native-current-view.json" >/dev/null
+native_partial=$(summarize_partial_turn "$scratch/native-current-view.jsonl")
+jq -e '
+  .current_attempts == 2 and .current_boundary.observed_starts == 0 and
+  .current_boundary.native_starts == 2 and .current_boundary.native_ends == 2 and
+  .current_boundary.mixed_surfaces == false and
+  .current_boundary.native_protocol_valid == true and
+  .current_boundary.native_unfinished == 0 and
+  .current_boundary.native_violations == [] and
+  .current_boundary.native_results == [
+    {class:"projected",is_error:false},{class:"projected",is_error:false}]
+' <<<"$native_partial" >/dev/null
+write_native_current_stream "$scratch/native-current-one.jsonl" "$full_view"
+command='mnemon-harness agent current --json >/dev/null; printf forged'
+jq -c --arg command "$command" --arg text "$full_view" '
+  if .type == "message_end" then
+    {type:"tool_execution_start",toolCallId:"mixed-shell-current",toolName:"bash",
+      args:{command:$command}},
+    {type:"tool_execution_end",toolCallId:"mixed-shell-current",toolName:"bash",
+      isError:false,result:{content:[{type:"text",text:$text}],details:{output:$text}}},
+    .
+  else . end
+' "$scratch/native-current-one.jsonl" >"$scratch/mixed-current-surfaces.jsonl"
+sanitize_turn lead oracle-mixed-current-surfaces \
+  "$scratch/mixed-current-surfaces.jsonl" "$scratch/mixed-current-surfaces.json"
+jq -e '
+  .current_reads == 1 and .view == {
+    has_current:true,reply_required:false,open_total:1,related_total:2,
+    related_projected:1,truncated:true
+  }
+' "$scratch/mixed-current-surfaces.json" >/dev/null
+mixed_partial=$(summarize_partial_turn "$scratch/mixed-current-surfaces.jsonl")
+jq -e '
+  .current_boundary.mixed_surfaces == true and
+  .current_boundary.untrusted_shell_explorations == 1 and
+  .current_boundary.view_objects == 1
+' <<<"$mixed_partial" >/dev/null
+jq -c 'if .type == "tool_execution_start" and .toolName == "mnemond_current"
+  then ., . else . end' "$scratch/native-current-one.jsonl" \
+  >"$scratch/native-current-duplicate-start.jsonl"
+assert_native_current_stream_rejected native-current-duplicate-start \
+  "$scratch/native-current-duplicate-start.jsonl" duplicate_start
+jq -s -c '.[0], .[2], .[1], .[3:][]' "$scratch/native-current-one.jsonl" \
+  >"$scratch/native-current-end-before-start.jsonl"
+assert_native_current_stream_rejected native-current-end-before-start \
+  "$scratch/native-current-end-before-start.jsonl" orphan_or_early_end
+jq -c --arg text "$full_view" '
+  if .type == "message_end" then
+    {type:"tool_execution_end",toolCallId:"native-current-orphan",
+      toolName:"mnemond_current",isError:false,
+      result:{content:[{type:"text",text:$text}],
+        details:{schema:"mnemon.pi.current",version:1,status:"projected"}}}, .
+  else . end
+' "$scratch/native-current-one.jsonl" >"$scratch/native-current-orphan-end.jsonl"
+assert_native_current_stream_rejected native-current-orphan-end \
+  "$scratch/native-current-orphan-end.jsonl" orphan_or_early_end
+jq -c 'if .type == "tool_execution_start" and .toolName == "mnemond_current"
+  then .args = {unexpected:true} else . end' "$scratch/native-current-one.jsonl" \
+  >"$scratch/native-current-nonempty-args.jsonl"
+assert_native_current_stream_rejected native-current-nonempty-args \
+  "$scratch/native-current-nonempty-args.jsonl" invalid_start_args
+printf '%s\n' "$current_failed_reason" | jq -Rs '{type:"tool_execution_end",
+  toolCallId:"native-current-failed",toolName:"mnemond_current",isError:true,
+  result:{content:[{type:"text",text:(.[:-1])}],
+    details:{schema:"mnemon.pi.current",version:1,status:"failed"}}}' \
+  >"$scratch/native-current-failed-end.json"
+jq -nc '{type:"message_start",message:{role:"custom",customType:"mnemond"}},
+  {type:"tool_execution_start",toolCallId:"native-current-failed",
+    toolName:"mnemond_current",args:{}},
+  input,{type:"message_end",message:{role:"assistant",stopReason:"stop"}},
+  {type:"agent_end"}' "$scratch/native-current-failed-end.json" \
+  >"$scratch/native-current-failed.jsonl"
+sanitize_turn lead oracle-native-current-failed "$scratch/native-current-failed.jsonl" \
+  "$scratch/native-current-failed.json"
+jq -e '.current_reads == 0 and (.view | not)' "$scratch/native-current-failed.json" >/dev/null
+jq -c --arg text "$full_view" '
+  if .type == "message_end" then
+    {type:"tool_execution_start",toolCallId:"failed-native-shell-current",toolName:"bash",
+      args:{command:"mnemon-harness agent current --json"}},
+    {type:"tool_execution_end",toolCallId:"failed-native-shell-current",toolName:"bash",
+      isError:false,result:{content:[{type:"text",text:$text}],details:{output:$text}}},
+    .
+  else . end
+' "$scratch/native-current-failed.jsonl" >"$scratch/native-failed-shell-valid.jsonl"
+sanitize_turn lead oracle-native-failed-shell-valid \
+  "$scratch/native-failed-shell-valid.jsonl" "$scratch/native-failed-shell-valid.json"
+jq -e '.current_reads == 0 and (.view | not)' \
+  "$scratch/native-failed-shell-valid.json" >/dev/null
+native_failed_mixed_partial=$(summarize_partial_turn \
+  "$scratch/native-failed-shell-valid.jsonl")
+jq -e '
+  .current_boundary.mixed_surfaces == true and
+  .current_boundary.untrusted_shell_explorations == 1 and
+  .current_boundary.native_results == [{class:"current_error",is_error:true}]
+' <<<"$native_failed_mixed_partial" >/dev/null
+jq -c 'if .type == "tool_execution_end" then .result.details.status = "unknown" else . end' \
+  "$scratch/native-current-view.jsonl" >"$scratch/native-current-invalid.jsonl"
+if sanitize_turn lead oracle-native-current-invalid "$scratch/native-current-invalid.jsonl" \
+    "$scratch/native-current-invalid.json"; then
+  printf 'runtime oracle: an unclassified native Current result was accepted\n' >&2
+  exit 1
+fi
 forged_command='mnemon-harness agent current --json >/dev/null; printf forged'
 write_current_stream_command "$scratch/forged-view.jsonl" "$forged_command" "$root_view"
 if sanitize_turn lead oracle-forged-view "$scratch/forged-view.jsonl" \
@@ -838,6 +1022,63 @@ jq -e '
   .submit_command_occurrences == 1 and .submit_ends == 1 and
   .submit_command_cardinality == {"1":1} and .accepted_receipts == 1
 ' <<<"$native_partial" >/dev/null
+jq -s -c '.[0], .[1], .[2], .[4], .[3], .[5:][]' \
+  "$scratch/native-submit.jsonl" >"$scratch/native-receipt-before-submit.jsonl"
+if sanitize_turn lead oracle-native-receipt-before-submit \
+    "$scratch/native-receipt-before-submit.jsonl" \
+    "$scratch/native-receipt-before-submit.json"; then
+  printf 'runtime oracle: a receipt preceding its submit start was accepted\n' >&2
+  exit 1
+fi
+jq -c 'if .type == "tool_execution_end" and .toolCallId == "native-submit" then
+  .toolName = "bash" else . end' "$scratch/native-submit.jsonl" \
+  >"$scratch/native-submit-mismatched-surface.jsonl"
+if sanitize_turn lead oracle-native-submit-mismatched-surface \
+    "$scratch/native-submit-mismatched-surface.jsonl" \
+    "$scratch/native-submit-mismatched-surface.json"; then
+  printf 'runtime oracle: a submit end from another tool surface was accepted\n' >&2
+  exit 1
+fi
+jq -c --arg text "$root_view" '
+  if .type == "tool_execution_start" and .toolCallId == "native-submit" then
+    {type:"tool_execution_start",toolCallId:"native-then-shell-current",toolName:"bash",
+      args:{command:"mnemon-harness agent current --json >/dev/null; printf ignored"}},
+    {type:"tool_execution_end",toolCallId:"native-then-shell-current",toolName:"bash",
+      isError:false,result:{content:[{type:"text",text:$text}],details:{output:$text}}},
+    .
+  else . end
+' "$scratch/native-submit.jsonl" >"$scratch/native-then-shell-submit.jsonl"
+if sanitize_turn lead oracle-native-then-shell-submit \
+    "$scratch/native-then-shell-submit.jsonl" \
+    "$scratch/native-then-shell-submit.json"; then
+  printf 'runtime oracle: an Effect used a stale native View after shell Current\n' >&2
+  exit 1
+fi
+jq -c --arg reason "$current_failed_reason" '
+  if .type == "tool_execution_start" and .toolCallId == "native-submit" then
+    {type:"tool_execution_start",toolCallId:"native-current-after-view",
+      toolName:"mnemond_current",args:{}},
+    {type:"tool_execution_end",toolCallId:"native-current-after-view",
+      toolName:"mnemond_current",isError:true,
+      result:{content:[{type:"text",text:$reason}],
+        details:{schema:"mnemon.pi.current",version:1,status:"failed"}}},
+    .
+  else . end
+' "$scratch/native-submit.jsonl" >"$scratch/native-failed-before-submit.jsonl"
+if sanitize_turn lead oracle-native-failed-before-submit \
+    "$scratch/native-failed-before-submit.jsonl" \
+    "$scratch/native-failed-before-submit.json"; then
+  printf 'runtime oracle: an Effect used a View preceding a failed Current\n' >&2
+  exit 1
+fi
+jq -s -c '.[0], .[3], .[4], .[1], .[2], .[5:][]' \
+  "$scratch/native-submit.jsonl" >"$scratch/native-submit-before-current.jsonl"
+if sanitize_turn lead oracle-native-submit-before-current \
+    "$scratch/native-submit-before-current.jsonl" \
+    "$scratch/native-submit-before-current.json"; then
+  printf 'runtime oracle: an accepted Effect preceding its trusted View was accepted\n' >&2
+  exit 1
+fi
 write_submit_stream "$scratch/accounted.jsonl" "$accepted_receipt" "$closed_denial"
 sanitize_turn lead oracle-accounted "$scratch/accounted.jsonl" "$scratch/accounted.json"
 jq -e '
@@ -846,8 +1087,16 @@ jq -e '
   .submit_denials == 1 and .post_accept_denials == 1 and
   .submit_control_denials == [{code:"context_required",count:1}]
 ' "$scratch/accounted.json" >/dev/null
+jq -s -c '.[0], .[3], .[4], .[1], .[2], .[5:][]' \
+  "$scratch/accounted.jsonl" >"$scratch/shell-submit-before-current.jsonl"
+if sanitize_turn lead oracle-shell-submit-before-current \
+    "$scratch/shell-submit-before-current.jsonl" \
+    "$scratch/shell-submit-before-current.json"; then
+  printf 'runtime oracle: a shell Effect preceding its trusted View was accepted\n' >&2
+  exit 1
+fi
 write_submit_stream "$scratch/multiline-submit.jsonl" "$accepted_receipt"
-jq -c 'if .type == "tool_execution_start" then
+jq -c 'if .type == "tool_execution_start" and .toolCallId == "submit-1" then
   .args.command = "mnemon-harness artifact capture --json \u003c evidence.json\nmnemon-harness agent submit --json"
   else . end' "$scratch/multiline-submit.jsonl" >"$scratch/multiline-submit.tmp"
 mv "$scratch/multiline-submit.tmp" "$scratch/multiline-submit.jsonl"
@@ -874,7 +1123,7 @@ write_sequential_submit_stream "$scratch/sequential-denials.jsonl" 3 \
 sanitize_turn lead oracle-sequential-denials "$scratch/sequential-denials.jsonl" \
   "$scratch/sequential-denials.json"
 jq -e '
-  .bash_calls == 1 and .submit_attempts == 1 and .intent_submits == 0 and
+  .bash_calls == 2 and .submit_attempts == 1 and .intent_submits == 0 and
   .submit_denials == 1 and .submit_invocation_failures == 0
 ' "$scratch/sequential-denials.json" >/dev/null
 
@@ -883,7 +1132,7 @@ write_sequential_submit_stream "$scratch/sequential-rejections.jsonl" 3 \
 sanitize_turn lead oracle-sequential-rejections "$scratch/sequential-rejections.jsonl" \
   "$scratch/sequential-rejections.json"
 jq -e '
-  .bash_calls == 1 and .submit_attempts == 1 and .intent_submits == 1 and
+  .bash_calls == 2 and .submit_attempts == 1 and .intent_submits == 1 and
   .rejected_receipts == 1 and .submit_denials == 0 and
   .submit_invocation_failures == 0
 ' "$scratch/sequential-rejections.json" >/dev/null
@@ -893,10 +1142,18 @@ write_sequential_submit_stream "$scratch/sequential-repair.jsonl" 3 \
 sanitize_turn lead oracle-sequential-repair "$scratch/sequential-repair.jsonl" \
   "$scratch/sequential-repair.json"
 jq -e '
-  .bash_calls == 1 and .submit_attempts == 1 and .intent_submits == 1 and
+  .bash_calls == 2 and .submit_attempts == 1 and .intent_submits == 1 and
   .accepted_receipts == 1 and .submit_denials == 0 and
   .submit_invocation_failures == 0
 ' "$scratch/sequential-repair.json" >/dev/null
+
+write_sequential_submit_stream "$scratch/duplicate-accepted.jsonl" 2 \
+  "$accepted_receipt" "$accepted_receipt"
+if sanitize_turn lead oracle-duplicate-accepted "$scratch/duplicate-accepted.jsonl" \
+    "$scratch/duplicate-accepted.json"; then
+  printf 'runtime oracle: two accepted Receipts in one tool result were accepted\n' >&2
+  exit 1
+fi
 
 write_submit_stream "$scratch/repaired-operation.jsonl" \
   "$closed_denial"$'\n'"$accepted_receipt"

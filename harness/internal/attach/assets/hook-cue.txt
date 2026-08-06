@@ -1,1 +1,1 @@
-mnemond state is available; read .pi/skills/mnemond/SKILL.md and use mnemon-harness from PATH.
+mnemond state is available; read .pi/skills/mnemond/SKILL.md and use its exact Pi tools and artifact commands.
