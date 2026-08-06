@@ -23,7 +23,7 @@ ENTRYPOINT ["domain-world"]
 FROM node:22-alpine3.22 AS agent
 
 ARG PI_VERSION=0.83.0
-RUN apk add --no-cache bash ca-certificates jq && \
+RUN apk add --no-cache bash ca-certificates jq sqlite && \
     npm install -g --ignore-scripts --no-audit --no-fund \
       "@earendil-works/pi-coding-agent@${PI_VERSION}" && \
     adduser -D -u 10001 agent && mkdir -p /workspace && chown agent:agent /workspace

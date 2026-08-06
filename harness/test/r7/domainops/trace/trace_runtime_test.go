@@ -207,7 +207,7 @@ func TestAppendEventFactsProjectsExpectedReferenceHead(t *testing.T) {
 			Consequence: "reference.supersede", ReferenceHead: "event:reference",
 			ReferenceDigest: referenceDigest},
 	}}}
-	if _, _, err := appendEventFacts(writer, nodes); err != nil {
+	if _, _, err := appendEventFacts(writer, nodes, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output.String(), `"reference_head":"event:reference"`) {

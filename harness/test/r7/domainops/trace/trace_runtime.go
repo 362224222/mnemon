@@ -51,8 +51,13 @@ func projectRuntimeFacts(turn turnSummary, capturedAt time.Time) []observer.Fact
 			observer.TruthObservation, observer.FactFields{}))
 	}
 	if turn.IntentSubmits > 0 {
-		facts = append(facts, runtimeFact(turn, capturedAt, "intent", "runtime.intent.submitted",
-			observer.TruthObservation, observer.FactFields{Action: "submit"}))
+		fact := runtimeFact(turn, capturedAt, "intent", "runtime.intent.submitted",
+			observer.TruthObservation, observer.FactFields{Action: "submit"})
+		if len(turn.AcceptedEvents) == 1 {
+			fact.References.Event = turn.AcceptedEvents[0].ID
+			fact.References.EventDigest = turn.AcceptedEvents[0].Digest
+		}
+		facts = append(facts, fact)
 	}
 	facts = append(facts, projectIntentDenialFacts(turn, capturedAt)...)
 	return append(facts, runtimeFact(turn, capturedAt, "ended", "runtime.turn.ended",

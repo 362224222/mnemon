@@ -207,7 +207,7 @@ func TestValidateReportRequiresAllIndependentGates(t *testing.T) {
 	report.Turns[0].BashCalls = 1
 	report.Turns[0].SubmitAttempts = 3
 	report.Turns[0].IntentSubmits = 1
-	report.Turns[0].AcceptedReceipts = 1
+	acceptTestTurn(&report.Turns[0], "bounded-post-accept")
 	report.Turns[0].SubmitDenials = 2
 	report.Turns[0].SubmitControlDenials = []controlDenial{{Code: "context_required", Count: 2}}
 	report.Turns[0].PostAcceptDenials = 2
@@ -668,6 +668,13 @@ func validReport() liveReport {
 	}
 	populateValidEvolution(&report)
 	return report
+}
+
+func acceptTestTurn(turn *turnSummary, name string) {
+	turn.AcceptedReceipts = 1
+	turn.AcceptedEvents = []acceptedEventSummary{{
+		ID: "event:" + name, Digest: agency.Sum([]byte(name)).String(),
+	}}
 }
 
 func populateValidEvolution(report *liveReport) {

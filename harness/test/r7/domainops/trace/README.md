@@ -78,6 +78,14 @@ These counters are Runtime observations: they do not assert why an external
 state changed and cannot prove a business repair. The external world oracle
 remains the sole evidence for that result.
 
+`turns[].accepted_events` is an exact test-runner binding, not model-visible
+authority. The runner diffs accepted local operation Events immediately before
+and after one turn, retains only Event ID and digest, and requires the stopped
+authority database to prove the same accepted operation. It never retains the
+operation key, request digest, attachment, fence, submitted Intent, or Receipt
+body. The binding labels an accepted Event with its producing Runtime turn; it
+does not make the Runtime observation a cause of that Event.
+
 The passed runner report is `mnemon.r7.domain-ops.live-report` version 4. It
 contains two ordered service-world episodes and a bounded authority boundary
 between them. Before either business oracle, its first-attention settlement

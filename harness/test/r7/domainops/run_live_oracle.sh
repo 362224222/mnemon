@@ -424,6 +424,21 @@ jq -e '
       batched_unattributed:1}
   }
 ' "$scratch/domain-observations.json" >/dev/null
+printf '%s\n' '[{"id":"event:before","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]' \
+  >"$scratch/events-before.json"
+printf '%s\n' '[{"id":"event:before","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"id":"event:new","digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]' \
+  >"$scratch/events-after.json"
+printf '%s\n' '{"accepted_receipts":1}' >"$scratch/event-binding.json"
+bind_turn_events "$scratch/events-before.json" "$scratch/events-after.json" \
+  "$scratch/event-binding.json"
+jq -e '.accepted_events == [{id:"event:new",digest:"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]' \
+  "$scratch/event-binding.json" >/dev/null
+printf '%s\n' '{"accepted_receipts":0}' >"$scratch/event-binding-mismatch.json"
+if bind_turn_events "$scratch/events-before.json" "$scratch/events-after.json" \
+    "$scratch/event-binding-mismatch.json"; then
+  printf 'runtime oracle: accepted Receipt/Event mismatch was accepted\n' >&2
+  exit 1
+fi
 if grep -E 'secret-|ambiguous-result|wrong-role' "$scratch/domain-observations.json" >/dev/null; then
   printf 'runtime oracle: sanitized domain observation retained command or result content\n' >&2
   exit 1

@@ -39,7 +39,7 @@ func writeTrace(destination io.Writer, proof evidence) error {
 	if err != nil {
 		return err
 	}
-	eventFacts, orderedEvents, err := appendEventFacts(writer, proof.Nodes)
+	eventFacts, orderedEvents, err := appendEventFacts(writer, proof.Nodes, proof.Report.Turns)
 	if err != nil {
 		return err
 	}
@@ -129,7 +129,7 @@ func appendArtifactFacts(writer *observer.Writer, nodes []nodeEvidence) ([]strin
 	return facts, nil
 }
 
-func appendEventFacts(writer *observer.Writer, nodes []nodeEvidence) (
+func appendEventFacts(writer *observer.Writer, nodes []nodeEvidence, turns []turnSummary) (
 	map[string]string, []eventEvidence, error,
 ) {
 	ordered, err := topologicalEvents(nodes)
@@ -138,6 +138,12 @@ func appendEventFacts(writer *observer.Writer, nodes []nodeEvidence) (
 	}
 	byID := make(map[string]eventEvidence, len(ordered))
 	factByEvent := make(map[string]string, len(ordered))
+	turnByEvent := make(map[string]string)
+	for _, turn := range turns {
+		for _, event := range turn.AcceptedEvents {
+			turnByEvent[event.ID] = turn.Turn
+		}
+	}
 	for _, event := range ordered {
 		byID[event.ID] = event
 		factID := hashedFactID("r7.event", event.Node, event.ID, event.Digest)
@@ -163,9 +169,15 @@ func appendEventFacts(writer *observer.Writer, nodes []nodeEvidence) (
 		if event.ReferenceHead != "" {
 			references.ReferenceHead = event.ReferenceHead
 		}
+		turn := turnByEvent[event.ID]
+		agent := ""
+		if turn != "" {
+			agent = event.Node
+		}
 		if _, err := writer.Append(observer.Fact{ID: factID, CapturedAt: event.AcceptedAt,
 			Source: observer.Source{Class: observer.SourceR7Authority, Node: event.Node},
-			Kind:   "r7.event.accepted", Truth: observer.TruthAcceptedLocalFact, Causes: causes,
+			Agent:  agent, Turn: turn, Kind: "r7.event.accepted",
+			Truth: observer.TruthAcceptedLocalFact, Causes: causes,
 			References: references, Fields: observer.FactFields{SemanticKind: event.SemanticKind,
 				Consequence: event.Consequence, ArtifactCount: &artifactCount,
 				PayloadBytes: &payloadBytes, TargetCount: &targetCount,

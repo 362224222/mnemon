@@ -7,7 +7,7 @@ func TestValidateReportAcceptsContainedPostAcceptDenials(t *testing.T) {
 	report.Turns[0].BashCalls = 14
 	report.Turns[0].SubmitAttempts = 14
 	report.Turns[0].IntentSubmits = 1
-	report.Turns[0].AcceptedReceipts = 1
+	acceptTestTurn(&report.Turns[0], "report-post-accept")
 	report.Turns[0].SubmitDenials = 13
 	report.Turns[0].SubmitControlDenials = []controlDenial{{Code: "context_required", Count: 13}}
 	report.Turns[0].PostAcceptDenials = 13
@@ -47,7 +47,7 @@ func TestValidateFailureReportAcceptsContainedPostAcceptDenials(t *testing.T) {
 	report.Turns[0].BashCalls = 14
 	report.Turns[0].SubmitAttempts = 14
 	report.Turns[0].IntentSubmits = 1
-	report.Turns[0].AcceptedReceipts = 1
+	acceptTestTurn(&report.Turns[0], "failure-post-accept")
 	report.Turns[0].SubmitDenials = 13
 	report.Turns[0].SubmitControlDenials = []controlDenial{{Code: "context_required", Count: 13}}
 	report.Turns[0].PostAcceptDenials = 13

@@ -58,3 +58,28 @@ func TestValidateEvolutionEvidenceBindsLaterEventToExactBoundaryHead(t *testing.
 		t.Fatal("validateEvolutionEvidence() accepted a non-exact Reference edge")
 	}
 }
+
+func TestValidateTurnEventBindingsRequireExactStoppedOperation(t *testing.T) {
+	digest := agency.Sum([]byte("turn Event")).String()
+	turns := []turnSummary{{Role: "lead", Turn: "turn-a", AcceptedEvents: []acceptedEventSummary{{
+		ID: "event:turn-a", Digest: digest,
+	}}}}
+	nodes := []nodeEvidence{{Role: "lead",
+		Events: []eventEvidence{{Node: "lead", ID: "event:turn-a", Digest: digest}},
+		Operations: []operationEvidence{{Node: "lead", Outcome: "accepted",
+			EventID: "event:turn-a", EventDigest: digest}},
+	}}
+	if err := validateTurnEventBindings(turns, nodes); err != nil {
+		t.Fatalf("exact Runtime turn/Event binding: %v", err)
+	}
+
+	turns[0].AcceptedEvents[0].Digest = agency.Sum([]byte("wrong")).String()
+	if err := validateTurnEventBindings(turns, nodes); err == nil {
+		t.Fatal("Runtime turn accepted an Event digest absent from stopped authority")
+	}
+	turns[0].AcceptedEvents[0].Digest = digest
+	turns = append(turns, turns[0])
+	if err := validateTurnEventBindings(turns, nodes); err == nil {
+		t.Fatal("accepted Event was attributed to two Runtime turns")
+	}
+}

@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"slices"
+
+	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
 type controlDenial struct {
@@ -59,6 +61,7 @@ func validateTurnBounds(turn turnSummary) error {
 func validateRuntimeObservationConsistency(turn turnSummary) error {
 	if turn.PrivateBindingProbes != 0 || turn.DelegateCalls > 1 ||
 		turn.CurrentReads > turn.BashCalls || turn.AcceptedReceipts > 1 ||
+		len(turn.AcceptedEvents) != turn.AcceptedReceipts ||
 		!domainOperationClosed(turn.DomainOperations.Read) ||
 		!domainOperationClosed(turn.DomainOperations.Probe) ||
 		!domainOperationClosed(turn.DomainOperations.Mutation) ||
@@ -67,6 +70,14 @@ func validateRuntimeObservationConsistency(turn turnSummary) error {
 		turn.IntentSubmits != turn.AcceptedReceipts+turn.RejectedReceipts ||
 		turn.SubmitAttempts != turn.IntentSubmits+turn.SubmitDenials+turn.SubmitInvocationFailures {
 		return errors.New("sanitized report contains inconsistent Runtime observations")
+	}
+	for _, event := range turn.AcceptedEvents {
+		if _, err := agency.NewEventID(event.ID); err != nil {
+			return errors.New("sanitized report contains an invalid accepted Event ID")
+		}
+		if _, err := agency.ParseDigest(event.Digest); err != nil {
+			return errors.New("sanitized report contains an invalid accepted Event digest")
+		}
 	}
 	return nil
 }

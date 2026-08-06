@@ -111,10 +111,13 @@ func writeFailureTrace(destination io.Writer, report failureReport,
 	if err := appendRuntimeFacts(writer, report.Turns); err != nil {
 		return err
 	}
+	if err := validateTurnEventBindings(report.Turns, nodes); err != nil {
+		return err
+	}
 	if _, err := appendArtifactFacts(writer, nodes); err != nil {
 		return err
 	}
-	eventFacts, ordered, err := appendEventFacts(writer, nodes)
+	eventFacts, ordered, err := appendEventFacts(writer, nodes, report.Turns)
 	if err != nil {
 		return err
 	}

@@ -669,6 +669,40 @@ sanitize_turn() {
   ' "$raw" >/dev/null
 }
 
+snapshot_accepted_events() {
+  local container=$1 destination=$2 database=/workspace/.mnemon/harness/node/agency.db
+  docker exec "$container" sqlite3 -readonly -batch -json -cmd '.timeout 5000' \
+    "$database" '
+      SELECT events.event_id AS id, events.event_digest AS digest
+      FROM operations JOIN events ON events.event_id = operations.event_id
+      WHERE operations.outcome = '\''accepted'\''
+      ORDER BY events.origin_sequence;' >"$destination" || return 1
+  test -s "$destination" || printf '[]\n' >"$destination"
+  jq -e '
+    type == "array" and length <= 256 and
+    all(.[]; (keys | sort) == ["digest","id"] and
+      (.id | type == "string") and (.digest | type == "string"))
+  ' "$destination" >/dev/null
+}
+
+bind_turn_events() {
+  local before=$1 after=$2 summary=$3 temporary
+  temporary=$summary.events
+  jq -n --slurpfile before "$before" --slurpfile after "$after" '
+    ($before[0] | map(.id)) as $known |
+    [$after[0][] as $event |
+      select(($known | index($event.id)) == null) | $event]
+  ' >"$temporary.refs" || return 1
+  jq --slurpfile accepted "$temporary.refs" '
+    ($accepted[0]) as $events |
+    select(($events | length) == .accepted_receipts and ($events | length) <= 1) |
+    . + {accepted_events:$events}
+  ' "$summary" >"$temporary" || return 1
+  test -s "$temporary" || return 1
+  mv "$temporary" "$summary"
+  rm -f "$temporary.refs"
+}
+
 summarize_partial_turn() {
   local raw=$1
   jq -s -c '
@@ -794,13 +828,17 @@ summarize_provider_stderr() {
 }
 
 run_turn() {
-  local role=$1 prompt=$2 tag=$3 container raw errors sanitized marker writer status
+  local role=$1 prompt=$2 tag=$3 container raw errors sanitized marker writer status before after
   local raw_bytes error_bytes
   container=$(container_for "$role")
   raw="$runtime_root/raw/$tag.jsonl"
   errors="$runtime_root/raw/$tag.err"
   sanitized="$runtime_root/sanitized/$tag.json"
   marker="$runtime_root/raw/$tag.timeout"
+  before="$runtime_root/raw/$tag.events-before.json"
+  after="$runtime_root/raw/$tag.events-after.json"
+  snapshot_accepted_events "$container" "$before" ||
+    fail "$role turn $tag could not freeze its pre-turn accepted Event boundary"
   printf '%s\n' "$prompt" | docker exec -i "$container" sh -c \
     'umask 077; cat > /workspace/.mnemon/live/turn-prompt.md'
   docker exec "$container" sh -c \
@@ -860,7 +898,15 @@ run_turn() {
     rm -f -- "$raw" "$errors" "$marker"
     fail "$role turn $tag violated the Hook/submit/terminal boundary; partial=$partial; provider_error=$provider_error"
   }
-  rm -f -- "$raw" "$errors" "$marker"
+  snapshot_accepted_events "$container" "$after" || {
+    rm -f -- "$raw" "$errors" "$marker" "$before" "$after"
+    fail "$role turn $tag could not freeze its post-turn accepted Event boundary"
+  }
+  bind_turn_events "$before" "$after" "$sanitized" || {
+    rm -f -- "$raw" "$errors" "$marker" "$before" "$after" "$sanitized"
+    fail "$role turn $tag accepted Receipt/Event attribution is inconsistent"
+  }
+  rm -f -- "$raw" "$errors" "$marker" "$before" "$after"
 }
 
 run_attention_round() {

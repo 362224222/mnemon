@@ -12,6 +12,7 @@ type turnSummary struct {
 	SubmitAttempts           int                     `json:"submit_attempts"`
 	IntentSubmits            int                     `json:"intent_submits"`
 	AcceptedReceipts         int                     `json:"accepted_receipts"`
+	AcceptedEvents           []acceptedEventSummary  `json:"accepted_events"`
 	RejectedReceipts         int                     `json:"rejected_receipts"`
 	SubmitDenials            int                     `json:"submit_denials"`
 	SubmitInvocationFailures int                     `json:"submit_invocation_failures"`
@@ -19,6 +20,11 @@ type turnSummary struct {
 	PostAcceptDenials        int                     `json:"post_accept_denials"`
 	PrivateBindingProbes     int                     `json:"private_binding_probes"`
 	AgentEnd                 bool                    `json:"agent_end"`
+}
+
+type acceptedEventSummary struct {
+	ID     string `json:"id"`
+	Digest string `json:"digest"`
 }
 
 type domainOperationsSummary struct {
