@@ -210,6 +210,10 @@
           "test": "./internal/authority::TestImportedHandlingKeepsReplyContextAcrossLocalAdvance"
         },
         {
+          "id": "imported-integration-explicit-advance-creates-reply-anchor",
+          "test": "./internal/authority::TestImportedIntegrationExplicitAdvanceCreatesReplyAnchor"
+        },
+        {
           "id": "imported-terminal-reply-cannot-anchor-chain",
           "test": "./internal/authority::TestImportedTerminalReplyCannotBecomeAnotherReplyAnchor"
         },
@@ -252,6 +256,10 @@
         {
           "id": "terminal-reply-anchor-is-local-open-principal-and-route-bound",
           "test": "./internal/authority::TestTerminalReplyAdmissionRequiresOpenCorrelatedLocalResponsibility"
+        },
+        {
+          "id": "terminal-reply-follows-bound-subject-advance-anchor",
+          "test": "./internal/authority::TestTerminalReplyFollowsBoundSubjectAdvanceAnchor"
         },
         {
           "id": "terminal-reply-genuine-anchor-survives-related-integration",
@@ -597,6 +605,7 @@
             "test:./internal/authority::TestFreshCurrentDurablySettlesExpiredClaimWithoutDomainEffect",
             "test:./internal/authority::TestImportedCurrentProjectsOneAuthenticatedReplyTarget",
             "test:./internal/authority::TestImportedHandlingKeepsReplyContextAcrossLocalAdvance",
+            "test:./internal/authority::TestImportedIntegrationExplicitAdvanceCreatesReplyAnchor",
             "test:./internal/authority::TestImportedTerminalDispositionClosesResponderAndReturnsToRequester",
             "test:./internal/authority::TestImportedTerminalReplyCannotBecomeAnotherReplyAnchor",
             "test:./internal/authority::TestInteractiveAttachmentBeginCannotReviveEndedBoundary",
@@ -620,6 +629,7 @@
             "test:./internal/authority::TestRemoteRejectionAndExpiryLeaveOriginAnchorOpen",
             "test:./internal/authority::TestTerminalReplyAdmissionRequiresOpenCorrelatedLocalResponsibility",
             "test:./internal/authority::TestTerminalReplyAdmissionUsesGenuineAnchorAmongRelatedOpenHandlings",
+            "test:./internal/authority::TestTerminalReplyFollowsBoundSubjectAdvanceAnchor",
             "test:./internal/authority::TestVerifiedPeerDeliveryFaultMatrixCommitsWholeReceiverOutcomeOrNone",
             "test:./internal/authority::TestVerifyArtifactEnforcesExistingCASObjectBound",
             "test:./internal/cli::TestAcceptedHandlingReceiptRetainsReplayUntilBoundaryEndCommits",

@@ -76,6 +76,9 @@ CREATE TABLE peer_outbox (
     delivery_id TEXT PRIMARY KEY,
     route_id TEXT NOT NULL REFERENCES peer_routes(route_id),
     origin_event_id TEXT NOT NULL REFERENCES events(event_id),
+    reply_anchor_handling_id TEXT REFERENCES handlings(handling_id),
+    expected_reply_root_event_id TEXT,
+    expected_reply_root_event_digest TEXT,
     envelope_digest TEXT NOT NULL UNIQUE,
     delivery_json BLOB NOT NULL,
     state TEXT NOT NULL CHECK (state IN ('pending', 'settled', 'expired')),
@@ -85,6 +88,15 @@ CREATE TABLE peer_outbox (
     receipt_json BLOB,
     receipt_signature BLOB,
     settled_at TEXT,
+    CHECK ((reply_anchor_handling_id IS NULL AND expected_reply_root_event_id IS NULL AND
+            expected_reply_root_event_digest IS NULL) OR
+           (reply_anchor_handling_id IS NOT NULL AND expected_reply_root_event_id IS NOT NULL AND
+            expected_reply_root_event_digest IS NOT NULL AND
+            length(expected_reply_root_event_digest) = 71 AND
+            substr(expected_reply_root_event_digest, 1, 7) = 'sha256:' AND
+            substr(expected_reply_root_event_digest, 8) NOT GLOB '*[^0-9a-f]*' AND
+            expected_reply_root_event_digest !=
+                'sha256:0000000000000000000000000000000000000000000000000000000000000000')),
     CHECK ((state = 'pending' AND receipt_digest IS NULL AND receipt_json IS NULL AND
             receipt_signature IS NULL AND settled_at IS NULL) OR
            (state = 'settled' AND receipt_digest IS NOT NULL AND receipt_json IS NOT NULL AND
@@ -98,6 +110,11 @@ ON peer_outbox(state, expires_at, created_at);
 
 CREATE UNIQUE INDEX peer_outbox_origin_route
 ON peer_outbox(origin_event_id, route_id);
+
+CREATE INDEX peer_outbox_reply_match
+ON peer_outbox(route_id, expected_reply_root_event_id,
+               expected_reply_root_event_digest, reply_anchor_handling_id)
+WHERE reply_anchor_handling_id IS NOT NULL;
 
 CREATE TABLE peer_inbox (
     delivery_id TEXT PRIMARY KEY,
@@ -232,4 +249,4 @@ CREATE TABLE reference_outcome_projection (
 ) STRICT;
 
 PRAGMA application_id = 1296978487;
-PRAGMA user_version = 9;
+PRAGMA user_version = 10;

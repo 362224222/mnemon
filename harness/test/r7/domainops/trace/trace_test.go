@@ -539,7 +539,7 @@ func createAuthorityFixture(t *testing.T) string {
 	db := openFixture(t, path)
 	schema := `
 PRAGMA application_id = 1296978487;
-PRAGMA user_version = 9;
+PRAGMA user_version = 10;
 CREATE TABLE events(event_id TEXT PRIMARY KEY,event_digest TEXT,origin_sequence INTEGER,
  source_principal_id TEXT,request_digest TEXT,causal_depth INTEGER,accepted_at TEXT,canonical_json BLOB);
 CREATE TABLE verified_artifacts(digest TEXT PRIMARY KEY,byte_size INTEGER,verified_at TEXT);
@@ -550,8 +550,10 @@ CREATE TABLE handlings(handling_id TEXT,target_principal_id TEXT,head_event_id T
  outcome TEXT,created_sequence INTEGER);
 CREATE TABLE reference_lineage(event_id TEXT,reference_key TEXT,previous_event_id TEXT,
  state TEXT,artifact_digest TEXT);
-CREATE TABLE peer_outbox(delivery_id TEXT,route_id TEXT,origin_event_id TEXT,envelope_digest TEXT,
- delivery_json BLOB,state TEXT,created_at TEXT,settled_at TEXT,receipt_digest TEXT,receipt_json BLOB);
+CREATE TABLE peer_outbox(delivery_id TEXT,route_id TEXT,origin_event_id TEXT,
+ reply_anchor_handling_id TEXT,expected_reply_root_event_id TEXT,
+ expected_reply_root_event_digest TEXT,envelope_digest TEXT,delivery_json BLOB,state TEXT,
+ created_at TEXT,settled_at TEXT,receipt_digest TEXT,receipt_json BLOB);
 CREATE TABLE peer_inbox(delivery_id TEXT,route_id TEXT,envelope_digest TEXT,delivery_json BLOB,
  state TEXT,received_at TEXT,settled_at TEXT,local_event_id TEXT,receipt_digest TEXT,receipt_json BLOB);`
 	if _, err := db.Exec(schema); err != nil {
