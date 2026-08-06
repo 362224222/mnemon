@@ -486,14 +486,17 @@ func decodeTestWire(t *testing.T, raw []byte, target any) {
 func waitForSocket(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
 	for time.Now().Before(deadline) {
-		info, err := os.Lstat(path)
-		if err == nil && info.Mode()&os.ModeType == os.ModeSocket {
+		connection, err := net.DialTimeout("unix", path, 50*time.Millisecond)
+		if err == nil {
+			_ = connection.Close()
 			return
 		}
+		lastErr = err
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("control socket %s did not appear", path)
+	t.Fatalf("control socket %s did not accept connections: %v", path, lastErr)
 }
 
 func TestControlWireContainsNoCaseSpecificKind(t *testing.T) {
