@@ -60,11 +60,23 @@ envelope collapse by precedence to accepted, rejected, control denial, or
 invocation failure. `turns[].submit_invocation_failures` therefore counts
 envelopes that exposed no Receipt or admission diagnostic. These Runtime
 observations never prove or contribute evidence of an Effect; only stopped
-authority state does that. `turns[].submit_control_diagnostics` retains only the
-bounded, deduplicated control code and safe CLI message needed to diagnose an
-Agent-surface failure; it contains no submitted Intent or provider prose.
+authority state does that. `turns[].submit_control_denials` retains only a
+bounded closed code and count; diagnostic messages, submitted Intents, and
+provider prose are never retained.
 
-The passed runner report is `mnemon.r7.domain-ops.live-report` version 3. It
+`turns[].domain_operations` contains bounded requested-command and success
+counters for the neutral `read`, `probe`, and `mutation` classes. `attempts`
+counts exact `domainctl` occurrences in Bash input; it does not claim that shell
+control flow reached or executed each occurrence. A success additionally
+requires a non-error tool result containing the closed `domainctl` role/result
+envelope for the current Agent role; a shell pipeline, wrong-role result, or
+`|| true` cannot turn an empty failed invocation into a success. The sanitizer
+never retains paths, endpoints, payloads, or results.
+These counters are Runtime observations: they do not assert why an external
+state changed and cannot prove a business repair. The external world oracle
+remains the sole evidence for that result.
+
+The passed runner report is `mnemon.r7.domain-ops.live-report` version 4. It
 contains two ordered service-world episodes and a bounded authority boundary
 between them. Before either business oracle, its first-attention settlement
 records only protocol-derived `open && claim_fence == 0` counts, the bounded
@@ -77,7 +89,7 @@ the stopped Reference lineage, and is no newer than the end boundary. Every
 reported later use must be an exact causation or supersede/retract edge from a
 post-boundary accepted Event. It does not inspect Artifact bytes, semantic kinds, or remediation
 choices. Earlier passed-report versions are intentionally not accepted as two-episode
-evidence; failed reports retain their independent version-1 shape below.
+evidence; failed reports retain their independent version-2 shape below.
 
 ## Failed-run input
 
@@ -87,7 +99,7 @@ five stores, then write a sanitized input with this closed shape:
 ```json
 {
   "schema": "mnemon.r7.domain-ops.failure-report",
-  "version": 1,
+  "version": 2,
   "status": "failed",
   "model": "bounded-model-token",
   "run": {

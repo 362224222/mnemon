@@ -175,6 +175,7 @@ func TestTraceWriterRejectsKindsWithoutMinimumDisplayEvidence(t *testing.T) {
 
 func TestKindEvidenceRulesMatchClosedDisplayContract(t *testing.T) {
 	expected := []string{
+		"runtime.domain.operation", "runtime.intent.denied",
 		"r7.event.accepted", "r7.handling.resolved", "r8.selection.seeded",
 		"r8.round.frozen", "r8.vote.observed", "r8.round.settled",
 		"r8.observation.produced",

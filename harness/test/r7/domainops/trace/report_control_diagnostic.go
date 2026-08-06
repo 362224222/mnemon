@@ -3,20 +3,15 @@ package main
 import (
 	"errors"
 	"slices"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
-type controlDiagnostic struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+type controlDenial struct {
+	Code  string `json:"code"`
+	Count int    `json:"count"`
 }
 
-func validControlDiagnostic(diagnostic controlDiagnostic) bool {
-	if diagnostic.Message == "" || len(diagnostic.Message) > agency.MaxDiagnosticBytes {
-		return false
-	}
-	switch diagnostic.Code {
+func validControlDenialCode(code string) bool {
+	switch code {
 	case "invalid_argument", "content_required", "content_too_large", "artifact_invalid",
 		"artifact_too_large", "authentication_failed", "context_required", "context_stale",
 		"asset_revision_mismatch", "action_not_allowed", "operation_mismatch",
@@ -28,37 +23,66 @@ func validControlDiagnostic(diagnostic controlDiagnostic) bool {
 }
 
 func validateTurnSummary(turn turnSummary) error {
+	if err := validateTurnBounds(turn); err != nil {
+		return err
+	}
+	if err := validateRuntimeObservationConsistency(turn); err != nil {
+		return err
+	}
+	return validateControlDenials(turn)
+}
+
+func validateTurnBounds(turn turnSummary) error {
 	values := []int{turn.HookCues, turn.BashCalls, turn.DelegateCalls, turn.CurrentReads,
 		turn.SubmitAttempts, turn.IntentSubmits, turn.AcceptedReceipts, turn.RejectedReceipts,
 		turn.SubmitDenials, turn.SubmitInvocationFailures, turn.PostAcceptDenials,
-		turn.PrivateBindingProbes}
+		turn.PrivateBindingProbes,
+		turn.DomainOperations.Read.Attempts, turn.DomainOperations.Read.Successes,
+		turn.DomainOperations.Probe.Attempts, turn.DomainOperations.Probe.Successes,
+		turn.DomainOperations.Mutation.Attempts, turn.DomainOperations.Mutation.Successes}
 	if _, err := parseReportTime("turn captured_at", turn.CapturedAt); err != nil {
 		return err
 	}
 	if !turn.AgentEnd || turn.HookCues < 1 || slices.ContainsFunc(values,
 		func(value int) bool { return value < 0 || value > 256 }) {
-		return errors.New("sanitized live report contains an invalid bounded turn")
+		return errors.New("sanitized report contains an invalid bounded turn")
 	}
+	return nil
+}
+
+func validateRuntimeObservationConsistency(turn turnSummary) error {
 	if turn.PrivateBindingProbes != 0 || turn.DelegateCalls > 1 ||
 		turn.CurrentReads > turn.BashCalls || turn.AcceptedReceipts > 1 ||
+		turn.DomainOperations.Read.Successes > turn.DomainOperations.Read.Attempts ||
+		turn.DomainOperations.Probe.Successes > turn.DomainOperations.Probe.Attempts ||
+		turn.DomainOperations.Mutation.Successes > turn.DomainOperations.Mutation.Attempts ||
 		turn.PostAcceptDenials > turn.SubmitDenials ||
 		(turn.PostAcceptDenials > 0 && turn.AcceptedReceipts != 1) ||
 		turn.IntentSubmits != turn.AcceptedReceipts+turn.RejectedReceipts ||
 		turn.SubmitAttempts != turn.IntentSubmits+turn.SubmitDenials+turn.SubmitInvocationFailures {
-		return errors.New("sanitized live report contains inconsistent successful CLI observations")
+		return errors.New("sanitized report contains inconsistent Runtime observations")
 	}
-	if len(turn.SubmitControlDiagnostics) > 32 {
-		return errors.New("sanitized live report contains unbounded control diagnostics")
+	return nil
+}
+
+func validateControlDenials(turn turnSummary) error {
+	if len(turn.SubmitControlDenials) > 14 {
+		return errors.New("sanitized report contains unbounded control denial classes")
 	}
-	seenDiagnostics := make(map[controlDiagnostic]struct{}, len(turn.SubmitControlDiagnostics))
-	for _, diagnostic := range turn.SubmitControlDiagnostics {
-		if !validControlDiagnostic(diagnostic) {
-			return errors.New("sanitized live report contains an invalid control diagnostic")
+	denialCount := 0
+	previousCode := ""
+	for _, denial := range turn.SubmitControlDenials {
+		if !validControlDenialCode(denial.Code) || denial.Count < 1 || denial.Count > 256 {
+			return errors.New("sanitized report contains an invalid control denial")
 		}
-		if _, exists := seenDiagnostics[diagnostic]; exists {
-			return errors.New("sanitized live report repeats a control diagnostic")
+		if previousCode != "" && denial.Code <= previousCode {
+			return errors.New("sanitized report control denial codes are not unique and sorted")
 		}
-		seenDiagnostics[diagnostic] = struct{}{}
+		previousCode = denial.Code
+		denialCount += denial.Count
+	}
+	if denialCount != turn.SubmitDenials {
+		return errors.New("sanitized report does not classify every control denial")
 	}
 	return nil
 }

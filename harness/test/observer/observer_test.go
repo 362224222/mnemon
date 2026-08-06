@@ -92,10 +92,12 @@ type factsWire struct {
 	Action           string   `json:"action,omitempty"`
 	Alpha            *int     `json:"alpha,omitempty"`
 	ArtifactCount    *int     `json:"artifact_count,omitempty"`
+	AttemptCount     *int     `json:"attempt_count,omitempty"`
 	Authenticated    *bool    `json:"authenticated,omitempty"`
 	BypassedHook     *bool    `json:"bypassed_hook,omitempty"`
 	ByteSize         *int64   `json:"byte_size,omitempty"`
 	Code             string   `json:"code,omitempty"`
+	Count            *int     `json:"count,omitempty"`
 	Consequence      string   `json:"consequence,omitempty"`
 	DurationMillis   *int64   `json:"duration_ms,omitempty"`
 	GateID           string   `json:"gate_id,omitempty"`
@@ -118,6 +120,7 @@ type factsWire struct {
 	SemanticKind     string   `json:"semantic_kind,omitempty"`
 	State            string   `json:"state,omitempty"`
 	Status           string   `json:"status,omitempty"`
+	SuccessCount     *int     `json:"success_count,omitempty"`
 	TargetCount      *int     `json:"target_count,omitempty"`
 	Targets          []string `json:"targets,omitempty"`
 	TimedOut         *bool    `json:"timed_out,omitempty"`
@@ -386,7 +389,8 @@ func validateRequiredFactEvidence(t *testing.T, fact factRecord) {
 
 func factEvidenceInput(fact factRecord) Fact {
 	return Fact{
-		Kind: fact.Kind,
+		Kind:   fact.Kind,
+		Causes: slices.Clone(fact.Causes),
 		References: References{
 			Event: fact.Refs.Event, EventDigest: fact.Refs.EventDigest,
 			Handling: fact.Refs.Handling,
@@ -394,6 +398,8 @@ func factEvidenceInput(fact factRecord) Fact {
 		Fields: FactFields{
 			SemanticKind: fact.Facts.SemanticKind, Consequence: fact.Facts.Consequence,
 			Outcome: fact.Facts.Outcome, State: fact.Facts.State, Phase: fact.Facts.Phase,
+			Action: fact.Facts.Action, Code: fact.Facts.Code, Count: fact.Facts.Count,
+			AttemptCount: fact.Facts.AttemptCount, SuccessCount: fact.Facts.SuccessCount,
 			PreferenceBefore: fact.Facts.PreferenceBefore, PreferenceAfter: fact.Facts.PreferenceAfter,
 			Result: fact.Facts.Result, Round: fact.Facts.Round, SampleSize: fact.Facts.SampleSize,
 			Alpha: fact.Facts.Alpha, VotesA: fact.Facts.VotesA, VotesB: fact.Facts.VotesB,
@@ -490,7 +496,7 @@ func validateClosedFacts(t *testing.T, sequence int, facts factsWire) {
 			t.Fatalf("fact %d has invalid %s %q", sequence, name, value)
 		}
 	}
-	checkEnum("action", facts.Action, []string{"current", "submit", "capture", "read", "other"})
+	checkEnum("action", facts.Action, []string{"current", "submit", "capture", "read", "probe", "mutation", "other"})
 	checkEnum("consequence", facts.Consequence, []string{
 		"handling.create", "handling.advance", "handling.resolve.completed",
 		"handling.resolve.declined", "handling.resolve.unresolved", "reference.publish",
@@ -505,6 +511,8 @@ func validateClosedFacts(t *testing.T, sequence int, facts factsWire) {
 	checkEnum("status", facts.Status, []string{"pass", "fail", "incomplete", "unknown", "not_applicable"})
 	validateOptionalInt(t, sequence, "alpha", facts.Alpha, 1, 64)
 	validateOptionalInt(t, sequence, "artifact_count", facts.ArtifactCount, 0, 64)
+	validateOptionalInt(t, sequence, "attempt_count", facts.AttemptCount, 0, 256)
+	validateOptionalInt(t, sequence, "count", facts.Count, 1, 256)
 	validateOptionalInt(t, sequence, "invalid_votes", facts.InvalidVotes, 0, 128)
 	validateOptionalInt(t, sequence, "margin_after", facts.MarginAfter, -1024, 1024)
 	validateOptionalInt(t, sequence, "margin_before", facts.MarginBefore, -1024, 1024)
@@ -512,6 +520,7 @@ func validateClosedFacts(t *testing.T, sequence int, facts factsWire) {
 	validateOptionalInt(t, sequence, "payload_bytes", facts.PayloadBytes, 0, 32<<10)
 	validateOptionalInt(t, sequence, "round", facts.Round, 0, 1024)
 	validateOptionalInt(t, sequence, "sample_size", facts.SampleSize, 0, 64)
+	validateOptionalInt(t, sequence, "success_count", facts.SuccessCount, 0, 256)
 	validateOptionalInt(t, sequence, "target_count", facts.TargetCount, 0, 16)
 	validateOptionalInt(t, sequence, "votes_a", facts.VotesA, 0, 64)
 	validateOptionalInt(t, sequence, "votes_b", facts.VotesB, 0, 64)
@@ -523,6 +532,10 @@ func validateClosedFacts(t *testing.T, sequence int, facts factsWire) {
 	if facts.TargetCount != nil && *facts.TargetCount != len(facts.Targets) {
 		t.Fatalf("fact %d target count %d does not match %d targets",
 			sequence, *facts.TargetCount, len(facts.Targets))
+	}
+	if (facts.AttemptCount == nil) != (facts.SuccessCount == nil) ||
+		(facts.AttemptCount != nil && *facts.SuccessCount > *facts.AttemptCount) {
+		t.Fatalf("fact %d has inconsistent operation counts", sequence)
 	}
 }
 

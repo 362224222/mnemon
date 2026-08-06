@@ -37,7 +37,7 @@ func loadFailureReport(path string) (failureReport, error) {
 }
 
 func validateFailureReport(report failureReport) error {
-	if report.Schema != "mnemon.r7.domain-ops.failure-report" || report.Version != 1 ||
+	if report.Schema != "mnemon.r7.domain-ops.failure-report" || report.Version != 2 ||
 		report.Status != "failed" || report.RawProviderStreamsRetained ||
 		report.Model == "" || report.Failure.Code == "" {
 		return errors.New("sanitized failure report has invalid identity or status")
@@ -79,25 +79,7 @@ func validateCompletedTurnSubset(turns []turnSummary) error {
 			return errors.New("sanitized failure report repeats a turn")
 		}
 		seen[turn.Turn] = struct{}{}
-		values := []int{turn.HookCues, turn.BashCalls, turn.DelegateCalls, turn.CurrentReads,
-			turn.SubmitAttempts,
-			turn.IntentSubmits,
-			turn.AcceptedReceipts, turn.RejectedReceipts, turn.SubmitDenials,
-			turn.SubmitInvocationFailures,
-			turn.PostAcceptDenials,
-			turn.PrivateBindingProbes}
-		if _, err := parseReportTime("turn captured_at", turn.CapturedAt); err != nil {
-			return err
-		}
-		if !turn.AgentEnd || turn.HookCues < 1 || slices.ContainsFunc(values,
-			func(value int) bool { return value < 0 || value > 256 }) ||
-			turn.PrivateBindingProbes != 0 || turn.DelegateCalls > 1 ||
-			turn.CurrentReads > turn.BashCalls ||
-			turn.AcceptedReceipts > 1 ||
-			turn.PostAcceptDenials > turn.SubmitDenials ||
-			(turn.PostAcceptDenials > 0 && turn.AcceptedReceipts != 1) ||
-			turn.IntentSubmits != turn.AcceptedReceipts+turn.RejectedReceipts ||
-			turn.SubmitAttempts != turn.IntentSubmits+turn.SubmitDenials+turn.SubmitInvocationFailures {
+		if err := validateTurnSummary(turn); err != nil {
 			return errors.New("sanitized failure report contains an invalid completed turn")
 		}
 	}

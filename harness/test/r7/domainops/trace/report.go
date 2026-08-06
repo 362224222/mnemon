@@ -98,26 +98,6 @@ type runReport struct {
 	CandidateDigest string `json:"candidate_digest"`
 }
 
-type turnSummary struct {
-	Role                     string              `json:"role"`
-	Turn                     string              `json:"turn"`
-	CapturedAt               string              `json:"captured_at"`
-	HookCues                 int                 `json:"hook_cues"`
-	BashCalls                int                 `json:"bash_calls"`
-	DelegateCalls            int                 `json:"delegate_calls"`
-	CurrentReads             int                 `json:"current_reads"`
-	SubmitAttempts           int                 `json:"submit_attempts"`
-	IntentSubmits            int                 `json:"intent_submits"`
-	AcceptedReceipts         int                 `json:"accepted_receipts"`
-	RejectedReceipts         int                 `json:"rejected_receipts"`
-	SubmitDenials            int                 `json:"submit_denials"`
-	SubmitInvocationFailures int                 `json:"submit_invocation_failures"`
-	SubmitControlDiagnostics []controlDiagnostic `json:"submit_control_diagnostics"`
-	PostAcceptDenials        int                 `json:"post_accept_denials"`
-	PrivateBindingProbes     int                 `json:"private_binding_probes"`
-	AgentEnd                 bool                `json:"agent_end"`
-}
-
 type peerEffectSummary struct {
 	Role                string `json:"role"`
 	AcceptedPeerEffects int    `json:"accepted_peer_effects"`
@@ -204,7 +184,7 @@ func loadReport(path string) (liveReport, error) {
 }
 
 func validateReport(report liveReport) error {
-	if report.Schema != "mnemon.r7.domain-ops.live-report" || report.Version != 3 ||
+	if report.Schema != "mnemon.r7.domain-ops.live-report" || report.Version != 4 ||
 		report.Status != "passed" || report.Model == "" || report.Rounds < 1 || report.Rounds > 8 ||
 		report.RawProviderStreamsRetained || !report.Isolation.Passed ||
 		!report.Isolation.FreshRuntimeBetweenEpisodes {

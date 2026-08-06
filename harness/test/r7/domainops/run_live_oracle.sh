@@ -290,6 +290,57 @@ write_sanitizer_stream() {
   jq -nc '{type:"agent_end"}' >>"$destination"
 }
 
+write_domain_observation_stream() {
+  local destination=$1
+  jq -nc '{type:"message_start",message:{role:"custom",customType:"mnemond"}}' \
+    >"$destination"
+  jq -nc '{type:"tool_execution_start",toolCallId:"domain-status",toolName:"bash",
+    args:{command:"domainctl --endpoint http://secret-endpoint-sentinel status"}}' >>"$destination"
+  jq -nc '{type:"tool_execution_end",toolCallId:"domain-status",toolName:"bash",
+    isError:false,result:{content:[{type:"text",
+      text:"{\"role\":\"lead\",\"result\":{\"secret-response-sentinel\":true}}"}]}}' \
+    >>"$destination"
+  jq -nc '{type:"tool_execution_start",toolCallId:"domain-read",toolName:"bash",
+    args:{command:"domainctl read /secret-path-sentinel"}}' >>"$destination"
+  jq -nc '{type:"tool_execution_end",toolCallId:"domain-read",toolName:"bash",
+    isError:true,result:{content:[{type:"text",text:"secret-read-error-sentinel"}]}}' \
+    >>"$destination"
+  jq -nc '{type:"tool_execution_start",toolCallId:"domain-probe",toolName:"bash",
+    args:{command:"domainctl probe"}}' >>"$destination"
+  jq -nc '{type:"tool_execution_end",toolCallId:"domain-probe",toolName:"bash",
+    isError:false,result:{content:[{type:"text",
+      text:"{\"role\":\"lead\",\"result\":{\"secret-probe-sentinel\":true}}"}]}}' \
+    >>"$destination"
+  jq -nc '{type:"tool_execution_start",toolCallId:"domain-wrong-role",toolName:"bash",
+    args:{command:"domainctl probe"}}' >>"$destination"
+  jq -nc '{type:"tool_execution_end",toolCallId:"domain-wrong-role",toolName:"bash",
+    isError:false,result:{content:[{type:"text",
+      text:"{\"role\":\"other\",\"result\":{\"wrong-role-sentinel\":true}}"}]}}' \
+    >>"$destination"
+  jq -nc '{type:"tool_execution_start",toolCallId:"domain-action",toolName:"bash",
+    args:{command:"domainctl --endpoint=http://secret-endpoint-sentinel action /secret-action-sentinel '\''{\"secret-payload-sentinel\":true}'\''"}}' \
+    >>"$destination"
+  jq -nc '{type:"tool_execution_end",toolCallId:"domain-action",toolName:"bash",
+    isError:false,result:{content:[{type:"text",
+      text:"{\"role\":\"lead\",\"result\":{\"secret-action-result-sentinel\":true}}"}]}}' \
+    >>"$destination"
+  jq -nc '{type:"tool_execution_start",toolCallId:"domain-ambiguous",toolName:"bash",
+    args:{command:"domainctl read /first; domainctl action /second '\''{}'\''"}}' \
+    >>"$destination"
+  jq -nc '{type:"tool_execution_end",toolCallId:"domain-ambiguous",toolName:"bash",
+    isError:false,result:{content:[{type:"text",
+      text:"{\"role\":\"lead\",\"result\":{\"ambiguous-result-sentinel\":true}}"}]}}' \
+    >>"$destination"
+  jq -nc '{type:"tool_execution_start",toolCallId:"domain-masked",toolName:"bash",
+    args:{command:"domainctl read /masked-failure-sentinel || true"}}' >>"$destination"
+  jq -nc '{type:"tool_execution_end",toolCallId:"domain-masked",toolName:"bash",
+    isError:false,result:{content:[{type:"text",text:""}]}}' \
+    >>"$destination"
+  jq -nc '{type:"message_end",message:{role:"assistant",stopReason:"stop"}}' \
+    >>"$destination"
+  jq -nc '{type:"agent_end"}' >>"$destination"
+}
+
 write_submit_stream() {
   local destination=$1
   shift
@@ -348,6 +399,20 @@ write_sequential_submit_stream() {
 write_sanitizer_stream stop "$scratch/stop.jsonl"
 sanitize_turn lead oracle "$scratch/stop.jsonl" "$scratch/stop.json"
 test "$(jq '.delegate_calls' "$scratch/stop.json")" = 0
+write_domain_observation_stream "$scratch/domain-observations.jsonl"
+sanitize_turn lead oracle-domain-observations "$scratch/domain-observations.jsonl" \
+  "$scratch/domain-observations.json"
+jq -e '
+  .domain_operations == {
+    read:{attempts:4,successes:1},
+    probe:{attempts:2,successes:1},
+    mutation:{attempts:2,successes:1}
+  }
+' "$scratch/domain-observations.json" >/dev/null
+if grep -E 'secret-|ambiguous-result|wrong-role' "$scratch/domain-observations.json" >/dev/null; then
+  printf 'runtime oracle: sanitized domain observation retained command or result content\n' >&2
+  exit 1
+fi
 partial=$(summarize_partial_turn "$scratch/stop.jsonl")
 jq -e '
   .record_types.message_start == 1 and
@@ -420,15 +485,21 @@ sanitize_turn lead oracle-accounted "$scratch/accounted.jsonl" "$scratch/account
 jq -e '
   .submit_attempts == 2 and .intent_submits == 1 and
   .accepted_receipts == 1 and .rejected_receipts == 0 and
-  .submit_denials == 1 and .post_accept_denials == 1
+  .submit_denials == 1 and .post_accept_denials == 1 and
+  .submit_control_denials == [{code:"context_required",count:1}]
 ' "$scratch/accounted.json" >/dev/null
+if grep -F 'a bounded View is required' "$scratch/accounted.json" >/dev/null; then
+  printf 'runtime oracle: sanitized CLI denial retained diagnostic text\n' >&2
+  exit 1
+fi
 
 write_submit_stream "$scratch/duplicate-rendering.jsonl" \
   "$closed_denial"$'\n'"$closed_denial"
 sanitize_turn lead oracle-duplicate-rendering "$scratch/duplicate-rendering.jsonl" \
   "$scratch/duplicate-rendering.json"
 jq -e '
-  .submit_attempts == 1 and .intent_submits == 0 and .submit_denials == 1
+  .submit_attempts == 1 and .intent_submits == 0 and .submit_denials == 1 and
+  .submit_control_denials == [{code:"context_required",count:1}]
 ' "$scratch/duplicate-rendering.json" >/dev/null
 
 write_sequential_submit_stream "$scratch/sequential-denials.jsonl" 3 \
@@ -476,7 +547,8 @@ sanitize_turn lead oracle-contained "$scratch/contained.jsonl" "$scratch/contain
 jq -e '
   .submit_attempts == 14 and .intent_submits == 1 and
   .accepted_receipts == 1 and .rejected_receipts == 0 and
-  .submit_denials == 13 and .post_accept_denials == 13
+  .submit_denials == 13 and .post_accept_denials == 13 and
+  .submit_control_denials == [{code:"context_required",count:13}]
 ' "$scratch/contained.json" >/dev/null
 
 write_submit_stream "$scratch/unaccounted.jsonl" 'not a closed protocol result'

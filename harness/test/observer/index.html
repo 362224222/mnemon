@@ -471,18 +471,26 @@
     const FACT_KEYS = Object.freeze(["schema", "version", "record", "seq", "id", "captured_at", "source", "agent", "turn", "kind", "truth", "causes", "refs", "facts"]);
     const RESULT_KEYS = Object.freeze(["schema", "version", "record", "status", "finished_at", "record_count", "trace_digest", "gates"]);
     const FACT_FIELDS = Object.freeze([
-      "action", "alpha", "artifact_count", "authenticated", "bypassed_hook", "byte_size",
-      "code", "consequence", "duration_ms", "gate_id", "hook_cue", "invalid_votes",
+      "action", "alpha", "artifact_count", "attempt_count", "authenticated", "bypassed_hook", "byte_size",
+      "code", "consequence", "count", "duration_ms", "gate_id", "hook_cue", "invalid_votes",
       "margin_after", "margin_before", "no_vote", "no_votes", "outcome", "payload_bytes", "phase",
       "preference_after", "preference_before", "recolored", "replayed", "result", "round",
-      "sample_size", "semantic_kind", "state", "status", "target_count", "targets", "timed_out", "view_nonempty",
+      "sample_size", "semantic_kind", "state", "status", "success_count", "target_count", "targets", "timed_out", "view_nonempty",
       "votes_a", "votes_b"
+    ]);
+    const INTENT_DENIAL_CODES = Object.freeze([
+      "invalid_argument", "content_required", "content_too_large", "artifact_invalid",
+      "artifact_too_large", "authentication_failed", "context_required", "context_stale",
+      "asset_revision_mismatch", "action_not_allowed", "operation_mismatch",
+      "operation_pending", "mnemond_unavailable", "internal"
     ]);
     const FACT_CLASSIFICATION_ROWS = Object.freeze([
       "runtime.turn.started|runtime|observation",
       "runtime.hook.cue|runtime|observation",
       "runtime.delegate.invoked|runtime|observation",
+      "runtime.domain.operation|runtime|observation",
       "runtime.view.received|runtime|derived_projection",
+      "runtime.intent.denied|runtime|observation",
       "runtime.intent.submitted|runtime|observation",
       "runtime.turn.ended|runtime|observation",
       "runtime.turn.timed_out|runtime|observation",
@@ -648,7 +656,7 @@
 
     function validateFacts(facts, label) {
       exactObject(facts, FACT_FIELDS, [], label);
-      if (facts.action !== undefined) requireEnum(facts.action, ["current", "submit", "capture", "read", "other"], label + ".action");
+      if (facts.action !== undefined) requireEnum(facts.action, ["current", "submit", "capture", "read", "probe", "mutation", "other"], label + ".action");
       if (facts.consequence !== undefined) requireEnum(facts.consequence, ["handling.create", "handling.advance", "handling.resolve.completed", "handling.resolve.declined", "handling.resolve.unresolved", "reference.publish", "reference.supersede", "reference.retract"], label + ".consequence");
       if (facts.outcome !== undefined) requireEnum(facts.outcome, ["accepted", "rejected", "replayed", "completed", "declined", "unresolved"], label + ".outcome");
       if (facts.phase !== undefined) requireEnum(facts.phase, ["awaiting_seed", "active", "observed"], label + ".phase");
@@ -659,6 +667,8 @@
       if (facts.status !== undefined) requireEnum(facts.status, ["pass", "fail", "incomplete", "unknown", "not_applicable"], label + ".status");
       optionalInteger(facts.alpha, 1, 64, label + ".alpha");
       optionalInteger(facts.artifact_count, 0, 64, label + ".artifact_count");
+      optionalInteger(facts.attempt_count, 0, 256, label + ".attempt_count");
+      optionalInteger(facts.count, 1, 256, label + ".count");
       optionalInteger(facts.invalid_votes, 0, 128, label + ".invalid_votes");
       optionalInteger(facts.margin_after, -1024, 1024, label + ".margin_after");
       optionalInteger(facts.margin_before, -1024, 1024, label + ".margin_before");
@@ -666,11 +676,16 @@
       optionalInteger(facts.payload_bytes, 0, 32768, label + ".payload_bytes");
       optionalInteger(facts.round, 0, 1024, label + ".round");
       optionalInteger(facts.sample_size, 0, 64, label + ".sample_size");
+      optionalInteger(facts.success_count, 0, 256, label + ".success_count");
       optionalInteger(facts.target_count, 0, 16, label + ".target_count");
       optionalInteger(facts.votes_a, 0, 64, label + ".votes_a");
       optionalInteger(facts.votes_b, 0, 64, label + ".votes_b");
       optionalInteger(facts.byte_size, 0, 16777216, label + ".byte_size");
       optionalInteger(facts.duration_ms, 0, 3600000, label + ".duration_ms");
+      if ((facts.attempt_count === undefined) !== (facts.success_count === undefined) ||
+          (facts.attempt_count !== undefined && facts.success_count > facts.attempt_count)) {
+        fail(label, "has inconsistent operation counts");
+      }
       if (facts.targets !== undefined) {
         if (!Array.isArray(facts.targets) || facts.targets.length > 16) fail(label + ".targets", "must contain at most 16 targets");
         facts.targets.forEach((target, index) => requireString(target, TOKEN, label + ".targets[" + index + "]"));
@@ -721,6 +736,20 @@
         if (!Object.prototype.hasOwnProperty.call(object, field)) fail(path + "." + field, "is required for " + record.kind);
       });
       switch (record.kind) {
+        case "runtime.domain.operation":
+          required(record.facts, ["action", "attempt_count", "success_count"], label + ".facts");
+          if (record.causes.length !== 0 || record.facts.attempt_count < 1 ||
+              !["read", "probe", "mutation"].includes(record.facts.action)) {
+            fail(label, "does not describe a non-causal bounded domain operation observation");
+          }
+          break;
+        case "runtime.intent.denied":
+          required(record.facts, ["action", "code", "count"], label + ".facts");
+          if (record.causes.length !== 0 || record.facts.action !== "submit" ||
+              !INTENT_DENIAL_CODES.includes(record.facts.code)) {
+            fail(label, "does not describe a non-causal closed Intent denial observation");
+          }
+          break;
         case "r7.event.accepted":
           required(record.refs, ["event", "event_digest"], label + ".refs");
           required(record.facts, ["semantic_kind", "consequence"], label + ".facts");
@@ -948,6 +977,12 @@
           chip.append(node("span", "seq", "#" + fact.seq), node("span", "kind", fact.kind));
           if (fact.turn) chip.append(node("span", "turn", fact.turn));
           const details = [];
+          if (fact.facts.action) details.push(fact.facts.action);
+          if (fact.facts.attempt_count !== undefined) {
+            details.push("requested " + fact.facts.attempt_count + " · closed responses " + fact.facts.success_count);
+          }
+          if (fact.facts.code) details.push(fact.facts.code);
+          if (fact.facts.count !== undefined) details.push("count " + fact.facts.count);
           if (fact.facts.semantic_kind) details.push(fact.facts.semantic_kind);
           if (fact.facts.consequence) details.push(fact.facts.consequence);
           if (fact.facts.targets && fact.facts.targets.length) details.push("→ " + fact.facts.targets.join(", "));

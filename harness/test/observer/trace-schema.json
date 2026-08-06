@@ -13,6 +13,8 @@
             "submit",
             "capture",
             "read",
+            "probe",
+            "mutation",
             "other"
           ]
         },
@@ -23,6 +25,11 @@
         },
         "artifact_count": {
           "maximum": 64,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "attempt_count": {
+          "maximum": 256,
           "minimum": 0,
           "type": "integer"
         },
@@ -39,6 +46,11 @@
         },
         "code": {
           "$ref": "#/$defs/token"
+        },
+        "count": {
+          "maximum": 256,
+          "minimum": 1,
+          "type": "integer"
         },
         "consequence": {
           "enum": [
@@ -164,6 +176,11 @@
             "unknown",
             "not_applicable"
           ]
+        },
+        "success_count": {
+          "maximum": 256,
+          "minimum": 0,
+          "type": "integer"
         },
         "target_count": {
           "maximum": 16,
@@ -408,7 +425,9 @@
             "runtime.turn.started",
             "runtime.hook.cue",
             "runtime.delegate.invoked",
+            "runtime.domain.operation",
             "runtime.view.received",
+            "runtime.intent.denied",
             "runtime.intent.submitted",
             "runtime.turn.ended",
             "runtime.turn.timed_out",
@@ -496,6 +515,8 @@
                     "runtime.turn.started",
                     "runtime.hook.cue",
                     "runtime.delegate.invoked",
+                    "runtime.domain.operation",
+                    "runtime.intent.denied",
                     "runtime.intent.submitted",
                     "runtime.turn.ended",
                     "runtime.turn.timed_out",
@@ -742,6 +763,93 @@
             }
           ],
           "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "runtime.domain.operation"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "causes": {
+                    "maxItems": 0
+                  },
+                  "facts": {
+                    "properties": {
+                      "action": {
+                        "enum": [
+                          "read",
+                          "probe",
+                          "mutation"
+                        ]
+                      },
+                      "attempt_count": {
+                        "minimum": 1
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "attempt_count",
+                      "success_count"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "runtime.intent.denied"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "causes": {
+                    "maxItems": 0
+                  },
+                  "facts": {
+                    "properties": {
+                      "action": {
+                        "const": "submit"
+                      },
+                      "code": {
+                        "enum": [
+                          "invalid_argument",
+                          "content_required",
+                          "content_too_large",
+                          "artifact_invalid",
+                          "artifact_too_large",
+                          "authentication_failed",
+                          "context_required",
+                          "context_stale",
+                          "asset_revision_mismatch",
+                          "action_not_allowed",
+                          "operation_mismatch",
+                          "operation_pending",
+                          "mnemond_unavailable",
+                          "internal"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "code",
+                      "count"
+                    ]
+                  }
+                }
+              }
+            },
             {
               "if": {
                 "properties": {

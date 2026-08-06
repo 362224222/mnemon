@@ -467,6 +467,13 @@ sanitize_turn() {
     def invocation_count($verb): [command | scan(invocation_pattern($verb))] | length;
     def invokes($verb):
       (invocation_count($verb) > 0);
+    def domain_invocation_pattern($verb):
+      (("(^|[|;&])[[:space:]]*([^[:space:];|&]*/)?domainctl" +
+        "(?:[[:space:]]+--?(?:role|endpoint|timeout)" +
+        "(?:=[^[:space:];|&]+|[[:space:]]+[^[:space:];|&]+))*" +
+        "[[:space:]]+" + $verb + "([[:space:];|&]|$)"));
+    def domain_invocation_count($verb):
+      [command | scan(domain_invocation_pattern($verb))] | length;
     def result_texts:
       if (.result | type) == "object" and
           (.result.content? | type) == "array" then
@@ -498,6 +505,10 @@ sanitize_turn() {
         "operation_pending", "mnemond_unavailable", "internal"
       ] | index($code) != null) and
       (.retryable == (.code == "operation_pending" or .code == "mnemond_unavailable"));
+    def valid_domain_result:
+      (keys | sort) == ["result", "role"] and
+      (.role | type == "string" and utf8bytelength > 0 and utf8bytelength <= 64) and
+      .role == $role;
     def belongs($ids):
       (.toolCallId // null) as $id |
       $id != null and (($ids | index($id)) != null);
@@ -524,21 +535,36 @@ sanitize_turn() {
         valid_receipt and .outcome == "accepted")) as $accepted |
       (if $accepted then false else
         any(result_objects[]; valid_receipt and .outcome == "rejected") end) as $rejected |
+      ([result_objects[] | select(valid_control_error) | .code] | unique) as $denial_codes |
       (if $accepted or $rejected then false else
-        any(result_objects[]; valid_control_error) end) as $denied |
+        ($denial_codes | length) > 0 end) as $denied |
       (if $accepted or $rejected or $denied then false else
         .isError == true end) as $failed |
       {tool_call_id:.toolCallId,
         accepted:(if $accepted then 1 else 0 end),
         rejected:(if $rejected then 1 else 0 end),
         denials:(if $denied then 1 else 0 end),
+        denial_code:(if $denied and ($denial_codes | length) == 1 then
+          $denial_codes[0] else "" end),
         invocation_failures:(if $failed then 1 else 0 end),
-        closed:($accepted or $rejected or $denied or $failed)}
+        closed:($accepted or $rejected or $failed or
+          ($denied and ($denial_codes | length) == 1))}
     ]) as $submit_outcomes |
     ([$stream[] | select(.type == "tool_execution_start" and
       .toolName == "delegate") | .toolCallId] | unique) as $delegate_attempts |
     ([$stream[] | select(.type == "tool_execution_end" and
       .toolName == "delegate" and belongs($delegate_attempts))]) as $delegate_ends |
+    ([$stream[] | select(.type == "tool_execution_start" and .toolName == "bash") |
+      {
+        tool_call_id:.toolCallId,
+        read:(domain_invocation_count("status") + domain_invocation_count("read")),
+        probe:domain_invocation_count("probe"),
+        mutation:domain_invocation_count("action")
+      } | .total = (.read + .probe + .mutation) | select(.total > 0)
+    ]) as $domain_starts |
+    ([$domain_starts[].tool_call_id] | unique) as $domain_calls |
+    ([$stream[] | select(.type == "tool_execution_end" and .toolName == "bash" and
+      belongs($domain_calls))]) as $domain_ends |
     (reduce $submit_outcomes[] as $outcome (
       {accepted_seen:false, denials:0};
       .denials += (if .accepted_seen then $outcome.denials else 0 end) |
@@ -566,9 +592,35 @@ sanitize_turn() {
       rejected_receipts: ([$submit_outcomes[].rejected] | add // 0),
       submit_denials: ([$submit_outcomes[].denials] | add // 0),
       submit_invocation_failures: ([$submit_outcomes[].invocation_failures] | add // 0),
-      submit_control_diagnostics: ([$submit_ends[] | result_objects[] |
-        select(valid_control_error) | {code,message}] |
-        unique_by([.code,.message]) | sort_by(.code,.message)),
+      submit_control_denials: ([$submit_outcomes[] |
+        select(.denials == 1) | .denial_code] | group_by(.) |
+        map({code:.[0],count:length}) | sort_by(.code)),
+      domain_operations:{
+        read:{
+          attempts:([$domain_starts[].read] | add // 0),
+          successes:([$domain_starts[] as $start |
+            select($start.total == 1 and $start.read == 1) |
+            select(any($domain_ends[];
+              .toolCallId == $start.tool_call_id and .isError == false and
+              any(result_objects[]; valid_domain_result)))] | length)
+        },
+        probe:{
+          attempts:([$domain_starts[].probe] | add // 0),
+          successes:([$domain_starts[] as $start |
+            select($start.total == 1 and $start.probe == 1) |
+            select(any($domain_ends[];
+              .toolCallId == $start.tool_call_id and .isError == false and
+              any(result_objects[]; valid_domain_result)))] | length)
+        },
+        mutation:{
+          attempts:([$domain_starts[].mutation] | add // 0),
+          successes:([$domain_starts[] as $start |
+            select($start.total == 1 and $start.mutation == 1) |
+            select(any($domain_ends[];
+              .toolCallId == $start.tool_call_id and .isError == false and
+              any(result_objects[]; valid_domain_result)))] | length)
+        }
+      },
       post_accept_denials: $post_accept.denials,
       private_binding_probes: ([$stream[] | select(.type == "tool_execution_start" and
         .toolName == "bash" and
@@ -582,7 +634,11 @@ sanitize_turn() {
         (($assistant_ends[-1].message.stopReason // "") != "aborted") and
         .private_binding_probes == 0 and
         .agent_end == true and
-        (.submit_control_diagnostics | length) <= 32 and
+        (.submit_control_denials | length) <= 14 and
+        ([.submit_control_denials[].count] | add // 0) == .submit_denials and
+        ([.domain_operations[] | .attempts, .successes] |
+          all(. >= 0 and . <= 256)) and
+        all(.domain_operations[]; .successes <= .attempts) and
         ([.hook_cues, .bash_calls, .delegate_calls, .current_reads, .submit_attempts, .intent_submits,
           .accepted_receipts, .rejected_receipts, .submit_denials, .submit_invocation_failures,
           .post_accept_denials, .private_binding_probes] | all(. >= 0 and . <= 256)) and
@@ -590,6 +646,9 @@ sanitize_turn() {
         ($delegate_ends | length) == ($delegate_attempts | length) and
         ([$delegate_ends[].toolCallId] | unique | sort) == ($delegate_attempts | sort) and
         all($delegate_ends[]; valid_delegate_result) and
+        ($domain_starts | length) == ($domain_calls | length) and
+        ($domain_ends | length) == ($domain_calls | length) and
+        ([$domain_ends[].toolCallId] | unique | sort) == ($domain_calls | sort) and
         ($submit_starts | length) == ($submit_calls | length) and
         ($submit_ends | length) == ($submit_calls | length) and
         ([$submit_ends[].toolCallId] | unique | sort) == ($submit_calls | sort) and
@@ -1484,7 +1543,7 @@ write_report() {
     --argjson peer_effect_total "$total" '
       {
         schema:$schema,
-        version:3,
+        version:4,
         status:"passed",
         model:$model,
         rounds:$rounds,
@@ -1556,7 +1615,7 @@ finalize_failure_evidence() {
     --argjson turns "$completed_turns" '
       {
         schema:$schema,
-        version:1,
+        version:2,
         status:"failed",
         model:$model,
         run:{id:$run_id,started_at:$started_at,finished_at:$finished_at,

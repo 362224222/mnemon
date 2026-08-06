@@ -82,13 +82,34 @@ type kindEvidenceRule struct {
 }
 
 var kindEvidenceRules = map[string]kindEvidenceRule{
-	"r7.event.accepted":       {"accepted Event evidence", validAcceptedEventEvidence},
-	"r7.handling.resolved":    {"terminal Handling evidence", validResolvedHandlingEvidence},
-	"r8.selection.seeded":     {"seed preference evidence", validSelectionSeedEvidence},
-	"r8.round.frozen":         {"frozen round evidence", validFrozenRoundEvidence},
-	"r8.vote.observed":        {"vote evidence", validVoteEvidence},
-	"r8.round.settled":        {"settled round evidence", validSettledRoundEvidence},
-	"r8.observation.produced": {"preference observation", validPreferenceObservation},
+	"runtime.domain.operation": {"domain operation observation", validDomainOperationEvidence},
+	"runtime.intent.denied":    {"Intent denial observation", validIntentDenialEvidence},
+	"r7.event.accepted":        {"accepted Event evidence", validAcceptedEventEvidence},
+	"r7.handling.resolved":     {"terminal Handling evidence", validResolvedHandlingEvidence},
+	"r8.selection.seeded":      {"seed preference evidence", validSelectionSeedEvidence},
+	"r8.round.frozen":          {"frozen round evidence", validFrozenRoundEvidence},
+	"r8.vote.observed":         {"vote evidence", validVoteEvidence},
+	"r8.round.settled":         {"settled round evidence", validSettledRoundEvidence},
+	"r8.observation.produced":  {"preference observation", validPreferenceObservation},
+}
+
+func validDomainOperationEvidence(fact Fact) bool {
+	return len(fact.Causes) == 0 &&
+		slices.Contains([]string{"read", "probe", "mutation"}, fact.Fields.Action) &&
+		fact.Fields.AttemptCount != nil && fact.Fields.SuccessCount != nil &&
+		*fact.Fields.AttemptCount > 0 && *fact.Fields.SuccessCount >= 0 &&
+		*fact.Fields.SuccessCount <= *fact.Fields.AttemptCount
+}
+
+func validIntentDenialEvidence(fact Fact) bool {
+	return len(fact.Causes) == 0 && fact.Fields.Action == "submit" &&
+		fact.Fields.Count != nil && *fact.Fields.Count > 0 &&
+		slices.Contains([]string{
+			"invalid_argument", "content_required", "content_too_large", "artifact_invalid",
+			"artifact_too_large", "authentication_failed", "context_required", "context_stale",
+			"asset_revision_mismatch", "action_not_allowed", "operation_mismatch",
+			"operation_pending", "mnemond_unavailable", "internal",
+		}, fact.Fields.Code)
 }
 
 func validateKindEvidence(fact Fact, sequence int) error {
@@ -175,7 +196,7 @@ func validateFactFields(fields FactFields, sequence int) error {
 		value   string
 		allowed []string
 	}{
-		{"action", fields.Action, []string{"current", "submit", "capture", "read", "other"}},
+		{"action", fields.Action, []string{"current", "submit", "capture", "read", "probe", "mutation", "other"}},
 		{"consequence", fields.Consequence, []string{
 			"handling.create", "handling.advance", "handling.resolve.completed",
 			"handling.resolve.declined", "handling.resolve.unresolved", "reference.publish",
@@ -208,18 +229,24 @@ func validateFactFields(fields FactFields, sequence int) error {
 		maximum int
 	}{
 		{"alpha", fields.Alpha, 1, 64}, {"artifact_count", fields.ArtifactCount, 0, 64},
+		{"attempt_count", fields.AttemptCount, 0, 256}, {"count", fields.Count, 1, 256},
 		{"invalid_votes", fields.InvalidVotes, 0, 128},
 		{"margin_after", fields.MarginAfter, -1024, 1024},
 		{"margin_before", fields.MarginBefore, -1024, 1024},
 		{"no_votes", fields.NoVotes, 0, 64}, {"round", fields.Round, 0, 1024},
 		{"payload_bytes", fields.PayloadBytes, 0, 32 << 10},
 		{"sample_size", fields.SampleSize, 0, 64}, {"votes_a", fields.VotesA, 0, 64},
+		{"success_count", fields.SuccessCount, 0, 256},
 		{"votes_b", fields.VotesB, 0, 64}, {"target_count", fields.TargetCount, 0, 16},
 	}
 	for _, value := range integers {
 		if value.value != nil && (*value.value < value.minimum || *value.value > value.maximum) {
 			return fmt.Errorf("trace writer: fact %d has out-of-bound %s", sequence, value.name)
 		}
+	}
+	if (fields.AttemptCount == nil) != (fields.SuccessCount == nil) ||
+		(fields.AttemptCount != nil && *fields.SuccessCount > *fields.AttemptCount) {
+		return fmt.Errorf("trace writer: fact %d has inconsistent operation counts", sequence)
 	}
 	if !validInt64(fields.ByteSize, 0, 16<<20) {
 		return fmt.Errorf("trace writer: fact %d has out-of-bound byte_size", sequence)

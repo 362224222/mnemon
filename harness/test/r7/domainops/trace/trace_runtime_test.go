@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -11,7 +12,21 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/test/observer"
 )
 
-func TestRuntimeProjectionAddsNoCausalEdges(t *testing.T) {
+type projectedRuntimeFact struct {
+	Record string   `json:"record"`
+	Kind   string   `json:"kind"`
+	Causes []string `json:"causes"`
+	Facts  struct {
+		Action       string `json:"action"`
+		Code         string `json:"code"`
+		Count        *int   `json:"count"`
+		AttemptCount *int   `json:"attempt_count"`
+		SuccessCount *int   `json:"success_count"`
+	} `json:"facts"`
+}
+
+func projectTestRuntime(t *testing.T) string {
+	t.Helper()
 	started := time.Date(2026, 8, 4, 1, 0, 0, 0, time.UTC)
 	var output bytes.Buffer
 	writer, err := observer.NewWriter(&output, observer.Run{
@@ -25,29 +40,134 @@ func TestRuntimeProjectionAddsNoCausalEdges(t *testing.T) {
 		t.Fatal(err)
 	}
 	turn := turnSummary{Role: "lead", Turn: "initial-lead", HookCues: 1,
-		CapturedAt:    started.Add(time.Minute).Format(time.RFC3339Nano),
-		DelegateCalls: 1, CurrentReads: 1, SubmitAttempts: 1, IntentSubmits: 1,
+		CapturedAt: started.Add(time.Minute).Format(time.RFC3339Nano), BashCalls: 4,
+		DomainOperations: domainOperationsSummary{
+			Read:     domainOperationSummary{Attempts: 2, Successes: 2},
+			Mutation: domainOperationSummary{Attempts: 1, Successes: 0},
+		},
+		DelegateCalls: 1, CurrentReads: 1, SubmitAttempts: 2, IntentSubmits: 1,
+		SubmitDenials: 1, SubmitControlDenials: []controlDenial{{
+			Code: "authentication_failed", Count: 1,
+		}},
 		AgentEnd: true}
 	if err := appendRuntimeFacts(writer, []turnSummary{turn}); err != nil {
 		t.Fatal(err)
 	}
-	foundDelegate := false
-	for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n")[1:] {
-		var record struct {
-			Record string   `json:"record"`
-			Kind   string   `json:"kind"`
-			Causes []string `json:"causes"`
-		}
+	return output.String()
+}
+
+func decodeProjectedRuntimeFacts(t *testing.T, output string) []projectedRuntimeFact {
+	t.Helper()
+	var facts []projectedRuntimeFact
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n")[1:] {
+		var record projectedRuntimeFact
 		if err := json.Unmarshal([]byte(line), &record); err != nil {
 			t.Fatal(err)
 		}
-		if record.Record == "fact" && len(record.Causes) != 0 {
-			t.Fatalf("runtime observation inferred causes: %v", record.Causes)
-		}
-		foundDelegate = foundDelegate || record.Kind == "runtime.delegate.invoked"
+		facts = append(facts, record)
 	}
-	if !foundDelegate {
-		t.Fatal("runtime projection omitted the bounded delegate invocation observation")
+	return facts
+}
+
+func findProjectedRuntimeFact(facts []projectedRuntimeFact, kind, action string) (projectedRuntimeFact, bool) {
+	for _, fact := range facts {
+		if fact.Kind == kind && fact.Facts.Action == action {
+			return fact, true
+		}
+	}
+	return projectedRuntimeFact{}, false
+}
+
+func TestRuntimeProjectionAddsNoCausalEdges(t *testing.T) {
+	for _, fact := range decodeProjectedRuntimeFacts(t, projectTestRuntime(t)) {
+		if fact.Record == "fact" && len(fact.Causes) != 0 {
+			t.Fatalf("runtime observation inferred causes: %v", fact.Causes)
+		}
+	}
+}
+
+func TestRuntimeProjectionIncludesBoundedOperationAndDenialCounts(t *testing.T) {
+	facts := decodeProjectedRuntimeFacts(t, projectTestRuntime(t))
+	read, foundRead := findProjectedRuntimeFact(facts, "runtime.domain.operation", "read")
+	mutation, foundMutation := findProjectedRuntimeFact(facts, "runtime.domain.operation", "mutation")
+	denial, foundDenial := findProjectedRuntimeFact(facts, "runtime.intent.denied", "submit")
+	_, foundDelegate := findProjectedRuntimeFact(facts, "runtime.delegate.invoked", "")
+	if !foundDelegate || !foundRead || !foundMutation || !foundDenial {
+		t.Fatalf("missing observations: delegate=%t read=%t mutation=%t denial=%t",
+			foundDelegate, foundRead, foundMutation, foundDenial)
+	}
+	if read.Facts.AttemptCount == nil || *read.Facts.AttemptCount != 2 ||
+		read.Facts.SuccessCount == nil || *read.Facts.SuccessCount != 2 {
+		t.Fatalf("read observation = %+v", read.Facts)
+	}
+	if mutation.Facts.AttemptCount == nil || *mutation.Facts.AttemptCount != 1 ||
+		mutation.Facts.SuccessCount == nil || *mutation.Facts.SuccessCount != 0 {
+		t.Fatalf("mutation observation = %+v", mutation.Facts)
+	}
+	if denial.Facts.Code != "authentication_failed" || denial.Facts.Count == nil ||
+		*denial.Facts.Count != 1 {
+		t.Fatalf("denial observation = %+v", denial.Facts)
+	}
+}
+
+func TestRuntimeProjectionOmitsUnsafeContent(t *testing.T) {
+	output := projectTestRuntime(t)
+	for _, forbidden := range []string{"message", "https://private.example", "/admin/void",
+		"provider prose", "attachment_credential"} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("runtime projection retained forbidden content %q", forbidden)
+		}
+	}
+}
+
+func TestTurnSummaryFailsClosedOnUnsafeObservationCounts(t *testing.T) {
+	valid := turnSummary{Role: "data", Turn: "turn-a",
+		CapturedAt: "2026-08-04T01:01:00Z", HookCues: 1, BashCalls: 2,
+		DomainOperations: domainOperationsSummary{
+			Mutation: domainOperationSummary{Attempts: 1, Successes: 1},
+		},
+		SubmitAttempts: 1, SubmitDenials: 1,
+		SubmitControlDenials: []controlDenial{{Code: "authentication_failed", Count: 1}},
+		AgentEnd:             true}
+	if err := validateTurnSummary(valid); err != nil {
+		t.Fatalf("valid bounded observations: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*turnSummary)
+	}{
+		{"success without attempt", func(turn *turnSummary) {
+			turn.DomainOperations.Mutation.Successes = 2
+		}},
+		{"unclassified denial", func(turn *turnSummary) {
+			turn.SubmitControlDenials = nil
+		}},
+		{"open denial code", func(turn *turnSummary) {
+			turn.SubmitControlDenials[0].Code = "provider-prose"
+		}},
+		{"duplicate denial code", func(turn *turnSummary) {
+			turn.SubmitDenials = 2
+			turn.SubmitControlDenials = append(turn.SubmitControlDenials,
+				controlDenial{Code: "authentication_failed", Count: 1})
+		}},
+		{"unsorted denial codes", func(turn *turnSummary) {
+			turn.SubmitDenials = 2
+			turn.SubmitControlDenials = []controlDenial{
+				{Code: "context_required", Count: 1},
+				{Code: "action_not_allowed", Count: 1},
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := valid
+			candidate.SubmitControlDenials = slices.Clone(valid.SubmitControlDenials)
+			test.mutate(&candidate)
+			if err := validateTurnSummary(candidate); err == nil {
+				t.Fatal("validateTurnSummary() accepted unsafe observations")
+			}
+		})
 	}
 }
 

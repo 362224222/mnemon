@@ -95,10 +95,12 @@ type FactFields struct {
 	Action           string   `json:"action,omitempty"`
 	Alpha            *int     `json:"alpha,omitempty"`
 	ArtifactCount    *int     `json:"artifact_count,omitempty"`
+	AttemptCount     *int     `json:"attempt_count,omitempty"`
 	Authenticated    *bool    `json:"authenticated,omitempty"`
 	BypassedHook     *bool    `json:"bypassed_hook,omitempty"`
 	ByteSize         *int64   `json:"byte_size,omitempty"`
 	Code             string   `json:"code,omitempty"`
+	Count            *int     `json:"count,omitempty"`
 	Consequence      string   `json:"consequence,omitempty"`
 	DurationMillis   *int64   `json:"duration_ms,omitempty"`
 	GateID           string   `json:"gate_id,omitempty"`
@@ -121,6 +123,7 @@ type FactFields struct {
 	SemanticKind     string   `json:"semantic_kind,omitempty"`
 	State            string   `json:"state,omitempty"`
 	Status           string   `json:"status,omitempty"`
+	SuccessCount     *int     `json:"success_count,omitempty"`
 	TargetCount      *int     `json:"target_count,omitempty"`
 	Targets          []string `json:"targets,omitempty"`
 	TimedOut         *bool    `json:"timed_out,omitempty"`

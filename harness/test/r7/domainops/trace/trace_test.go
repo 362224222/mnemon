@@ -209,6 +209,7 @@ func TestValidateReportRequiresAllIndependentGates(t *testing.T) {
 	report.Turns[0].IntentSubmits = 1
 	report.Turns[0].AcceptedReceipts = 1
 	report.Turns[0].SubmitDenials = 2
+	report.Turns[0].SubmitControlDenials = []controlDenial{{Code: "context_required", Count: 2}}
 	report.Turns[0].PostAcceptDenials = 2
 	if err := validateReport(report); err != nil {
 		t.Fatalf("validateReport() rejected one Effect plus two closed denials: %v", err)
@@ -216,6 +217,7 @@ func TestValidateReportRequiresAllIndependentGates(t *testing.T) {
 	report.Turns[0].IntentSubmits = 2
 	report.Turns[0].AcceptedReceipts = 2
 	report.Turns[0].SubmitDenials = 1
+	report.Turns[0].SubmitControlDenials[0].Count = 1
 	report.Turns[0].PostAcceptDenials = 1
 	if err := validateReport(report); err == nil {
 		t.Fatal("validateReport() accepted two Effects in one turn")
@@ -225,55 +227,6 @@ func TestValidateReportRequiresAllIndependentGates(t *testing.T) {
 	report.Turns[0].SubmitAttempts = 1
 	if err := validateReport(report); err == nil {
 		t.Fatal("validateReport() accepted an unaccounted submit attempt")
-	}
-}
-
-func TestValidateReportAcceptsContainedPostAcceptDenials(t *testing.T) {
-	report := validReport()
-	report.Turns[0].BashCalls = 14
-	report.Turns[0].SubmitAttempts = 14
-	report.Turns[0].IntentSubmits = 1
-	report.Turns[0].AcceptedReceipts = 1
-	report.Turns[0].SubmitDenials = 13
-	report.Turns[0].PostAcceptDenials = 13
-	if err := validateReport(report); err != nil {
-		t.Fatalf("validateReport() rejected contained post-accept denials: %v", err)
-	}
-	report.Turns[0].BashCalls = 257
-	report.Turns[0].SubmitAttempts = 257
-	report.Turns[0].SubmitDenials = 256
-	report.Turns[0].PostAcceptDenials = 256
-	if err := validateReport(report); err == nil {
-		t.Fatal("validateReport() accepted counters above the generic turn bound")
-	}
-}
-
-func TestValidateFailureReportAccountsClosedSubmitDenials(t *testing.T) {
-	report := validFailureReport()
-	report.Turns[0].BashCalls = 1
-	report.Turns[0].SubmitAttempts = 3
-	report.Turns[0].IntentSubmits = 1
-	report.Turns[0].RejectedReceipts = 1
-	report.Turns[0].SubmitDenials = 2
-	if err := validateFailureReport(report); err != nil {
-		t.Fatalf("validateFailureReport() rejected accounted attempts: %v", err)
-	}
-	report.Turns[0].SubmitDenials = 0
-	if err := validateFailureReport(report); err == nil {
-		t.Fatal("validateFailureReport() accepted an unaccounted submit attempt")
-	}
-}
-
-func TestValidateFailureReportAcceptsContainedPostAcceptDenials(t *testing.T) {
-	report := validFailureReport()
-	report.Turns[0].BashCalls = 14
-	report.Turns[0].SubmitAttempts = 14
-	report.Turns[0].IntentSubmits = 1
-	report.Turns[0].AcceptedReceipts = 1
-	report.Turns[0].SubmitDenials = 13
-	report.Turns[0].PostAcceptDenials = 13
-	if err := validateFailureReport(report); err != nil {
-		t.Fatalf("validateFailureReport() rejected contained post-accept denials: %v", err)
 	}
 }
 
@@ -651,7 +604,7 @@ func readRequiredFile(t *testing.T, path string) []byte {
 
 func validReport() liveReport {
 	var report liveReport
-	report.Schema, report.Version, report.Status = "mnemon.r7.domain-ops.live-report", 3, "passed"
+	report.Schema, report.Version, report.Status = "mnemon.r7.domain-ops.live-report", 4, "passed"
 	report.Model, report.Rounds = "deepseek-v4-flash", 1
 	report.Run = runReport{ID: "domain-ops-test", StartedAt: "2026-08-04T01:00:00Z",
 		FinishedAt: "2026-08-04T01:01:00Z", CandidateDigest: agency.Sum([]byte("candidate")).String()}
@@ -746,7 +699,7 @@ func populateValidEvolution(report *liveReport) {
 func validFailureReport() failureReport {
 	var report failureReport
 	report.Schema, report.Version, report.Status =
-		"mnemon.r7.domain-ops.failure-report", 1, "failed"
+		"mnemon.r7.domain-ops.failure-report", 2, "failed"
 	report.Model = "deepseek-v4-flash"
 	report.Run = runReport{ID: "domain-ops-failed", StartedAt: "2026-08-04T01:00:00Z",
 		FinishedAt:      "2026-08-04T01:01:00Z",
