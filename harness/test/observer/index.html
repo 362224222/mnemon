@@ -471,12 +471,12 @@
     const FACT_KEYS = Object.freeze(["schema", "version", "record", "seq", "id", "captured_at", "source", "agent", "turn", "kind", "truth", "causes", "refs", "facts"]);
     const RESULT_KEYS = Object.freeze(["schema", "version", "record", "status", "finished_at", "record_count", "trace_digest", "gates"]);
     const FACT_FIELDS = Object.freeze([
-      "action", "alpha", "artifact_count", "attempt_count", "authenticated", "bypassed_hook", "byte_size",
-      "code", "consequence", "count", "duration_ms", "gate_id", "hook_cue", "invalid_votes",
+      "action", "active_claims", "alpha", "artifact_count", "attempt_count", "authenticated", "bypassed_hook", "byte_size",
+      "code", "consequence", "count", "duration_ms", "episode", "gate_id", "hook_cue", "invalid_votes",
       "margin_after", "margin_before", "no_vote", "no_votes", "outcome", "payload_bytes", "phase",
-      "preference_after", "preference_before", "recolored", "replayed", "result", "round",
+      "preference_after", "preference_before", "recolored", "replayed", "result", "role", "round",
       "sample_size", "semantic_kind", "state", "status", "success_count", "target_count", "targets", "timed_out", "view_nonempty",
-      "votes_a", "votes_b"
+      "turn_limit", "turns_used", "unseen_open", "votes_a", "votes_b"
     ]);
     const INTENT_DENIAL_CODES = Object.freeze([
       "invalid_argument", "content_required", "content_too_large", "artifact_invalid",
@@ -517,6 +517,8 @@
       "r8.vote.observed|r8_selector|observation",
       "r8.round.settled|r8_selector|local_preference",
       "r8.observation.produced|r8_selector|local_preference",
+      "test.attention.wave|oracle|assertion",
+      "test.attention.exhausted|oracle|assertion",
       "test.gate.checked|oracle|assertion"
     ]);
     const FACT_CLASSIFICATIONS = new Map(FACT_CLASSIFICATION_ROWS.map(row => {
@@ -666,6 +668,7 @@
       if (facts.state !== undefined) requireEnum(facts.state, ["open", "active", "pending", "settled", "expired", "retracted", "terminal"], label + ".state");
       if (facts.status !== undefined) requireEnum(facts.status, ["pass", "fail", "incomplete", "unknown", "not_applicable"], label + ".status");
       optionalInteger(facts.alpha, 1, 64, label + ".alpha");
+      optionalInteger(facts.active_claims, 0, 64, label + ".active_claims");
       optionalInteger(facts.artifact_count, 0, 64, label + ".artifact_count");
       optionalInteger(facts.attempt_count, 0, 256, label + ".attempt_count");
       optionalInteger(facts.count, 1, 256, label + ".count");
@@ -678,6 +681,9 @@
       optionalInteger(facts.sample_size, 0, 64, label + ".sample_size");
       optionalInteger(facts.success_count, 0, 256, label + ".success_count");
       optionalInteger(facts.target_count, 0, 16, label + ".target_count");
+      optionalInteger(facts.turn_limit, 1, 256, label + ".turn_limit");
+      optionalInteger(facts.turns_used, 0, 256, label + ".turns_used");
+      optionalInteger(facts.unseen_open, 0, 64, label + ".unseen_open");
       optionalInteger(facts.votes_a, 0, 64, label + ".votes_a");
       optionalInteger(facts.votes_b, 0, 64, label + ".votes_b");
       optionalInteger(facts.byte_size, 0, 16777216, label + ".byte_size");
@@ -694,7 +700,7 @@
         fail(label + ".target_count", "must equal targets length");
       }
       ["authenticated", "bypassed_hook", "hook_cue", "no_vote", "recolored", "replayed", "timed_out", "view_nonempty"].forEach(key => optionalBoolean(facts[key], label + "." + key));
-      ["code", "gate_id", "semantic_kind"].forEach(key => optionalString(facts[key], TOKEN, label + "." + key));
+      ["code", "episode", "gate_id", "role", "semantic_kind"].forEach(key => optionalString(facts[key], TOKEN, label + "." + key));
     }
 
     function validateFact(record, expectedSequence, seen, label) {
@@ -759,6 +765,14 @@
           required(record.facts, ["outcome", "state"], label + ".facts");
           if (record.facts.state !== "terminal" || !["completed", "declined", "unresolved"].includes(record.facts.outcome)) {
             fail(label + ".facts", "does not describe a terminal Handling outcome");
+          }
+          break;
+        case "test.attention.wave":
+        case "test.attention.exhausted":
+          required(record.facts, ["episode", "role", "round", "unseen_open", "active_claims", "turn_limit", "turns_used"], label + ".facts");
+          if (record.causes.length !== 0 || record.facts.round < 1 ||
+              record.facts.active_claims !== 0 || record.facts.turns_used > record.facts.turn_limit) {
+            fail(label, "does not describe a bounded non-causal attention snapshot");
           }
           break;
         case "r8.selection.seeded":
@@ -983,6 +997,11 @@
           }
           if (fact.facts.code) details.push(fact.facts.code);
           if (fact.facts.count !== undefined) details.push("count " + fact.facts.count);
+          if (fact.facts.unseen_open !== undefined) {
+            details.push(fact.facts.episode + " · " + fact.facts.role + " · wave " + fact.facts.round +
+              " · unseen " + fact.facts.unseen_open + " · active " + fact.facts.active_claims +
+              " · turns " + fact.facts.turns_used + "/" + fact.facts.turn_limit);
+          }
           if (fact.facts.semantic_kind) details.push(fact.facts.semantic_kind);
           if (fact.facts.consequence) details.push(fact.facts.consequence);
           if (fact.facts.targets && fact.facts.targets.length) details.push("→ " + fact.facts.targets.join(", "));

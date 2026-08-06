@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 )
 
 const (
@@ -135,4 +136,76 @@ func validateFirstAttentionNodes(values []firstAttentionNode,
 		return nil, errors.New("sanitized live report contains an empty attention wave")
 	}
 	return nodes, nil
+}
+
+func validateFailedFirstAttention(code string, value *firstAttentionSettlement,
+	turns []turnSummary,
+) error {
+	budgetExhausted := strings.HasSuffix(code, ".attention-budget-exhausted")
+	if !budgetExhausted {
+		if value != nil {
+			return errors.New("sanitized failure report has unexpected attention evidence")
+		}
+		return nil
+	}
+	if value == nil || (value.Episode != "episode-1" && value.Episode != "episode-2") ||
+		value.Status != "budget_exhausted" || value.TurnLimit != firstAttentionTurnLimit ||
+		value.TurnsUsed < 0 || value.TurnsUsed > value.TurnLimit {
+		return errors.New("sanitized failure report omits its bounded attention evidence")
+	}
+	if code != "scenario."+value.Episode+".attention-budget-exhausted" {
+		return errors.New("sanitized failure report mismatches its attention episode")
+	}
+	completed := make(map[string]struct{}, len(turns))
+	for _, turn := range turns {
+		completed[turn.Turn] = struct{}{}
+	}
+	used, err := validateFailedAttentionWaves(*value, completed)
+	if err != nil {
+		return err
+	}
+	final, err := validateFirstAttentionNodes(value.Final, false)
+	if err != nil {
+		return err
+	}
+	if used != value.TurnsUsed || used+positiveAttentionNodes(final) <= value.TurnLimit {
+		return errors.New("sanitized failure report does not prove attention budget exhaustion")
+	}
+	return nil
+}
+
+func validateFailedAttentionWaves(value firstAttentionSettlement,
+	completed map[string]struct{},
+) (int, error) {
+	used := 0
+	for index, wave := range value.Waves {
+		if wave.Wave != index+1 {
+			return 0, errors.New("sanitized failure report has a non-contiguous attention wave")
+		}
+		nodes, err := validateFirstAttentionNodes(wave.Nodes, false)
+		if err != nil {
+			return 0, err
+		}
+		for role, node := range nodes {
+			if node.UnseenOpen == 0 {
+				continue
+			}
+			turn := fmt.Sprintf("%s-attention-debt-%d-%s", value.Episode, wave.Wave, role)
+			if _, exists := completed[turn]; !exists {
+				return 0, errors.New("sanitized failure report omits a completed attention turn")
+			}
+			used++
+		}
+	}
+	return used, nil
+}
+
+func positiveAttentionNodes(nodes map[string]firstAttentionNode) int {
+	positive := 0
+	for _, node := range nodes {
+		if node.UnseenOpen > 0 {
+			positive++
+		}
+	}
+	return positive
 }

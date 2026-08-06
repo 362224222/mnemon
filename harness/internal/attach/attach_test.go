@@ -86,10 +86,12 @@ func assertGuideTerminalSurface(t *testing.T, guide string) {
 	}
 	normalized := strings.Join(strings.Fields(guide), " ")
 	for _, required := range []string{
-		"the current remains the required local causal anchor",
-		"matching completed, declined, or unresolved to the actual outcome",
-		"For a local current, or when no reply is warranted",
-		"A Receipt never needs a reply; never acknowledge an acknowledgement",
+		"current remains the local causal anchor",
+		"A `self` successor creates another responsibility; never use it as reply keepalive",
+		"A reply target is optional, not an obligation",
+		"resolve locally without successors unless another peer must act",
+		"If replying finishes current, combine terminal resolve with one correlated remote successor in the same Intent",
+		"Reports and Receipts need no acknowledgement",
 	} {
 		if !strings.Contains(normalized, required) {
 			t.Errorf("guide lacks response convergence rule %q", required)
@@ -100,7 +102,7 @@ func assertGuideTerminalSurface(t *testing.T, guide string) {
 	}
 }
 
-func TestGuideResponseExampleIsCorrelatedEvidenceWithLocalAnchor(t *testing.T) {
+func TestGuideResponseExampleAtomicallyClosesAndReturnsCorrelatedEvidence(t *testing.T) {
 	projection, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -115,10 +117,51 @@ func TestGuideResponseExampleIsCorrelatedEvidenceWithLocalAnchor(t *testing.T) {
 		t.Fatalf("guide work.response is not a valid AgentIntent: %v", err)
 	}
 	successors := intent.Successors()
-	if intent.Consequence() != agency.ConsequenceAdvanceHandling ||
+	if intent.Consequence() != agency.ConsequenceResolveCompleted ||
 		intent.SubjectHandling().IsZero() || len(successors) != 1 || successors[0].IsSelf() ||
 		successors[0].Alias().IsZero() || intent.CorrelationHandle().IsZero() || len(intent.Artifacts()) == 0 {
-		t.Fatal("guide work.response does not retain its subject while returning correlated evidence")
+		t.Fatal("guide work.response does not close its subject while returning correlated evidence")
+	}
+}
+
+func TestGuideDeclineExampleClosesLocallyWithoutSuccessor(t *testing.T) {
+	projection, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`(?m)^(\{"kind":"work\.declined"[^\n]+\})$`).
+		FindStringSubmatch(string(projection.Guide()))
+	if len(match) != 2 {
+		t.Fatal("guide lacks one complete work.declined example")
+	}
+	intent, err := agency.ParseAgentIntentJSON([]byte(match[1]))
+	if err != nil {
+		t.Fatalf("guide work.declined is not a valid AgentIntent: %v", err)
+	}
+	if intent.Consequence() != agency.ConsequenceResolveDeclined ||
+		intent.SubjectHandling().IsZero() || len(intent.Successors()) != 0 ||
+		!intent.CorrelationHandle().IsZero() {
+		t.Fatal("guide work.declined does not close only its current responsibility")
+	}
+}
+
+func TestGuideProgressExampleAdvancesExistingAnchorWithoutSuccessor(t *testing.T) {
+	projection, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`(?m)^(\{"kind":"work\.progress"[^\n]+\})$`).
+		FindStringSubmatch(string(projection.Guide()))
+	if len(match) != 2 {
+		t.Fatal("guide lacks one complete work.progress example")
+	}
+	intent, err := agency.ParseAgentIntentJSON([]byte(match[1]))
+	if err != nil {
+		t.Fatalf("guide work.progress is not a valid AgentIntent: %v", err)
+	}
+	if intent.Consequence() != agency.ConsequenceAdvanceHandling ||
+		intent.SubjectHandling().IsZero() || len(intent.Successors()) != 0 {
+		t.Fatal("guide work.progress does not advance only its existing local anchor")
 	}
 }
 

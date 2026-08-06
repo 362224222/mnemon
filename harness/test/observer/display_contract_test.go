@@ -77,6 +77,8 @@ func TestTraceSchemaRequiresMinimumDisplayEvidence(t *testing.T) {
 		"runtime.intent.denied":    {"facts.action", "facts.code", "facts.count"},
 		"r7.event.accepted":        {"facts.consequence", "facts.semantic_kind", "refs.event", "refs.event_digest"},
 		"r7.handling.resolved":     {"facts.outcome", "facts.state", "refs.handling"},
+		"test.attention.wave":      {"facts.active_claims", "facts.episode", "facts.role", "facts.round", "facts.turn_limit", "facts.turns_used", "facts.unseen_open"},
+		"test.attention.exhausted": {"facts.active_claims", "facts.episode", "facts.role", "facts.round", "facts.turn_limit", "facts.turns_used", "facts.unseen_open"},
 		"r8.selection.seeded":      {"facts.phase", "facts.preference_after"},
 		"r8.round.frozen":          {"facts.alpha", "facts.margin_before", "facts.preference_before", "facts.round", "facts.sample_size"},
 		"r8.vote.observed":         {"facts.authenticated", "facts.round", "facts.votes_a", "facts.votes_b"},

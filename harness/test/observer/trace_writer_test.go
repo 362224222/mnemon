@@ -151,6 +151,8 @@ func TestTraceWriterRejectsKindsWithoutMinimumDisplayEvidence(t *testing.T) {
 		{"vote", requiredEvidenceFact("trace:vote", "r8.vote.observed")},
 		{"settled round", requiredEvidenceFact("trace:settled", "r8.round.settled")},
 		{"preference observation", requiredEvidenceFact("trace:observation", "r8.observation.produced")},
+		{"attention wave", requiredEvidenceFact("trace:attention-wave", "test.attention.wave")},
+		{"attention exhaustion", requiredEvidenceFact("trace:attention-exhausted", "test.attention.exhausted")},
 	}
 	tests[0].fact.Fields.SemanticKind = ""
 	tests[1].fact.Fields.Outcome = ""
@@ -159,6 +161,8 @@ func TestTraceWriterRejectsKindsWithoutMinimumDisplayEvidence(t *testing.T) {
 	tests[4].fact.Fields.Authenticated = nil
 	tests[5].fact.Fields.Recolored = nil
 	tests[6].fact.Fields.Result = ""
+	tests[7].fact.Fields.UnseenOpen = nil
+	tests[8].fact.Fields.TurnLimit = nil
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -178,7 +182,7 @@ func TestKindEvidenceRulesMatchClosedDisplayContract(t *testing.T) {
 		"runtime.domain.operation", "runtime.intent.denied",
 		"r7.event.accepted", "r7.handling.resolved", "r8.selection.seeded",
 		"r8.round.frozen", "r8.vote.observed", "r8.round.settled",
-		"r8.observation.produced",
+		"r8.observation.produced", "test.attention.wave", "test.attention.exhausted",
 	}
 	if len(kindEvidenceRules) != len(expected) {
 		t.Fatalf("kind evidence rules = %d, want %d", len(kindEvidenceRules), len(expected))
@@ -262,6 +266,9 @@ func requiredEvidenceFact(id, kind string) Fact {
 			truth = TruthObservation
 		}
 	}
+	if strings.HasPrefix(kind, "test.attention.") {
+		source, truth = SourceOracle, TruthAssertion
+	}
 	fact := testFact(id, kind, source, truth)
 	fact.References = References{Event: "event:one", EventDigest: "sha256:" + strings.Repeat("1", 64),
 		Handling: "handling:one", Selection: "sha256:" + strings.Repeat("2", 64)}
@@ -269,7 +276,9 @@ func requiredEvidenceFact(id, kind string) Fact {
 		Outcome: "completed", State: "terminal", PreferenceBefore: "A", PreferenceAfter: "B",
 		Phase: "observed", Result: "threshold_reached", Round: &integer, SampleSize: &integer,
 		Alpha: &integer, VotesA: &zero, VotesB: &integer, MarginBefore: &zero,
-		MarginAfter: &integer, Authenticated: &boolean, Recolored: &boolean}
+		MarginAfter: &integer, Authenticated: &boolean, Recolored: &boolean,
+		Episode: "episode-1", Role: "lead", ActiveClaims: &zero,
+		UnseenOpen: &integer, TurnLimit: &integer, TurnsUsed: &zero}
 	return fact
 }
 

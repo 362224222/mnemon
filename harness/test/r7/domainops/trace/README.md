@@ -89,7 +89,7 @@ the stopped Reference lineage, and is no newer than the end boundary. Every
 reported later use must be an exact causation or supersede/retract edge from a
 post-boundary accepted Event. It does not inspect Artifact bytes, semantic kinds, or remediation
 choices. Earlier passed-report versions are intentionally not accepted as two-episode
-evidence; failed reports retain their independent version-2 shape below.
+evidence; failed reports retain their independent version-3 shape below.
 
 ## Failed-run input
 
@@ -99,7 +99,7 @@ five stores, then write a sanitized input with this closed shape:
 ```json
 {
   "schema": "mnemon.r7.domain-ops.failure-report",
-  "version": 2,
+  "version": 3,
   "status": "failed",
   "model": "bounded-model-token",
   "run": {
@@ -112,6 +112,7 @@ five stores, then write a sanitized input with this closed shape:
     "code": "bounded.machine-readable-code",
     "observed_at": "canonical UTC RFC3339Nano"
   },
+  "first_attention": null,
   "turns": [],
   "raw_provider_streams_retained": false
 }
@@ -121,6 +122,19 @@ five stores, then write a sanitized input with this closed shape:
 the passed report. Partial text, tool input/output, prompts, and provider errors
 do not belong in this file. Invoke the adapter with `--failure-report` instead
 of `--report` and the same three evidence paths.
+
+An `attention-budget-exhausted` failure replaces `first_attention: null` with
+the already captured waves and the skipped final snapshot. That object carries
+only closed episode/status tokens plus per-node `unseen_open` and
+`active_claims` counts, the turn limit, turns used, and wave numbers. The trace
+projects these as `test.attention.wave` and `test.attention.exhausted` assertion
+Facts; it does not retain Event kinds, payloads, paths, commands, or a proposed
+remediation. The failed `scenario.run` gate cites the final snapshot Facts.
+
+Handling Facts cover both the subject changed by an Event and every successor
+Handling whose durable `created_sequence` names that Event. An advance or
+resolve that creates follow-up responsibility therefore emits both its
+advanced/resolved Fact and separate `r7.handling.created` Facts for successors.
 
 A failure trace preserves whatever accepted Event, target, Artifact, Handling,
 Receipt, and peer Delivery chain exists in the stopped stores. Its terminal

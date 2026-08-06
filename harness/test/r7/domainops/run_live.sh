@@ -1043,6 +1043,12 @@ settle_first_attention_debt() {
     fi
     targets=$(jq '[.[] | select(.unseen_open > 0)] | length' "$snapshot")
     if test $((used + targets)) -gt "$first_attention_turn_limit"; then
+      jq -n --arg episode "$episode" --argjson limit "$first_attention_turn_limit" \
+        --argjson used "$used" --argjson waves "$(jq -s '.' "$waves")" \
+        --argjson final "$(cat "$snapshot")" '
+          {episode:$episode,status:"budget_exhausted",turn_limit:$limit,
+           turns_used:$used,waves:$waves,final_nodes:$final}
+        ' >"$directory/$episode-budget-exhausted.json"
       failure_stage="scenario.$episode.attention-budget-exhausted"
       fail "$episode first-attention debt exceeded the ${first_attention_turn_limit}-turn bound"
       return 1
@@ -1593,7 +1599,7 @@ publish_evidence() {
 }
 
 finalize_failure_evidence() {
-  local code=$1 observed_at completed_turns='[]'
+  local code=$1 observed_at completed_turns='[]' first_attention='null' attention_files=()
   test "$authority_started" = 1 || return 0
   test -n "$runtime_root" && test -d "$runtime_root" || return 0
   test -s "$runtime_root/candidate-binaries.sha256" || return 0
@@ -1602,6 +1608,11 @@ finalize_failure_evidence() {
   observed_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   if compgen -G "$runtime_root/sanitized/*.json" >/dev/null; then
     completed_turns=$(jq -s 'sort_by(.turn)' "$runtime_root/sanitized"/*.json) || return 0
+  fi
+  if compgen -G "$runtime_root/first-attention/*-budget-exhausted.json" >/dev/null; then
+    attention_files=("$runtime_root"/first-attention/*-budget-exhausted.json)
+    test "${#attention_files[@]}" -eq 1 || return 0
+    first_attention=$(cat "${attention_files[0]}") || return 0
   fi
   jq -n \
     --arg schema 'mnemon.r7.domain-ops.failure-report' \
@@ -1612,15 +1623,17 @@ finalize_failure_evidence() {
     --arg candidate_digest "$agent_image_id" \
     --arg code "$code" \
     --arg observed_at "$observed_at" \
+    --argjson first_attention "$first_attention" \
     --argjson turns "$completed_turns" '
       {
         schema:$schema,
-        version:2,
+        version:3,
         status:"failed",
         model:$model,
         run:{id:$run_id,started_at:$started_at,finished_at:$finished_at,
           candidate_digest:$candidate_digest},
         failure:{code:$code,observed_at:$observed_at},
+        first_attention:$first_attention,
         turns:$turns,
         raw_provider_streams_retained:false
       }

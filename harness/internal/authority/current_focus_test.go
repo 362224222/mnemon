@@ -112,6 +112,150 @@ func TestImportedHandlingKeepsReplyContextAcrossLocalAdvance(t *testing.T) {
 	requireCorruptHandlingCreationFailsClosed(t, fixture)
 }
 
+func TestSubjectAdvanceUsesCurrentHandlingAsLocalAnchor(t *testing.T) {
+	for _, test := range []struct {
+		name               string
+		addSelfSuccessor   bool
+		wantLocalHandlings int
+	}{
+		{name: "remote successor only", wantLocalHandlings: 1},
+		{name: "separate self responsibility", addSelfSuccessor: true, wantLocalHandlings: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newPeerRoundTripFixture(t)
+			delivery := fixture.admitOrigin(t)
+			fixture.admitReceiver(t, delivery)
+
+			view := fixture.receiver.current(t)
+			public := requireReplyContext(t, view,
+				fixture.receiverRoute.PublicAlias.String(), "")
+			remote, err := agency.AliasTarget(mustHandle(t, public.Current.Facts.ReplyTarget))
+			if err != nil {
+				t.Fatal(err)
+			}
+			successors := []agency.TargetRef{remote}
+			if test.addSelfSuccessor {
+				successors = append([]agency.TargetRef{agency.SelfTarget()}, successors...)
+			}
+			intent := mustIntent(t, agency.IntentSpec{
+				Kind:              mustLabel(t, "opaque.result"),
+				Payload:           mustPayload(t, "bounded progress for the requester"),
+				Consequence:       agency.ConsequenceAdvanceHandling,
+				SubjectHandling:   mustHandle(t, public.Current.Facts.Handle),
+				Successors:        successors,
+				CorrelationHandle: mustHandle(t, public.Current.Facts.ReplyTo),
+			})
+			request, err := view.Bind(intent,
+				mustOperation(t, "operation:advance-anchor-"+strings.ReplaceAll(test.name, " ", "-")), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := fixture.receiver.store.Admit(fixture.receiver.ctx,
+				fixture.receiver.proof, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+			if got := countRows(t, fixture.receiver.store, "handlings"); got != test.wantLocalHandlings {
+				t.Fatalf("local Handlings after advance = %d, want %d",
+					got, test.wantLocalHandlings)
+			}
+			if got := countRows(t, fixture.receiver.store, "peer_outbox"); got != 1 {
+				t.Fatalf("remote successors after advance = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestImportedHandlingCanResolveLocallyWithoutReplyDelivery(t *testing.T) {
+	fixture := newPeerRoundTripFixture(t)
+	delivery := fixture.admitOrigin(t)
+	fixture.admitReceiver(t, delivery)
+
+	view := fixture.receiver.current(t)
+	requireReplyContext(t, view, fixture.receiverRoute.PublicAlias.String(), "")
+	beforeOutbox := countRows(t, fixture.receiver.store, "peer_outbox")
+	request := subjectRequest(t, view, "operation:local-imported-decline",
+		agency.ConsequenceResolveDeclined, "no further local work is justified", nil)
+	result, err := fixture.receiver.store.Admit(fixture.receiver.ctx, fixture.receiver.proof, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+	if got := countRows(t, fixture.receiver.store, "peer_outbox"); got != beforeOutbox {
+		t.Fatalf("local resolve created %d peer outbox rows; want %d", got, beforeOutbox)
+	}
+	assertHandlingOutcomeCount(t, fixture.receiver, "declined", 1)
+	if next := decodeFocusView(t, fixture.receiver.current(t)); next.Current != nil {
+		t.Fatalf("locally resolved imported Handling remained current: %#v", next.Current)
+	}
+	assertOriginAnchorOpen(t, fixture.origin)
+}
+
+func TestCorrelatedResponseCanBeConsumedWithoutReplyEcho(t *testing.T) {
+	fixture := newPeerRoundTripFixture(t)
+	requestDelivery := fixture.admitOrigin(t)
+	fixture.admitReceiver(t, requestDelivery)
+	admitCorrelatedPeerResponse(t, &fixture, requestDelivery)
+
+	anchorView := fixture.origin.current(t)
+	anchor := decodeFocusView(t, anchorView)
+	if anchor.Current == nil {
+		t.Fatal("origin request anchor was not selected")
+	}
+	advance := subjectRequest(t, anchorView, "operation:consume-response-anchor",
+		agency.ConsequenceAdvanceHandling, "request anchor considered", nil)
+	result, err := fixture.origin.store.Admit(fixture.origin.ctx, fixture.origin.proof, advance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+
+	responseView := fixture.origin.current(t)
+	response := decodeFocusView(t, responseView)
+	if response.Current == nil || response.Current.Semantic.Kind != "review.response" {
+		t.Fatalf("correlated response was not selected: %#v", response.Current)
+	}
+	beforeOutbox := countRows(t, fixture.origin.store, "peer_outbox")
+	resolve := subjectRequest(t, responseView, "operation:consume-response-locally",
+		agency.ConsequenceResolveUnresolved, "response consumed without follow-up", nil)
+	result, err = fixture.origin.store.Admit(fixture.origin.ctx, fixture.origin.proof, resolve)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+	if got := countRows(t, fixture.origin.store, "peer_outbox"); got != beforeOutbox {
+		t.Fatalf("consuming a correlated response changed peer outbox rows from %d to %d",
+			beforeOutbox, got)
+	}
+	assertHandlingOutcomeCount(t, fixture.origin, "unresolved", 1)
+	assertHandlingStateCount(t, fixture.origin, "open", 1)
+}
+
+func assertHandlingOutcomeCount(t *testing.T, fixture *authorityFixture, outcome string, want int) {
+	t.Helper()
+	var got int
+	if err := fixture.store.db.QueryRow(`SELECT COUNT(*) FROM handlings
+		WHERE state = 'terminal' AND outcome = ?`, outcome).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("terminal/%s Handlings = %d; want %d", outcome, got, want)
+	}
+}
+
+func assertHandlingStateCount(t *testing.T, fixture *authorityFixture, state string, want int) {
+	t.Helper()
+	var got int
+	if err := fixture.store.db.QueryRow(`SELECT COUNT(*) FROM handlings
+		WHERE state = ?`, state).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("%s Handlings = %d; want %d", state, got, want)
+	}
+}
+
 func requireReplyContext(t *testing.T, view BoundView, wantTarget, wantPayload string) focusViewWire {
 	t.Helper()
 	result := decodeFocusView(t, view)

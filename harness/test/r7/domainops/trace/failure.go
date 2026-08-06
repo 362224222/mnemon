@@ -21,8 +21,9 @@ type failureReport struct {
 		Code       string `json:"code"`
 		ObservedAt string `json:"observed_at"`
 	} `json:"failure"`
-	Turns                      []turnSummary `json:"turns"`
-	RawProviderStreamsRetained bool          `json:"raw_provider_streams_retained"`
+	FirstAttention             *firstAttentionSettlement `json:"first_attention"`
+	Turns                      []turnSummary             `json:"turns"`
+	RawProviderStreamsRetained bool                      `json:"raw_provider_streams_retained"`
 }
 
 func loadFailureReport(path string) (failureReport, error) {
@@ -37,7 +38,7 @@ func loadFailureReport(path string) (failureReport, error) {
 }
 
 func validateFailureReport(report failureReport) error {
-	if report.Schema != "mnemon.r7.domain-ops.failure-report" || report.Version != 2 ||
+	if report.Schema != "mnemon.r7.domain-ops.failure-report" || report.Version != 3 ||
 		report.Status != "failed" || report.RawProviderStreamsRetained ||
 		report.Model == "" || report.Failure.Code == "" {
 		return errors.New("sanitized failure report has invalid identity or status")
@@ -63,7 +64,10 @@ func validateFailureReport(report failureReport) error {
 	if err != nil || observedAt.Before(startedAt) || observedAt.After(finishedAt) {
 		return errors.New("sanitized failure report has invalid failure time")
 	}
-	return validateCompletedTurnSubset(report.Turns)
+	if err := validateCompletedTurnSubset(report.Turns); err != nil {
+		return err
+	}
+	return validateFailedFirstAttention(report.Failure.Code, report.FirstAttention, report.Turns)
 }
 
 func validateCompletedTurnSubset(turns []turnSummary) error {
@@ -123,10 +127,16 @@ func writeFailureTrace(destination io.Writer, report failureReport,
 	if _, err := appendDeliveryFacts(writer, nodes, eventFacts); err != nil {
 		return err
 	}
-	return finishFailedTrace(writer, report.Failure.Code, observedAt, finishedAt)
+	attentionFacts, err := appendFailedAttentionFacts(writer, report.FirstAttention, observedAt)
+	if err != nil {
+		return err
+	}
+	return finishFailedTrace(writer, report.Failure.Code, attentionFacts, observedAt, finishedAt)
 }
 
-func finishFailedTrace(writer *observer.Writer, code string, observedAt, finishedAt time.Time) error {
+func finishFailedTrace(writer *observer.Writer, code string, attentionFacts []string,
+	observedAt, finishedAt time.Time,
+) error {
 	failureFact := hashedFactID("failed-run", code)
 	if _, err := writer.Append(observer.Fact{ID: failureFact, CapturedAt: observedAt,
 		Source: observer.Source{Class: observer.SourceOracle, Node: "runner"},
@@ -134,8 +144,9 @@ func finishFailedTrace(writer *observer.Writer, code string, observedAt, finishe
 		Fields: observer.FactFields{GateID: "scenario.run", Status: "fail", Code: code}}); err != nil {
 		return err
 	}
+	evidence := append([]string{failureFact}, attentionFacts...)
 	gates := []observer.Gate{{ID: "scenario.run", Status: observer.GateFail,
-		Evidence: []string{failureFact}}}
+		Evidence: evidence}}
 	for _, gate := range []string{"scenario.recovery", "scenario.service-receipts",
 		"r7.operation-receipts", "r7.peer-accepted-effect", "r7.delivery-quiescence",
 		"scenario.isolation", "scenario.evolution"} {

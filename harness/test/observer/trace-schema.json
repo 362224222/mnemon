@@ -18,6 +18,11 @@
             "other"
           ]
         },
+        "active_claims": {
+          "maximum": 64,
+          "minimum": 0,
+          "type": "integer"
+        },
         "alpha": {
           "maximum": 64,
           "minimum": 1,
@@ -68,6 +73,9 @@
           "maximum": 3600000,
           "minimum": 0,
           "type": "integer"
+        },
+        "episode": {
+          "$ref": "#/$defs/token"
         },
         "gate_id": {
           "$ref": "#/$defs/token"
@@ -149,6 +157,9 @@
           "minimum": 0,
           "type": "integer"
         },
+        "role": {
+          "$ref": "#/$defs/token"
+        },
         "sample_size": {
           "maximum": 64,
           "minimum": 0,
@@ -196,6 +207,21 @@
         },
         "timed_out": {
           "type": "boolean"
+        },
+        "turn_limit": {
+          "maximum": 256,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "turns_used": {
+          "maximum": 256,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unseen_open": {
+          "maximum": 64,
+          "minimum": 0,
+          "type": "integer"
         },
         "view_nonempty": {
           "type": "boolean"
@@ -454,6 +480,8 @@
             "r8.vote.observed",
             "r8.round.settled",
             "r8.observation.produced",
+            "test.attention.wave",
+            "test.attention.exhausted",
             "test.gate.checked"
           ]
         },
@@ -738,6 +766,8 @@
               "properties": {
                 "kind": {
                   "enum": [
+                    "test.attention.wave",
+                    "test.attention.exhausted",
                     "test.gate.checked"
                   ]
                 },
@@ -1035,6 +1065,66 @@
                       "preference_after",
                       "margin_after",
                       "phase"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "test.attention.wave"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "causes": {
+                    "maxItems": 0
+                  },
+                  "facts": {
+                    "required": [
+                      "episode",
+                      "role",
+                      "round",
+                      "unseen_open",
+                      "active_claims",
+                      "turn_limit",
+                      "turns_used"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "test.attention.exhausted"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "causes": {
+                    "maxItems": 0
+                  },
+                  "facts": {
+                    "required": [
+                      "episode",
+                      "role",
+                      "round",
+                      "unseen_open",
+                      "active_claims",
+                      "turn_limit",
+                      "turns_used"
                     ]
                   }
                 }

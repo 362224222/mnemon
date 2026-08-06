@@ -699,7 +699,7 @@ func populateValidEvolution(report *liveReport) {
 func validFailureReport() failureReport {
 	var report failureReport
 	report.Schema, report.Version, report.Status =
-		"mnemon.r7.domain-ops.failure-report", 2, "failed"
+		"mnemon.r7.domain-ops.failure-report", 3, "failed"
 	report.Model = "deepseek-v4-flash"
 	report.Run = runReport{ID: "domain-ops-failed", StartedAt: "2026-08-04T01:00:00Z",
 		FinishedAt:      "2026-08-04T01:01:00Z",

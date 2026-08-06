@@ -86,6 +86,8 @@ var kindEvidenceRules = map[string]kindEvidenceRule{
 	"runtime.intent.denied":    {"Intent denial observation", validIntentDenialEvidence},
 	"r7.event.accepted":        {"accepted Event evidence", validAcceptedEventEvidence},
 	"r7.handling.resolved":     {"terminal Handling evidence", validResolvedHandlingEvidence},
+	"test.attention.wave":      {"attention wave evidence", validAttentionSnapshotEvidence},
+	"test.attention.exhausted": {"attention exhaustion evidence", validAttentionSnapshotEvidence},
 	"r8.selection.seeded":      {"seed preference evidence", validSelectionSeedEvidence},
 	"r8.round.frozen":          {"frozen round evidence", validFrozenRoundEvidence},
 	"r8.vote.observed":         {"vote evidence", validVoteEvidence},
@@ -129,6 +131,15 @@ func validAcceptedEventEvidence(fact Fact) bool {
 func validResolvedHandlingEvidence(fact Fact) bool {
 	return fact.References.Handling != "" && fact.Fields.State == "terminal" &&
 		slices.Contains([]string{"completed", "declined", "unresolved"}, fact.Fields.Outcome)
+}
+
+func validAttentionSnapshotEvidence(fact Fact) bool {
+	return len(fact.Causes) == 0 && fact.Fields.Episode != "" && fact.Fields.Role != "" &&
+		fact.Fields.Round != nil && *fact.Fields.Round > 0 &&
+		fact.Fields.UnseenOpen != nil && fact.Fields.ActiveClaims != nil &&
+		fact.Fields.TurnLimit != nil && fact.Fields.TurnsUsed != nil &&
+		*fact.Fields.ActiveClaims == 0 && *fact.Fields.TurnLimit > 0 &&
+		*fact.Fields.TurnsUsed >= 0 && *fact.Fields.TurnsUsed <= *fact.Fields.TurnLimit
 }
 
 func validSelectionSeedEvidence(fact Fact) bool {
@@ -215,7 +226,8 @@ func validateFactFields(fields FactFields, sequence int) error {
 			return fmt.Errorf("trace writer: fact %d has invalid %s", sequence, check.name)
 		}
 	}
-	if !validOptionalTokens(fields.Code, fields.GateID, fields.SemanticKind) ||
+	if !validOptionalTokens(fields.Code, fields.Episode, fields.GateID, fields.Role,
+		fields.SemanticKind) ||
 		len(fields.Targets) > 16 || !validOptionalTokens(fields.Targets...) {
 		return fmt.Errorf("trace writer: fact %d has invalid metadata token", sequence)
 	}
@@ -228,6 +240,7 @@ func validateFactFields(fields FactFields, sequence int) error {
 		minimum int
 		maximum int
 	}{
+		{"active_claims", fields.ActiveClaims, 0, 64},
 		{"alpha", fields.Alpha, 1, 64}, {"artifact_count", fields.ArtifactCount, 0, 64},
 		{"attempt_count", fields.AttemptCount, 0, 256}, {"count", fields.Count, 1, 256},
 		{"invalid_votes", fields.InvalidVotes, 0, 128},
@@ -238,6 +251,8 @@ func validateFactFields(fields FactFields, sequence int) error {
 		{"sample_size", fields.SampleSize, 0, 64}, {"votes_a", fields.VotesA, 0, 64},
 		{"success_count", fields.SuccessCount, 0, 256},
 		{"votes_b", fields.VotesB, 0, 64}, {"target_count", fields.TargetCount, 0, 16},
+		{"turn_limit", fields.TurnLimit, 1, 256}, {"turns_used", fields.TurnsUsed, 0, 256},
+		{"unseen_open", fields.UnseenOpen, 0, 64},
 	}
 	for _, value := range integers {
 		if value.value != nil && (*value.value < value.minimum || *value.value > value.maximum) {

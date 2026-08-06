@@ -40,5 +40,7 @@ var factClassifications = map[string]factClassification{
 	"r8.vote.observed":         {source: "r8_selector", truth: "observation"},
 	"r8.round.settled":         {source: "r8_selector", truth: "local_preference"},
 	"r8.observation.produced":  {source: "r8_selector", truth: "local_preference"},
+	"test.attention.wave":      {source: "oracle", truth: "assertion"},
+	"test.attention.exhausted": {source: "oracle", truth: "assertion"},
 	"test.gate.checked":        {source: "oracle", truth: "assertion"},
 }

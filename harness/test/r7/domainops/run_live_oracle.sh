@@ -223,6 +223,12 @@ assert_first_attention_boundary() {
     exit 1
   fi
   test "$failure_stage" = scenario.episode-budget.attention-budget-exhausted
+  jq -e '
+    .episode == "episode-budget" and .status == "budget_exhausted" and
+    .turn_limit == 1 and .turns_used == 0 and (.waves | length) == 0 and
+    ([.final_nodes[] | select(.unseen_open > 0)] | length) == 2 and
+    all(.final_nodes[]; .active_claims == 0)
+  ' "$runtime_root/first-attention/episode-budget-budget-exhausted.json" >/dev/null
 
   first_attention_turn_limit=16
   snapshot_first_attention_debt() {
