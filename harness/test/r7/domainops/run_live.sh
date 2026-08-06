@@ -462,13 +462,13 @@ sanitize_turn() {
     --arg captured_at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" '
     def command: (.args.command // "");
     def invocation_pattern($verb):
-      (("(^|[|;&][[:space:]]*)([^[:space:];|&]*/)?mnemon-harness" +
+      (("(^|[|;&\n][[:space:]]*)([^[:space:];|&]*/)?mnemon-harness" +
         "[[:space:]]+agent[[:space:]]+" + $verb + "([[:space:];|&]|$)"));
     def invocation_count($verb): [command | scan(invocation_pattern($verb))] | length;
     def invokes($verb):
       (invocation_count($verb) > 0);
     def domain_invocation_pattern($verb):
-      (("(^|[|;&])[[:space:]]*([^[:space:];|&]*/)?domainctl" +
+      (("(^|[|;&\n])[[:space:]]*([^[:space:];|&]*/)?domainctl" +
         "(?:[[:space:]]+--?(?:role|endpoint|timeout)" +
         "(?:=[^[:space:];|&]+|[[:space:]]+[^[:space:];|&]+))*" +
         "[[:space:]]+" + $verb + "([[:space:];|&]|$)"));
@@ -688,14 +688,17 @@ snapshot_accepted_events() {
 bind_turn_events() {
   local before=$1 after=$2 summary=$3 temporary
   temporary=$summary.events
-  jq -n --slurpfile before "$before" --slurpfile after "$after" '
+  jq -e -n --slurpfile before "$before" --slurpfile after "$after" '
+    select(all($before[0][];
+      . as $prior | any($after[0][];
+        .id == $prior.id and .digest == $prior.digest))) |
     ($before[0] | map(.id)) as $known |
     [$after[0][] as $event |
       select(($known | index($event.id)) == null) | $event]
   ' >"$temporary.refs" || return 1
-  jq --slurpfile accepted "$temporary.refs" '
+  jq -e --slurpfile accepted "$temporary.refs" '
     ($accepted[0]) as $events |
-    select(($events | length) == .accepted_receipts and ($events | length) <= 1) |
+    select(($events | length) <= 1) |
     . + {accepted_events:$events}
   ' "$summary" >"$temporary" || return 1
   test -s "$temporary" || return 1
@@ -703,12 +706,22 @@ bind_turn_events() {
   rm -f "$temporary.refs"
 }
 
+claim_turn_window() {
+  local role=$1 lock="$runtime_root/turn-locks/$1"
+  mkdir "$lock" || fail "$role already has an active Runtime turn"
+}
+
+release_turn_window() {
+  local role=$1 lock="$runtime_root/turn-locks/$1"
+  rmdir "$lock" || fail "$role Runtime turn lock did not close cleanly"
+}
+
 summarize_partial_turn() {
   local raw=$1
   jq -s -c '
     def command: (.args.command // "");
     def invocation_pattern($verb):
-      (("(^|[|;&][[:space:]]*)([^[:space:];|&]*/)?mnemon-harness" +
+      (("(^|[|;&\n][[:space:]]*)([^[:space:];|&]*/)?mnemon-harness" +
         "[[:space:]]+agent[[:space:]]+" + $verb + "([[:space:];|&]|$)"));
     def invocation_count($verb): [command | scan(invocation_pattern($verb))] | length;
     def result_strings:
@@ -830,6 +843,7 @@ summarize_provider_stderr() {
 run_turn() {
   local role=$1 prompt=$2 tag=$3 container raw errors sanitized marker writer status before after
   local raw_bytes error_bytes
+  claim_turn_window "$role"
   container=$(container_for "$role")
   raw="$runtime_root/raw/$tag.jsonl"
   errors="$runtime_root/raw/$tag.err"
@@ -904,9 +918,10 @@ run_turn() {
   }
   bind_turn_events "$before" "$after" "$sanitized" || {
     rm -f -- "$raw" "$errors" "$marker" "$before" "$after" "$sanitized"
-    fail "$role turn $tag accepted Receipt/Event attribution is inconsistent"
+    fail "$role turn $tag accepted Event turn boundary is invalid"
   }
   rm -f -- "$raw" "$errors" "$marker" "$before" "$after"
+  release_turn_window "$role"
 }
 
 run_attention_round() {
@@ -1746,7 +1761,7 @@ main() {
   agent_image="mnemon-domain-ops-agent:live-$$"
   run_started_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   mkdir -p "$runtime_root/cards" "$runtime_root/workspaces" "$runtime_root/raw" \
-    "$runtime_root/sanitized" "$runtime_root/authority"
+    "$runtime_root/sanitized" "$runtime_root/authority" "$runtime_root/turn-locks"
 
   local first_incident_prefix="incident-a-$$"
   local first_evaluation_prefix="evaluation-a-$$"

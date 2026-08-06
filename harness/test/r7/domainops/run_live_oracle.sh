@@ -178,6 +178,22 @@ JSON
 
 assert_failure_world_boundary
 
+assert_exclusive_turn_window() {
+  runtime_root="$scratch/turn-window-runtime"
+  mkdir -p "$runtime_root/turn-locks"
+  claim_turn_window lead
+  if claim_turn_window lead >/dev/null 2>&1; then
+    printf 'runtime oracle: concurrent turns acquired the same node window\n' >&2
+    exit 1
+  fi
+  release_turn_window lead
+  claim_turn_window lead
+  release_turn_window lead
+  runtime_root=
+}
+
+assert_exclusive_turn_window
+
 write_attention_snapshot() {
   local output=$1 data_unseen=$2 platform_unseen=$3 active=${4:-0} role unseen
   : >"$output.jsonl"
@@ -464,9 +480,27 @@ bind_turn_events "$scratch/events-before.json" "$scratch/events-after.json" \
 jq -e '.accepted_events == [{id:"event:new",digest:"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]' \
   "$scratch/event-binding.json" >/dev/null
 printf '%s\n' '{"accepted_receipts":0}' >"$scratch/event-binding-mismatch.json"
-if bind_turn_events "$scratch/events-before.json" "$scratch/events-after.json" \
+bind_turn_events "$scratch/events-before.json" "$scratch/events-after.json" \
+  "$scratch/event-binding-mismatch.json"
+jq -e '.accepted_receipts == 0 and (.accepted_events | length) == 1' \
+  "$scratch/event-binding-mismatch.json" >/dev/null
+printf '%s\n' '{"accepted_receipts":1}' >"$scratch/event-replay.json"
+bind_turn_events "$scratch/events-before.json" "$scratch/events-before.json" \
+  "$scratch/event-replay.json"
+jq -e '.accepted_receipts == 1 and .accepted_events == []' \
+  "$scratch/event-replay.json" >/dev/null
+printf '%s\n' '[{"id":"event:before","digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},{"id":"event:new","digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]' \
+  >"$scratch/events-drifted.json"
+if bind_turn_events "$scratch/events-before.json" "$scratch/events-drifted.json" \
     "$scratch/event-binding-mismatch.json"; then
-  printf 'runtime oracle: accepted Receipt/Event mismatch was accepted\n' >&2
+  printf 'runtime oracle: an accepted Event changed across a turn boundary\n' >&2
+  exit 1
+fi
+printf '%s\n' '[{"id":"event:before","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"id":"event:new","digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},{"id":"event:second","digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}]' \
+  >"$scratch/events-too-many.json"
+if bind_turn_events "$scratch/events-before.json" "$scratch/events-too-many.json" \
+    "$scratch/event-binding-mismatch.json"; then
+  printf 'runtime oracle: two accepted Events were attributed to one turn\n' >&2
   exit 1
 fi
 if grep -E 'secret-|ambiguous-result|wrong-role' "$scratch/domain-observations.json" >/dev/null; then
@@ -548,6 +582,15 @@ jq -e '
   .submit_denials == 1 and .post_accept_denials == 1 and
   .submit_control_denials == [{code:"context_required",count:1}]
 ' "$scratch/accounted.json" >/dev/null
+write_submit_stream "$scratch/multiline-submit.jsonl" "$accepted_receipt"
+jq -c 'if .type == "tool_execution_start" then
+  .args.command = "mnemon-harness artifact capture --json \u003c evidence.json\nmnemon-harness agent submit --json"
+  else . end' "$scratch/multiline-submit.jsonl" >"$scratch/multiline-submit.tmp"
+mv "$scratch/multiline-submit.tmp" "$scratch/multiline-submit.jsonl"
+sanitize_turn lead oracle-multiline-submit "$scratch/multiline-submit.jsonl" \
+  "$scratch/multiline-submit.json"
+jq -e '.submit_attempts == 1 and .accepted_receipts == 1' \
+  "$scratch/multiline-submit.json" >/dev/null
 if grep -F 'a bounded View is required' "$scratch/accounted.json" >/dev/null; then
   printf 'runtime oracle: sanitized CLI denial retained diagnostic text\n' >&2
   exit 1

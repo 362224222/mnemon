@@ -61,7 +61,7 @@ func validateTurnBounds(turn turnSummary) error {
 func validateRuntimeObservationConsistency(turn turnSummary) error {
 	if turn.PrivateBindingProbes != 0 || turn.DelegateCalls > 1 ||
 		turn.CurrentReads > turn.BashCalls || turn.AcceptedReceipts > 1 ||
-		len(turn.AcceptedEvents) != turn.AcceptedReceipts ||
+		len(turn.AcceptedEvents) > 1 ||
 		!domainOperationClosed(turn.DomainOperations.Read) ||
 		!domainOperationClosed(turn.DomainOperations.Probe) ||
 		!domainOperationClosed(turn.DomainOperations.Mutation) ||

@@ -239,6 +239,30 @@ func TestValidateFailureReportBoundsRuntimePrivateDelegation(t *testing.T) {
 	}
 }
 
+func TestTurnEventBindingIsIndependentFromVisibleReceiptTraffic(t *testing.T) {
+	turn := turnSummary{Role: "lead", Turn: "indirect-effect",
+		CapturedAt: "2026-08-04T01:00:30Z", HookCues: 1, AgentEnd: true,
+		AcceptedEvents: []acceptedEventSummary{{ID: "event:indirect",
+			Digest: agency.Sum([]byte("indirect effect")).String()}}}
+	if err := validateTurnSummary(turn); err != nil {
+		t.Fatalf("validateTurnSummary() rejected an authority-bound indirect Effect: %v", err)
+	}
+
+	turn.AcceptedEvents = nil
+	turn.SubmitAttempts, turn.IntentSubmits, turn.AcceptedReceipts = 1, 1, 1
+	if err := validateTurnSummary(turn); err != nil {
+		t.Fatalf("validateTurnSummary() rejected a visible accepted replay: %v", err)
+	}
+
+	turn.AcceptedEvents = []acceptedEventSummary{
+		{ID: "event:first", Digest: agency.Sum([]byte("first effect")).String()},
+		{ID: "event:second", Digest: agency.Sum([]byte("second effect")).String()},
+	}
+	if err := validateTurnSummary(turn); err == nil {
+		t.Fatal("validateTurnSummary() accepted two new Effects in one turn")
+	}
+}
+
 func TestReportValidationAccountsRuntimeSubmitInvocationFailures(t *testing.T) {
 	report := validReport()
 	report.Turns[0].SubmitAttempts = 1

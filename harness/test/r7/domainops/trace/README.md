@@ -86,6 +86,15 @@ operation key, request digest, attachment, fence, submitted Intent, or Receipt
 body. The binding labels an accepted Event with its producing Runtime turn; it
 does not make the Runtime observation a cause of that Event.
 
+This authority binding is deliberately independent from `accepted_receipts`.
+The latter counts only submit traffic syntactically visible in paired Pi Bash
+envelopes and can miss a valid nested shell form; an accepted Receipt can also
+be an exact replay that creates no new Event. Neither observation is promoted
+to the other. T0 still permits at most one newly accepted local operation Event
+inside a turn boundary. The runner enforces one exclusive turn window per node;
+without that exclusivity this is temporal attribution rather than a private
+operation-to-turn binding and would not be sufficient.
+
 The passed runner report is `mnemon.r7.domain-ops.live-report` version 4. It
 contains two ordered service-world episodes and a bounded authority boundary
 between them. Before either business oracle, its first-attention settlement
