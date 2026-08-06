@@ -22,6 +22,75 @@ test "$(grep -Fxc -- "const CURRENT_FAILED_TEXT = \"$current_failed_reason\";" \
   printf 'runtime oracle: native Current failure disposition drifted from the observer\n' >&2
   exit 1
 }
+grep -Eq "^[[:space:]]*MonitorProbeLimit[[:space:]]*=[[:space:]]*$monitor_probe_limit$" \
+  "$case_root/world/monitor.go" || {
+  printf 'runtime oracle: shell and monitor probe bounds diverged\n' >&2
+  exit 1
+}
+grep -Eq "^[[:space:]]*MonitorProbeChargeLimit[[:space:]]*=[[:space:]]*$monitor_probe_charge_limit$" \
+  "$case_root/world/monitor.go" || {
+  printf 'runtime oracle: shell and monitor per-probe charge bounds diverged\n' >&2
+  exit 1
+}
+grep -Eq "^[[:space:]]*GatewayHistoryLimit[[:space:]]*=[[:space:]]*$gateway_history_limit$" \
+  "$case_root/world/gateway.go" || {
+  printf 'runtime oracle: shell and gateway history bounds diverged\n' >&2
+  exit 1
+}
+grep -Fqx -- "const maxControlBytes = $domain_control_max_kib << 10" \
+  "$case_root/cmd/domainctl/main.go" || {
+  printf 'runtime oracle: shell and domainctl response bounds diverged\n' >&2
+  exit 1
+}
+test "$synthetic_charge_limit" = $((monitor_probe_limit * monitor_probe_charge_limit)) || {
+  printf 'runtime oracle: synthetic charge envelope is not derived from probe bounds\n' >&2
+  exit 1
+}
+test "$max_agent_probe_count" = 35 && test "$max_goal_probe_count" = 34 &&
+    test "$max_agent_probe_count" = $((scenario_episode_count *
+      (open_attention_turn_limit + 1) * agent_probe_per_turn_limit +
+      agent_probe_per_turn_limit)) &&
+    test "$monitor_probe_limit" -ge $((max_agent_probe_count + max_goal_probe_count)) || {
+  printf 'runtime oracle: probe budget does not cover the bounded attention schedule\n' >&2
+  exit 1
+}
+test "$scenario_customer_receipt_limit" = 32 &&
+    test "$gateway_history_limit" -ge \
+      $((monitor_probe_limit + scenario_customer_receipt_limit)) || {
+  printf 'runtime oracle: gateway history cannot retain scenario and probe receipts\n' >&2
+  exit 1
+}
+
+write_trace_source=$(declare -f write_trace)
+for required in '--consolidation-authority' '--boundary-authority'; do
+  printf '%s\n' "$write_trace_source" | grep -F -- "$required" >/dev/null || {
+    printf 'runtime oracle: trace adapter omits %s\n' "$required" >&2
+    exit 1
+  }
+done
+consolidation_source=$(declare -f capture_consolidation_start)
+printf '%s\n' "$consolidation_source" |
+  grep -F -- 'chmod -R a-w "$staging"' >/dev/null || {
+  printf 'runtime oracle: consolidation does not freeze independent authority\n' >&2
+  exit 1
+}
+if printf '%s\n' "$consolidation_source" |
+    sed -n '/chmod -R a-w "$staging"/,$p' |
+    grep -F -- 'rm -rf' >/dev/null; then
+  printf 'runtime oracle: consolidation deletes its frozen authority\n' >&2
+  exit 1
+fi
+restart_source=$(declare -f restart_agent_runtimes)
+if printf '%s\n' "$restart_source" |
+    grep -F -- 'rm -rf -- "$runtime_root/runtime-restart-state"' >/dev/null; then
+  printf 'runtime oracle: restart deletes independent boundary authority\n' >&2
+  exit 1
+fi
+printf '%s\n' "$restart_source" |
+  grep -F -- 'chmod -R a-w "$runtime_root/runtime-restart-state"' >/dev/null || {
+  printf 'runtime oracle: restart does not freeze independent boundary authority\n' >&2
+  exit 1
+}
 
 scratch=$(mktemp -d /tmp/mnr7-runtime-oracle.XXXXXX)
 cleanup_oracle() {
@@ -150,8 +219,9 @@ SQL
     >"$runtime_root/evolution-boundary/lead-tampered.json"
   mv "$runtime_root/evolution-boundary/lead-tampered.json" \
     "$runtime_root/evolution-boundary/lead.json"
-  if (assert_evolution >/dev/null 2>&1); then
-    printf 'runtime oracle: non-exact later Reference use passed\n' >&2
+  assert_evolution
+  if test "$(cat "$runtime_root/evolution-effects.total")" != 0; then
+    printf 'runtime oracle: non-exact later Reference use was counted\n' >&2
     exit 1
   fi
   runtime_root=
@@ -224,7 +294,8 @@ write_attention_snapshot() {
 }
 
 assert_open_attention_boundary() {
-  local snapshot counter counts unclaimed occupied query_source wave_source settlement_source
+  local snapshot counter counts unclaimed occupied query_source wave_source driver_source
+  local goal_source agents_source post_outcome_source
   runtime_root="$scratch/attention-runtime"
   mkdir -p "$runtime_root/turns"
 
@@ -265,13 +336,136 @@ EOF
     printf 'runtime oracle: open attention wave inspects scenario semantics\n' >&2
     exit 1
   fi
-  settlement_source=$(declare -f settle_open_attention)
-  if printf '%s\n' "$settlement_source" | grep -Ei -- \
+  driver_source=$(declare -f drive_attention_until_outcome)
+  if printf '%s\n' "$driver_source" | grep -Ei -- \
       'claim_fence|semantic|kind|payload|artifact|canonical_json|domainctl|gateway|ledger|payment' \
       >/dev/null; then
-    printf 'runtime oracle: open attention settlement inspects scenario semantics\n' >&2
+    printf 'runtime oracle: bounded attention driver inspects scenario semantics\n' >&2
     exit 1
   fi
+  goal_source=$(declare -f observe_episode_goal)
+  printf '%s\n' "$goal_source" | grep -F -- \
+    'data-tool status "$incident_prefix"' >/dev/null || {
+    printf 'runtime oracle: episode goal does not observe historical ledger integrity\n' >&2
+    exit 1
+  }
+  printf '%s\n' "$goal_source" | grep -F -- 'lead-tool probe' >/dev/null || {
+    printf 'runtime oracle: episode goal omits its bounded real canary\n' >&2
+    exit 1
+  }
+  if printf '%s\n' "$goal_source" | grep -Ei -- \
+      'domainctl|[[:space:]]action[[:space:]]|handling|reference|event|repair|remediat|latency|timeout|config' \
+      >/dev/null; then
+    printf 'runtime oracle: episode goal depends on Agent choreography or remediation\n' >&2
+    exit 1
+  fi
+  agents_source=$(declare -f run_agents)
+  test "$(printf '%s\n' "$agents_source" | grep -Fc -- 'run_turn lead')" = 1 &&
+    ! printf '%s\n' "$agents_source" | grep -E -- 'for role|while .*round|run_open_attention_wave' \
+      >/dev/null || {
+    printf 'runtime oracle: initial Agent entry still contains fixed all-node rounds\n' >&2
+    exit 1
+  }
+  post_outcome_source=$(declare -f run_post_outcome_attention)
+  test "$(printf '%s\n' "$post_outcome_source" | grep -Fc -- 'run_turn lead')" = 1 &&
+    ! printf '%s\n' "$post_outcome_source" | grep -E -- 'for role|run_open_attention_wave' \
+      >/dev/null || {
+    printf 'runtime oracle: post-outcome attention is not one lead opportunity\n' >&2
+    exit 1
+  }
+
+  printf '0\n' >"$runtime_root/canary-calls"
+  compose() {
+    case " $* " in
+      *' data-tool status '*) cat "$runtime_root/history-source.json" ;;
+      *' lead-tool probe '*)
+        local calls
+        calls=$(cat "$runtime_root/canary-calls")
+        printf '%s\n' $((calls + 1)) >"$runtime_root/canary-calls"
+        cat "$runtime_root/canary-source.json"
+        ;;
+      *) return 1 ;;
+    esac
+  }
+
+  # Historical failure is a complete false observation and never spends a
+  # real canary from the shared bounded service.
+  cat >"$runtime_root/history-source.json" <<'JSON'
+{"role":"data","result":{"charges":8,"active_charges":8,"voided_charges":0,"unique_businesses":4,"duplicate_businesses":4}}
+JSON
+  : >"$runtime_root/canary-source.json"
+  observe_episode_goal episode-goal 1 "$runtime_root/goal-history-false.json" incident-fixture
+  jq -e '
+    (keys | sort) == ["canary","episode","observed","satisfied","schema","version"] and
+    .schema == "mnemon.r7.domain-ops.goal" and .version == 2 and
+    .episode == "episode-goal" and .satisfied == false and .canary == null and
+    .observed == {charges:8,active_charges:8,voided_charges:0,
+      unique_businesses:4,duplicate_businesses:4}
+  ' "$runtime_root/goal-history-false.json" >/dev/null
+  test "$(cat "$runtime_root/canary-calls")" = 0
+  test ! -e "$runtime_root/episode-goal-incident-after.json"
+
+  # A repaired history is insufficient while the bounded real canary still
+  # observes an unsafe customer path.
+  cat >"$runtime_root/history-source.json" <<'JSON'
+{"role":"data","result":{"charges":8,"active_charges":4,"voided_charges":4,"unique_businesses":4,"duplicate_businesses":0}}
+JSON
+  cat >"$runtime_root/canary-source.json" <<'JSON'
+{"role":"lead","result":{"receipt":{"request_id":1,"business_id":"synthetic-001","capture_id":0,"route":"east","status":"failed"},"observed":{"charges":1,"active_charges":1,"voided_charges":0,"unique_businesses":1,"duplicate_businesses":0},"ledger":{"charges":1,"active_charges":0,"voided_charges":1,"unique_businesses":0,"duplicate_businesses":0}}}
+JSON
+  observe_episode_goal episode-goal 2 "$runtime_root/goal-canary-false.json" incident-fixture
+  jq -e '
+    .satisfied == false and .observed.active_charges == 4 and
+    .canary == {receipt_status:"failed",capture_id_present:false,
+      observed:{charges:1,active_charges:1,voided_charges:0,
+        unique_businesses:1,duplicate_businesses:0},
+      settled:{charges:1,active_charges:0,voided_charges:1,
+        unique_businesses:0,duplicate_businesses:0}}
+  ' "$runtime_root/goal-canary-false.json" >/dev/null
+  test "$(cat "$runtime_root/canary-calls")" = 1
+
+  # Only repaired history plus one clean real checkout closes the mission goal.
+  cat >"$runtime_root/canary-source.json" <<'JSON'
+{"role":"lead","result":{"receipt":{"request_id":2,"business_id":"synthetic-002","capture_id":9,"route":"west","status":"succeeded"},"observed":{"charges":1,"active_charges":1,"voided_charges":0,"unique_businesses":1,"duplicate_businesses":0},"ledger":{"charges":1,"active_charges":1,"voided_charges":0,"unique_businesses":1,"duplicate_businesses":0}}}
+JSON
+  observe_episode_goal episode-goal 3 "$runtime_root/goal-true.json" incident-fixture
+  jq -e '
+    .satisfied == true and .canary.receipt_status == "succeeded" and
+    .canary.capture_id_present == true and
+    .canary.observed == .canary.settled and
+    .canary.settled == {charges:1,active_charges:1,voided_charges:0,
+      unique_businesses:1,duplicate_businesses:0}
+  ' "$runtime_root/goal-true.json" >/dev/null
+  test "$(cat "$runtime_root/canary-calls")" = 2
+
+  # The driver and final adapter share a closed predicate: an asserted true
+  # value that contradicts its observation is rejected immediately.
+  jq '.satisfied = false' "$runtime_root/goal-true.json" \
+    >"$runtime_root/goal-invalid-projection.json"
+  if validate_episode_goal episode-goal "$runtime_root/goal-invalid-projection.json" \
+      >/dev/null 2>&1; then
+    printf 'runtime oracle: contradictory goal projection was accepted\n' >&2
+    exit 1
+  fi
+  cat >"$runtime_root/history-source.json" <<'JSON'
+{"role":"data","result":{"charges":8,"active_charges":7,"voided_charges":0,"unique_businesses":4,"duplicate_businesses":1}}
+JSON
+  printf '%s\n' '{"sealed":"existing-final-incident-evidence"}' \
+    >"$runtime_root/episode-goal-incident-after.json"
+  cp "$runtime_root/episode-goal-incident-after.json" \
+    "$runtime_root/episode-goal-incident-after.expected.json"
+  if observe_episode_goal episode-goal 4 "$runtime_root/goal-invalid.json" \
+      incident-fixture >/dev/null 2>&1; then
+    printf 'runtime oracle: inconsistent historical counts were accepted\n' >&2
+    exit 1
+  fi
+  test ! -e "$runtime_root/goal-invalid.json"
+  cmp -s "$runtime_root/episode-goal-incident-after.expected.json" \
+    "$runtime_root/episode-goal-incident-after.json" || {
+    printf 'runtime oracle: invalid goal observation overwrote final incident evidence\n' >&2
+    exit 1
+  }
+  test "$(find "$runtime_root" -maxdepth 1 -name '.episode-goal-goal-*' | wc -l | tr -d '[:space:]')" = 0
 
   snapshot="$runtime_root/targeting.json"
   write_attention_snapshot "$snapshot" 2 1
@@ -290,75 +484,177 @@ EOF
   test "$(find "$runtime_root/turns" -type f | wc -l | tr -d '[:space:]')" = 2
   test "$(cat "$runtime_root/barriers")" = episode-test-open-attention-1
 
-  rm -rf -- "$runtime_root/turns"
-  mkdir -p "$runtime_root/turns"
-  : >"$runtime_root/barriers"
-  counter="$runtime_root/snapshot-counter"
+  reset_attention_fixture() {
+    rm -rf -- "$runtime_root/turns" "$runtime_root/open-attention"
+    mkdir -p "$runtime_root/turns" "$runtime_root/open-attention"
+    : >"$runtime_root/barriers"
+  }
+  write_goal_result() {
+    local destination=$1 episode=$2 mode=$3
+    case "$mode" in
+      satisfied)
+        jq -n --arg episode "$episode" '
+          {schema:"mnemon.r7.domain-ops.goal",version:2,episode:$episode,
+           satisfied:true,
+           observed:{charges:8,active_charges:4,voided_charges:4,
+             unique_businesses:4,duplicate_businesses:0},
+           canary:{receipt_status:"succeeded",capture_id_present:true,
+             observed:{charges:1,active_charges:1,voided_charges:0,
+               unique_businesses:1,duplicate_businesses:0},
+             settled:{charges:1,active_charges:1,voided_charges:0,
+               unique_businesses:1,duplicate_businesses:0}}}
+        ' >"$destination"
+        ;;
+      historical_failure)
+        jq -n --arg episode "$episode" '
+          {schema:"mnemon.r7.domain-ops.goal",version:2,episode:$episode,
+           satisfied:false,
+           observed:{charges:8,active_charges:8,voided_charges:0,
+             unique_businesses:4,duplicate_businesses:4},canary:null}
+        ' >"$destination"
+        ;;
+      canary_failure)
+        jq -n --arg episode "$episode" '
+          {schema:"mnemon.r7.domain-ops.goal",version:2,episode:$episode,
+           satisfied:false,
+           observed:{charges:8,active_charges:4,voided_charges:4,
+             unique_businesses:4,duplicate_businesses:0},
+           canary:{receipt_status:"failed",capture_id_present:false,
+             observed:{charges:1,active_charges:1,voided_charges:0,
+               unique_businesses:1,duplicate_businesses:0},
+             settled:{charges:1,active_charges:0,voided_charges:1,
+               unique_businesses:0,duplicate_businesses:0}}}
+        ' >"$destination"
+        ;;
+      *) return 1 ;;
+    esac
+  }
+
+  # A satisfied external goal ends attention immediately even when durable
+  # responsibilities remain open.
+  reset_attention_fixture
+  snapshot_open_attention() {
+    local output="$runtime_root/goal-first-$2.json"
+    write_attention_snapshot "$output" 2 1
+    printf '%s\n' "$output"
+  }
+  goal_probe() {
+    write_goal_result "$3" "$1" satisfied
+  }
+  open_attention_turn_limit=16
+  drive_attention_until_outcome episode-goal-first goal_probe
+  jq -e '
+    .episode == "episode-goal-first" and .status == "outcome_observed" and
+    .turn_limit == 16 and .turns_used == 0 and (.waves | length) == 0 and
+    .goal.satisfied == true and
+    ([.final_nodes[] | select(.open_unclaimed > 0)] | length) == 2 and
+    all(.final_nodes[]; .occupied_claims == 0)
+  ' "$runtime_root/open-attention/episode-goal-first-settlement.json" >/dev/null
+  test "$(find "$runtime_root/turns" -type f | wc -l | tr -d '[:space:]')" = 0
+  test ! -s "$runtime_root/barriers"
+
+  # An unsatisfied goal receives one eligible wave. A later satisfied goal
+  # stops even if that collaboration produced more residual responsibilities.
+  reset_attention_fixture
+  counter="$runtime_root/goal-after-wave-counter"
   printf '0\n' >"$counter"
   snapshot_open_attention() {
-    local episode=$1 requested_wave=$2 index output
+    local index output="$runtime_root/goal-after-wave-$2.json"
+    index=$(cat "$counter")
+    if test "$index" = 0; then write_attention_snapshot "$output" 1 0
+    else write_attention_snapshot "$output" 2 1; fi
+    printf '%s\n' "$output"
+  }
+  goal_probe() {
+    local index
     index=$(cat "$counter")
     index=$((index + 1))
     printf '%s\n' "$index" >"$counter"
-    output="$runtime_root/generated-$episode-$requested_wave.json"
-    case "$index" in
-      1) write_attention_snapshot "$output" 1 0 ;;
-      2) write_attention_snapshot "$output" 1 1 ;;
-      *) write_attention_snapshot "$output" 0 0 ;;
-    esac
+    if test "$index" = 1; then write_goal_result "$3" "$1" historical_failure
+    else write_goal_result "$3" "$1" satisfied; fi
+  }
+  drive_attention_until_outcome episode-goal-after-wave goal_probe
+  jq -e '
+    .status == "outcome_observed" and .turns_used == 1 and
+    [.waves[].wave] == [1] and .goal.satisfied == true and
+    ([.final_nodes[] | select(.open_unclaimed > 0)] | length) == 2
+  ' "$runtime_root/open-attention/episode-goal-after-wave-settlement.json" >/dev/null
+  test -f "$runtime_root/turns/episode-goal-after-wave-open-attention-1-data"
+  test "$(cat "$runtime_root/barriers")" = episode-goal-after-wave-open-attention-1
+
+  # No eligible attention cannot be mistaken for a successful outcome.
+  reset_attention_fixture
+  snapshot_open_attention() {
+    local output="$runtime_root/no-eligible-$2.json"
+    write_attention_snapshot "$output" 0 0
     printf '%s\n' "$output"
   }
-  open_attention_turn_limit=16
-  settle_open_attention episode-test
+  goal_probe() { write_goal_result "$3" "$1" historical_failure; }
+  if drive_attention_until_outcome episode-no-eligible goal_probe >/dev/null 2>&1; then
+    printf 'runtime oracle: goal-free quiescence was accepted as success\n' >&2
+    exit 1
+  fi
+  test "$failure_stage" = scenario.episode-no-eligible.attention-quiescent-without-outcome
   jq -e '
-    .episode == "episode-test" and .status == "settled" and
-    .turn_limit == 16 and .turns_used == 3 and
-    [.waves[].wave] == [1,2] and
-    all(.final_nodes[]; .open_unclaimed == 0 and .occupied_claims == 0)
-  ' "$runtime_root/open-attention/episode-test-settlement.json" >/dev/null
-  test -f "$runtime_root/turns/episode-test-open-attention-1-data"
-  test -f "$runtime_root/turns/episode-test-open-attention-2-data"
-  test -f "$runtime_root/turns/episode-test-open-attention-2-platform"
+    .status == "quiescent_without_outcome" and .turns_used == 0 and
+    .goal.satisfied == false and all(.final_nodes[];
+      .open_unclaimed == 0 and .occupied_claims == 0)
+  ' "$runtime_root/open-attention/episode-no-eligible-quiescent-without-outcome.json" \
+    >/dev/null
 
-  printf '0\n' >"$counter"
+  # A false goal remains false after one bounded turn, then the resource
+  # envelope fails closed before a second turn is issued.
+  reset_attention_fixture
   open_attention_turn_limit=1
   snapshot_open_attention() {
     local output="$runtime_root/exhausted-$2.json"
-    write_attention_snapshot "$output" 1 1
+    write_attention_snapshot "$output" 1 0
     printf '%s\n' "$output"
   }
-  if settle_open_attention episode-budget >/dev/null 2>&1; then
+  goal_probe() { write_goal_result "$3" "$1" historical_failure; }
+  if drive_attention_until_outcome episode-budget goal_probe >/dev/null 2>&1; then
     printf 'runtime oracle: unbounded open attention was accepted\n' >&2
     exit 1
   fi
-  test "$failure_stage" = scenario.episode-budget.attention-budget-exhausted
+  test "$failure_stage" = scenario.episode-budget.attention-budget-exhausted-before-outcome
   jq -e '
-    .episode == "episode-budget" and .status == "budget_exhausted" and
-    .turn_limit == 1 and .turns_used == 0 and (.waves | length) == 0 and
-    ([.final_nodes[] | select(.open_unclaimed > 0)] | length) == 2 and
+    .episode == "episode-budget" and .status == "budget_exhausted_before_outcome" and
+    .turn_limit == 1 and .turns_used == 1 and [.waves[].wave] == [1] and
+    .goal.satisfied == false and
+    ([.final_nodes[] | select(.open_unclaimed > 0)] | length) == 1 and
     all(.final_nodes[]; .occupied_claims == 0)
-  ' "$runtime_root/open-attention/episode-budget-budget-exhausted.json" >/dev/null
+  ' "$runtime_root/open-attention/episode-budget-budget-exhausted-before-outcome.json" \
+    >/dev/null
+  test -f "$runtime_root/turns/episode-budget-open-attention-1-data"
+  test "$(cat "$runtime_root/barriers")" = episode-budget-open-attention-1
 
-  rm -rf -- "$runtime_root/turns"
-  mkdir -p "$runtime_root/turns"
-  : >"$runtime_root/barriers"
+  # Claim occupancy is a protocol safety failure and is recorded before any
+  # external goal I/O can hide it.
+  reset_attention_fixture
   open_attention_turn_limit=16
+  goal_calls=0
   snapshot_open_attention() {
     local output="$runtime_root/occupied-$2.json"
     write_attention_snapshot "$output" 0 0 data 1
     printf '%s\n' "$output"
   }
-  if settle_open_attention episode-occupied >/dev/null 2>&1; then
-    printf 'runtime oracle: an occupied claim was hidden by attention settlement\n' >&2
+  goal_probe() {
+    goal_calls=$((goal_calls + 1))
+    return 1
+  }
+  if drive_attention_until_outcome episode-occupied goal_probe >/dev/null 2>&1; then
+    printf 'runtime oracle: an occupied claim was hidden by a satisfied goal\n' >&2
     exit 1
   fi
   test "$failure_stage" = scenario.episode-occupied.attention-claim-occupied
   jq -e '
     .episode == "episode-occupied" and .status == "claim_occupied" and
     .turn_limit == 16 and .turns_used == 0 and (.waves | length) == 0 and
+    .goal == null and
     ([.final_nodes[] | select(.occupied_claims > 0)] | map(.role)) == ["data"] and
     all(.final_nodes[]; .open_unclaimed == 0)
   ' "$runtime_root/open-attention/episode-occupied-claim-occupied.json" >/dev/null
+  test "$goal_calls" = 0
   test "$(find "$runtime_root/turns" -type f | wc -l | tr -d '[:space:]')" = 0
   test ! -s "$runtime_root/barriers"
   runtime_root=
@@ -506,18 +802,6 @@ write_domain_observation_stream() {
     isError:false,result:{content:[{type:"text",
       text:"{\"role\":\"lead\",\"result\":{\"secret-probe-sentinel\":true}}"}]}}' \
     >>"$destination"
-  jq -nc '{type:"tool_execution_start",toolCallId:"domain-wrong-role",toolName:"bash",
-    args:{command:"domainctl probe"}}' >>"$destination"
-  jq -nc '{type:"tool_execution_end",toolCallId:"domain-wrong-role",toolName:"bash",
-    isError:false,result:{content:[{type:"text",
-      text:"{\"role\":\"other\",\"result\":{\"wrong-role-sentinel\":true}}"}]}}' \
-    >>"$destination"
-  jq -nc '{type:"tool_execution_start",toolCallId:"domain-missing-error",toolName:"bash",
-    args:{command:"domainctl probe"}}' >>"$destination"
-  jq -nc '{type:"tool_execution_end",toolCallId:"domain-missing-error",toolName:"bash",
-    result:{content:[{type:"text",
-      text:"{\"role\":\"lead\",\"result\":{\"secret-untyped-sentinel\":true}}"}]}}' \
-    >>"$destination"
   jq -nc '{type:"tool_execution_start",toolCallId:"domain-action",toolName:"bash",
     args:{command:"domainctl --endpoint=http://secret-endpoint-sentinel action /secret-action-sentinel '\''{\"secret-payload-sentinel\":true}'\''"}}' \
     >>"$destination"
@@ -537,6 +821,25 @@ write_domain_observation_stream() {
   jq -nc '{type:"tool_execution_end",toolCallId:"domain-masked",toolName:"bash",
     isError:false,result:{content:[{type:"text",text:""}]}}' \
     >>"$destination"
+  jq -nc '{type:"message_end",message:{role:"assistant",stopReason:"stop"}}' \
+    >>"$destination"
+  jq -nc '{type:"agent_end"}' >>"$destination"
+}
+
+write_probe_overflow_stream() {
+  local destination=$1 index
+  jq -nc '{type:"message_start",message:{role:"custom",customType:"mnemond"}}' \
+    >"$destination"
+  for index in 1 2; do
+    jq -nc --arg id "domain-probe-$index" \
+      '{type:"tool_execution_start",toolCallId:$id,toolName:"bash",
+        args:{command:"domainctl probe"}}' >>"$destination"
+    jq -nc --arg id "domain-probe-$index" \
+      '{type:"tool_execution_end",toolCallId:$id,toolName:"bash",isError:false,
+        result:{content:[{type:"text",text:
+          "{\"role\":\"lead\",\"result\":{\"bounded\":true}}"}]}}' \
+      >>"$destination"
+  done
   jq -nc '{type:"message_end",message:{role:"assistant",stopReason:"stop"}}' \
     >>"$destination"
   jq -nc '{type:"agent_end"}' >>"$destination"
@@ -861,12 +1164,18 @@ jq -e '
   .domain_operations == {
     read:{attempts:4,successes:1,tool_errors:1,invalid_results:1,
       batched_unattributed:1},
-    probe:{attempts:3,successes:1,tool_errors:0,invalid_results:2,
+    probe:{attempts:1,successes:1,tool_errors:0,invalid_results:0,
       batched_unattributed:0},
     mutation:{attempts:2,successes:1,tool_errors:0,invalid_results:0,
       batched_unattributed:1}
   }
 ' "$scratch/domain-observations.json" >/dev/null
+write_probe_overflow_stream "$scratch/domain-probe-overflow.jsonl"
+if sanitize_turn lead oracle-domain-probe-overflow \
+    "$scratch/domain-probe-overflow.jsonl" "$scratch/domain-probe-overflow.json"; then
+  printf 'runtime oracle: one Agent turn exceeded its real probe budget\n' >&2
+  exit 1
+fi
 printf '%s\n' '[{"id":"event:before","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]' \
   >"$scratch/events-before.json"
 printf '%s\n' '[{"id":"event:before","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"id":"event:new","digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]' \

@@ -15,9 +15,9 @@ The trace header's `scenario.digest` is content addressed. It binds:
 - the exact `domainctl`, `mnemon-harness`, `mnemond`, and bounded Pi delegate
   asset digests observed in the Agent image.
 
-Rounds, timestamps, model output, and successful outcomes are deliberately not
-part of this identity. Changing the physical case or candidate binaries changes
-the digest; merely rerunning the same case does not.
+Attention-wave counts, timestamps, model output, and successful outcomes are
+deliberately not part of this identity. Changing the physical case or candidate
+binaries changes the digest; merely rerunning the same case does not.
 
 The runner integration is intentionally small. Preserve the existing
 `sha256sum` output as a mode-0600 regular file and invoke:
@@ -26,10 +26,19 @@ The runner integration is intentionally small. Preserve the existing
 go run ./test/r7/domainops/trace \
   --report /absolute/sanitized-report.json \
   --authority /absolute/stopped-authority-root \
+  --consolidation-authority /absolute/pre-consolidation-authority-root \
+  --boundary-authority /absolute/episode-boundary-authority-root \
   --scenario-root /absolute/harness \
   --candidate-binaries /absolute/candidate-binaries.sha256 \
   --output /absolute/result.trace
 ```
+
+The success adapter reads three independently stopped authority snapshots. The
+final root proves accepted outcomes after both Episodes; the consolidation root
+fixes the sequence before experience can be retained; and the boundary root
+fixes the exact active Reference heads before Runtime restart. Report-owned
+sequence fields cannot replace these snapshots. Failure traces need only the
+final authority root because they make no evolution claim.
 
 The candidate manifest must contain exactly the required absolute runtime
 paths. The adapter independently hashes every fixture input and rejects missing,
@@ -98,24 +107,30 @@ inside a turn boundary. The runner enforces one exclusive turn window per node;
 without that exclusivity this is temporal attribution rather than a private
 operation-to-turn binding and would not be sufficient.
 
-The passed runner report is `mnemon.r7.domain-ops.live-report` version 5. It
+The passed runner report is `mnemon.r7.domain-ops.live-report` version 6. It
 contains two ordered service-world episodes and a bounded authority boundary
-between them. Before either business oracle, its open-attention settlement
+between them. After the lead's interactive entry and before either full business
+oracle, its attention envelope
 records only protocol-derived `state = 'open' AND claim_attachment_id IS NULL`
 and `state = 'open' AND claim_attachment_id IS NOT NULL` counts, the bounded
-neutral turns given to unclaimed Principals, and a final zero-open snapshot. A
+neutral turns given to unclaimed Principals, and a runner-owned closed goal
+observation. Its historical component is read-only. Once that component is
+satisfied, the runner issues one server-named, globally bounded canary checkout
+and retains both its pre-reconciliation and settled ledger observations. A
 previously claimed but still-open Handling remains eligible after occupancy is
 released. Any occupied claim fails closed and is preserved in separate failure
-evidence. The settlement never records Event kinds, payloads, or expected
-remediation. A runner-attested
-sequence captured after the external recovery
-oracle starts the consolidation interval; the adapter independently verifies
+evidence. `outcome_observed` may retain open Handlings: durable responsibility is
+not a workflow terminal and does not need to disappear when the external outcome
+is observed. The envelope never records Event kinds, payloads, or expected
+remediation, and fixed all-node rounds are not part of the schedule. A
+runner-attested sequence captured after the external recovery oracle starts the
+consolidation interval; the adapter independently verifies
 that every reported boundary head was accepted after that sequence, exists in
 the stopped Reference lineage, and is no newer than the end boundary. Every
 reported later use must be an exact causation or supersede/retract edge from a
 post-boundary accepted Event. It does not inspect Artifact bytes, semantic kinds, or remediation
 choices. Earlier passed-report versions are intentionally not accepted as two-episode
-evidence; failed reports use the same version-5 wire below.
+evidence; failed reports use the same version-6 wire below.
 
 ## Failed-run input
 
@@ -125,7 +140,7 @@ five stores, then write a sanitized input with this closed shape:
 ```json
 {
   "schema": "mnemon.r7.domain-ops.failure-report",
-  "version": 5,
+  "version": 6,
   "status": "failed",
   "model": "bounded-model-token",
   "run": {
@@ -139,7 +154,7 @@ five stores, then write a sanitized input with this closed shape:
     "observed_at": "canonical UTC RFC3339Nano"
   },
   "world": [],
-  "open_attention": null,
+  "attention_envelope": null,
   "turns": [],
   "raw_provider_streams_retained": false
 }
@@ -150,14 +165,20 @@ the passed report. Partial text, tool input/output, prompts, and provider errors
 do not belong in this file. Invoke the adapter with `--failure-report` instead
 of `--report` and the same three evidence paths.
 
-An `attention-budget-exhausted` failure replaces `open_attention: null` with
-the already captured waves and the skipped final snapshot. An
+An `attention-budget-exhausted-before-outcome` failure replaces
+`attention_envelope: null` with the already captured waves, the final snapshot,
+and a closed false goal observation. An `attention-quiescent-without-outcome`
+failure records that the goal remains false while no Principal has eligible
+work. An
 `attention-claim-occupied` failure does the same with a `claim_occupied`
-snapshot before any further turn is scheduled. These objects carry only closed
+snapshot before any goal I/O or further turn is scheduled. Goal-based objects carry only closed
 episode/status tokens plus per-node `open_unclaimed` and `occupied_claims`
-counts, the turn limit, turns used, and wave numbers. The trace projects these
-as `test.attention.wave`, `test.attention.exhausted`, and the distinct
-`test.attention.occupied` assertion Facts; it does not retain Event kinds,
+counts, the turn limit, turns used, wave numbers, and a digest-bound goal result.
+The occupied snapshot deliberately has `goal: null`: authority safety evidence
+cannot depend on a potentially failing external oracle.
+The trace projects these as `test.attention.wave`, `test.attention.exhausted`,
+`test.attention.quiescent`, and the distinct `test.attention.occupied` assertion
+Facts; it does not retain Event kinds,
 payloads, paths, commands, or a proposed remediation. The failed
 `scenario.run` gate cites the final snapshot Facts.
 

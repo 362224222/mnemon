@@ -91,13 +91,15 @@ func TestValidateReportRejectsNonQuiescentDeliveryBarrier(t *testing.T) {
 	}
 }
 
-func TestValidateReportRequiresCrossEpisodeReferenceUse(t *testing.T) {
+func TestValidateReportTreatsEvolutionAsAnOptionalExactObservation(t *testing.T) {
 	report := validReport()
-	report.Protocol.Evolution.AcceptedReferenceUses = 0
-	report.Protocol.Evolution.Effects[2].AcceptedReferenceUses = 0
-	report.Protocol.Evolution.Effects[2].Matches = nil
+	clearEvolutionObservation(&report)
+	if err := validateReport(report); err != nil {
+		t.Fatalf("validateReport() rejected an episode with no evolution claim: %v", err)
+	}
+	report.Protocol.Evolution.Demonstrated = true
 	if err := validateReport(report); err == nil {
-		t.Fatal("validateReport() accepted two episodes with no retained Reference use")
+		t.Fatal("validateReport() accepted an unproved evolution claim")
 	}
 
 	report = validReport()
@@ -112,4 +114,18 @@ func TestValidateReportRequiresCrossEpisodeReferenceUse(t *testing.T) {
 	if err := validateReport(report); err == nil {
 		t.Fatal("validateReport() accepted a regressed consolidation boundary")
 	}
+}
+
+func clearEvolutionObservation(report *liveReport) {
+	report.Protocol.Evolution.Boundary.ActiveHeadCount = 0
+	for index := range report.Protocol.Evolution.Boundary.Nodes {
+		report.Protocol.Evolution.Boundary.Nodes[index].ActiveHeads = nil
+	}
+	for index := range report.Protocol.Evolution.Effects {
+		report.Protocol.Evolution.Effects[index].ActiveHeadCount = 0
+		report.Protocol.Evolution.Effects[index].AcceptedReferenceUses = 0
+		report.Protocol.Evolution.Effects[index].Matches = nil
+	}
+	report.Protocol.Evolution.AcceptedReferenceUses = 0
+	report.Protocol.Evolution.Demonstrated = false
 }

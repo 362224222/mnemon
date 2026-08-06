@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	GatewayHistoryLimit     = 32
+	GatewayHistoryLimit     = 128
 	GatewayReceiptSucceeded = "succeeded"
 	GatewayReceiptFailed    = "failed"
 )

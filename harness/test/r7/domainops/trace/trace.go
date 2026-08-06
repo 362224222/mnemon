@@ -54,12 +54,18 @@ func writeTrace(destination io.Writer, proof evidence) error {
 	if err != nil {
 		return err
 	}
+	attentionFacts, err := appendSuccessfulAttentionFacts(writer,
+		proof.Report.Protocol.Attention, finishedAt)
+	if err != nil {
+		return err
+	}
 	evolutionFacts, err := evolutionEffectFacts(proof.Report.Protocol.Evolution, eventFacts)
 	if err != nil {
 		return err
 	}
 	gateFacts, err := appendGateFacts(writer, finishedAt, receiptFacts, deliveryFacts,
-		evolutionFacts, len(artifactFacts))
+		attentionFacts, evolutionFacts, proof.Report.Protocol.Evolution.Demonstrated,
+		len(artifactFacts))
 	if err != nil {
 		return err
 	}
@@ -76,7 +82,8 @@ func writeTrace(destination io.Writer, proof evidence) error {
 			Evidence: []string{gateFacts["r7.delivery-quiescence"]}},
 		{ID: "scenario.isolation", Status: observer.GatePass,
 			Evidence: []string{gateFacts["scenario.isolation"]}},
-		{ID: "scenario.evolution", Status: observer.GatePass,
+		{ID: "scenario.evolution", Status: evolutionGateStatus(
+			proof.Report.Protocol.Evolution.Demonstrated),
 			Evidence: []string{gateFacts["scenario.evolution"]}},
 		{ID: "r8.applicability", Status: observer.GateNotApplicable,
 			Evidence: []string{gateFacts["r8.applicability"]}},
@@ -86,6 +93,16 @@ func writeTrace(destination io.Writer, proof evidence) error {
 }
 
 func evolutionEffectFacts(summary evolutionSummary, eventFacts map[string]string) ([]string, error) {
+	if !summary.Demonstrated {
+		if summary.AcceptedReferenceUses != 0 || evolutionMatchCount(summary.Effects) != 0 {
+			return nil, errors.New("evolution is not demonstrated but reports accepted Reference use")
+		}
+		return nil, nil
+	}
+	if summary.Boundary.ActiveHeadCount < 1 || summary.AcceptedReferenceUses < 1 ||
+		evolutionMatchCount(summary.Effects) != summary.AcceptedReferenceUses {
+		return nil, errors.New("demonstrated evolution omits accepted Reference use")
+	}
 	seen := make(map[string]struct{})
 	result := make([]string, 0, summary.AcceptedReferenceUses)
 	for _, node := range summary.Effects {
@@ -108,6 +125,21 @@ func evolutionEffectFacts(summary evolutionSummary, eventFacts map[string]string
 		return nil, errors.New("evolution effect evidence is empty")
 	}
 	return result, nil
+}
+
+func evolutionMatchCount(values []evolutionNodeSummary) int {
+	total := 0
+	for _, value := range values {
+		total += len(value.Matches)
+	}
+	return total
+}
+
+func evolutionGateStatus(demonstrated bool) observer.GateStatus {
+	if demonstrated {
+		return observer.GatePass
+	}
+	return observer.GateNotApplicable
 }
 
 func appendArtifactFacts(writer *observer.Writer, nodes []nodeEvidence) ([]string, error) {
@@ -190,9 +222,10 @@ func appendEventFacts(writer *observer.Writer, nodes []nodeEvidence, turns []tur
 }
 
 func appendGateFacts(writer *observer.Writer, capturedAt time.Time, receiptFacts,
-	deliveryFacts, evolutionFacts []string, artifactCount int,
+	deliveryFacts, attentionFacts, evolutionFacts []string, evolutionDemonstrated bool,
+	artifactCount int,
 ) (map[string]string, error) {
-	if len(receiptFacts) == 0 || len(deliveryFacts) == 0 {
+	if len(receiptFacts) == 0 || len(deliveryFacts) == 0 || len(attentionFacts) == 0 {
 		return nil, errors.New("gate evidence is incomplete")
 	}
 	type gateSpec struct {
@@ -207,8 +240,13 @@ func appendGateFacts(writer *observer.Writer, capturedAt time.Time, receiptFacts
 		}
 		return append([]string{}, values...)
 	}
+	evolutionStatus, evolutionCode := "not_applicable", "no-reference-evolution-claimed"
+	if evolutionDemonstrated {
+		evolutionStatus, evolutionCode = "pass", "cross-session-reference-use"
+	}
 	gates := []gateSpec{
-		{id: "scenario.recovery", status: "pass", code: "external-recovery"},
+		{id: "scenario.recovery", status: "pass", code: "external-recovery",
+			causes: limit(attentionFacts)},
 		{id: "scenario.service-receipts", status: "pass", code: "exact-service-correspondence"},
 		{id: "r7.operation-receipts", status: "pass", code: "canonical-operation-receipts",
 			causes: limit(receiptFacts)},
@@ -216,7 +254,7 @@ func appendGateFacts(writer *observer.Writer, capturedAt time.Time, receiptFacts
 			causes: limit(deliveryFacts)},
 		{id: "r7.delivery-quiescence", status: "pass", code: "bounded-empty-delivery-barriers"},
 		{id: "scenario.isolation", status: "pass", code: "isolated-runtime"},
-		{id: "scenario.evolution", status: "pass", code: "cross-session-reference-use",
+		{id: "scenario.evolution", status: evolutionStatus, code: evolutionCode,
 			causes: limit(evolutionFacts)},
 		{id: "r8.applicability", status: "not_applicable", code: "independent-mas"},
 	}

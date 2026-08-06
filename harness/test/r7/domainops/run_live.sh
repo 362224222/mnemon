@@ -24,11 +24,25 @@ mission_file="$case_root/mission.md"
 pi_version=0.83.0
 pi_model=${DOMAIN_OPS_PI_MODEL:-deepseek-v4-flash}
 turn_seconds=${DOMAIN_OPS_TURN_SECONDS:-150}
-rounds=${DOMAIN_OPS_ROUNDS:-3}
 persisted_evidence_max_bytes=$((8 * 1024 * 1024))
 persisted_evidence_max_blocks=$((persisted_evidence_max_bytes / 1024))
 peer_quiescence_seconds=30
 open_attention_turn_limit=16
+agent_probe_per_turn_limit=1
+monitor_probe_limit=69
+monitor_probe_charge_limit=4
+gateway_history_limit=128
+scenario_episode_count=2
+baseline_load_count=4
+recovery_load_count=6
+stability_load_count=6
+max_agent_probe_count=$((scenario_episode_count * (open_attention_turn_limit + 1) *
+  agent_probe_per_turn_limit + agent_probe_per_turn_limit))
+max_goal_probe_count=$((scenario_episode_count * (open_attention_turn_limit + 1)))
+scenario_customer_receipt_limit=$((scenario_episode_count *
+  (baseline_load_count + recovery_load_count + stability_load_count)))
+synthetic_charge_limit=$((monitor_probe_limit * monitor_probe_charge_limit))
+domain_control_max_kib=64
 attention_exhausted_reason='Attention budget exhausted. This tool did not run. Only mnemond_submit may remain.'
 current_failed_reason='Current unavailable.'
 report_path=${DOMAIN_OPS_REPORT:-$repository_root/.testdata/r7-domain-ops-live/last-report.json}
@@ -137,7 +151,6 @@ require_prerequisites() {
   test "${LIVE_DOMAIN_OPS:-}" = 1 ||
     fail 'set LIVE_DOMAIN_OPS=1 to authorize paid real-provider turns'
   test -n "$provider_key" || fail 'DEEPSEEK_API_KEY is required'
-  validate_integer DOMAIN_OPS_ROUNDS "$rounds" 1 8
   validate_integer DOMAIN_OPS_TURN_SECONDS "$turn_seconds" 30 300
   case "$pi_model" in
     ''|*[!a-zA-Z0-9._-]*) fail 'DOMAIN_OPS_PI_MODEL is invalid' ;;
@@ -151,6 +164,11 @@ require_prerequisites() {
   test -f "$compose_file" || fail 'domain-ops compose fixture is missing'
   test -f "$runner_dir/Dockerfile" || fail 'domain-ops Dockerfile is missing'
   test -s "$mission_file" || fail 'domain-ops mission fixture is missing or empty'
+  test "$monitor_probe_limit" -ge $((max_agent_probe_count + max_goal_probe_count)) ||
+    fail 'monitor probe bound does not cover all Agent and goal opportunities'
+  test "$gateway_history_limit" -ge \
+    $((monitor_probe_limit + scenario_customer_receipt_limit)) ||
+    fail 'gateway history cannot retain the bounded scenario and probe envelope'
   test "$(wc -c <"$mission_file" | tr -d ' ')" -le 1024 ||
     fail 'domain-ops mission exceeds its 1 KiB prompt bound'
   initial_mission=$(<"$mission_file")
@@ -183,16 +201,16 @@ run_load() {
 
 seed_incident() {
   local episode=$1 prefix=$2 expected_route=$3
-  run_load "$prefix" 4 "$runtime_root/$episode-baseline.json"
-  jq -e --arg route "$expected_route" '
-    .sent == 4 and .accepted == 4 and .failed == 0 and
-    (.receipts | length) == 4 and
-    ([.receipts[].business_id] | unique | length) == 4 and
+  run_load "$prefix" "$baseline_load_count" "$runtime_root/$episode-baseline.json"
+  jq -e --arg route "$expected_route" --argjson count "$baseline_load_count" '
+    .sent == $count and .accepted == $count and .failed == 0 and
+    (.receipts | length) == $count and
+    ([.receipts[].business_id] | unique | length) == $count and
     all(.receipts[]; .capture_id > 0) and
-    .observed.ledger.charges == 8 and
-    .observed.ledger.active_charges == 8 and
-    .observed.ledger.unique_businesses == 4 and
-    .observed.ledger.duplicate_businesses == 4 and
+    .observed.ledger.charges == ($count * 2) and
+    .observed.ledger.active_charges == ($count * 2) and
+    .observed.ledger.unique_businesses == $count and
+    .observed.ledger.duplicate_businesses == $count and
     .observed.gateway.route == $route
   ' "$runtime_root/$episode-baseline.json" >/dev/null ||
     fail 'the hidden production incident was not established'
@@ -464,6 +482,7 @@ sanitize_turn() {
   jq -s -e --arg role "$role" --arg turn "$tag" \
     --arg attention_exhausted "$attention_exhausted_reason" \
     --arg current_failed "$current_failed_reason" \
+    --argjson agent_probe_per_turn "$agent_probe_per_turn_limit" \
     --arg captured_at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" '
     def command: (.args.command // "");
     def invocation_pattern($verb):
@@ -935,6 +954,7 @@ sanitize_turn() {
           all(. >= 0 and . <= 256)) and
         all(.domain_operations[];
           (.successes + .tool_errors + .invalid_results + .batched_unattributed) == .attempts) and
+        .domain_operations.probe.attempts <= $agent_probe_per_turn and
         ([.hook_cues, .bash_calls, .delegate_calls, .current_reads, .submit_attempts, .intent_submits,
           .accepted_receipts, .rejected_receipts, .submit_denials, .submit_invocation_failures,
           .post_accept_denials, .private_binding_probes] | all(. >= 0 and . <= 256)) and
@@ -1362,33 +1382,17 @@ run_turn() {
   release_turn_window "$role"
 }
 
-run_attention_round() {
-  local episode=$1 round=$2 prompt=${3:-$neutral_attention} role pid failed=0
-  local round_pids=()
-  for role in $roles; do
-    run_turn "$role" "$prompt" "$episode-round-$round-$role" &
-    pid=$!
-    round_pids+=("$pid")
-    turn_pids+=("$pid")
-  done
-  for pid in "${round_pids[@]}"; do
-    if ! wait "$pid"; then failed=1; fi
-  done
-  test "$failed" = 0 || fail "$episode attention round $round did not finish cleanly"
-  turn_pids=()
-  wait_for_peer_delivery_quiescence "$episode-round-$round"
-}
-
 run_agents() {
-  local episode=$1 round initial_attention
+  local episode=$1 initial_attention
   initial_attention=$(printf '%s\n\n%s' "$initial_mission" "$attention_contract")
   run_turn lead "$initial_attention" "$episode-initial-lead"
   wait_for_peer_delivery_quiescence "$episode-initial-lead"
-  round=1
-  while test "$round" -le "$rounds"; do
-    run_attention_round "$episode" "$round"
-    round=$((round + 1))
-  done
+}
+
+run_post_outcome_attention() {
+  local episode=$1
+  run_turn lead "$outcome_attention" "$episode-post-outcome-lead"
+  wait_for_peer_delivery_quiescence "$episode-post-outcome-lead"
 }
 
 pause_agent_containers() {
@@ -1519,8 +1523,194 @@ run_open_attention_wave() {
   wait_for_peer_delivery_quiescence "$episode-open-attention-$wave"
 }
 
-settle_open_attention() {
-  local episode=$1 wave=1 used=0 snapshot unclaimed occupied targets
+validate_episode_goal() {
+  local episode=$1 source=$2
+  jq -er --arg episode "$episode" \
+    --argjson canary_count_limit "$monitor_probe_charge_limit" '
+    def exact_keys($value; $names):
+      ($value | type) == "object" and (($value | keys | sort) == ($names | sort));
+    def bounded_integer($maximum):
+      type == "number" and floor == . and . >= 0 and . <= $maximum;
+    def valid_ledger($value; $maximum):
+      exact_keys($value; ["charges","active_charges","voided_charges",
+        "unique_businesses","duplicate_businesses"]) and
+      ([$value.charges,$value.active_charges,$value.voided_charges,
+        $value.unique_businesses,$value.duplicate_businesses] |
+        all(.[]; bounded_integer($maximum))) and
+      $value.active_charges + $value.voided_charges == $value.charges and
+      $value.unique_businesses <= $value.charges and
+      $value.duplicate_businesses <= $value.unique_businesses;
+    def historical_ok($value):
+      $value == {charges:8,active_charges:4,voided_charges:4,
+        unique_businesses:4,duplicate_businesses:0};
+    def clean_canary_ledger($value):
+      $value == {charges:1,active_charges:1,voided_charges:0,
+        unique_businesses:1,duplicate_businesses:0};
+    def valid_canary($value):
+      exact_keys($value; ["receipt_status","capture_id_present","observed","settled"]) and
+      ($value.receipt_status == "succeeded" or $value.receipt_status == "failed") and
+      ($value.capture_id_present | type) == "boolean" and
+      (($value.receipt_status == "succeeded") == $value.capture_id_present) and
+      valid_ledger($value.observed; $canary_count_limit) and
+      valid_ledger($value.settled; $canary_count_limit);
+    select(exact_keys(.; ["schema","version","episode","satisfied","observed","canary"]) and
+      .schema == "mnemon.r7.domain-ops.goal" and .version == 2 and
+      .episode == $episode and (.satisfied | type) == "boolean" and
+      valid_ledger(.observed; 1000000)) |
+    (historical_ok(.observed)) as $historical |
+    select((if $historical then valid_canary(.canary) else .canary == null end)) |
+    ($historical and .canary.receipt_status == "succeeded" and
+      .canary.capture_id_present and clean_canary_ledger(.canary.observed) and
+      clean_canary_ledger(.canary.settled)) as $derived |
+    select(.satisfied == $derived) |
+    if .satisfied then "true" else "false" end
+  ' "$source"
+}
+
+observe_episode_goal() {
+  local episode=$1 wave=$2 destination=$3 incident_prefix=$4
+  local directory raw_history history raw_canary canary staged historical
+  directory=$(dirname "$destination")
+  raw_history=$(mktemp "$directory/.$episode-goal-$wave-history-raw.XXXXXX") || return 1
+  history=$(mktemp "$directory/.$episode-goal-$wave-history.XXXXXX") || {
+    rm -f -- "$raw_history"
+    return 1
+  }
+  raw_canary=$(mktemp "$directory/.$episode-goal-$wave-canary-raw.XXXXXX") || {
+    rm -f -- "$raw_history" "$history"
+    return 1
+  }
+  canary=$(mktemp "$directory/.$episode-goal-$wave-canary.XXXXXX") || {
+    rm -f -- "$raw_history" "$history" "$raw_canary"
+    return 1
+  }
+  staged=$(mktemp "$directory/.$episode-goal-$wave.XXXXXX") || {
+    rm -f -- "$raw_history" "$history" "$raw_canary" "$canary"
+    return 1
+  }
+
+  if ! compose --profile tools run --rm --no-deps data-tool \
+      status "$incident_prefix" >"$raw_history" ||
+      ! jq -e '
+        def exact_keys($value; $names):
+          ($value | type) == "object" and (($value | keys | sort) == ($names | sort));
+        def bounded_integer:
+          type == "number" and floor == . and . >= 0 and . <= 1000000;
+        select(exact_keys(.; ["role","result"]) and .role == "data" and
+          exact_keys(.result; ["charges","active_charges","voided_charges",
+            "unique_businesses","duplicate_businesses"]) and
+          ([.result.charges,.result.active_charges,.result.voided_charges,
+            .result.unique_businesses,.result.duplicate_businesses] |
+            all(.[]; bounded_integer)) and
+          .result.active_charges + .result.voided_charges == .result.charges and
+          .result.unique_businesses <= .result.charges and
+          .result.duplicate_businesses <= .result.unique_businesses) |
+        {observed:.result,historical_satisfied:(.result ==
+          {charges:8,active_charges:4,voided_charges:4,
+           unique_businesses:4,duplicate_businesses:0})}
+      ' "$raw_history" >"$history"; then
+    rm -f -- "$raw_history" "$history" "$raw_canary" "$canary" "$staged"
+    return 1
+  fi
+  historical=$(jq -r '.historical_satisfied' "$history") || {
+    rm -f -- "$raw_history" "$history" "$raw_canary" "$canary" "$staged"
+    return 1
+  }
+  case "$historical" in true|false) ;; *)
+    rm -f -- "$raw_history" "$history" "$raw_canary" "$canary" "$staged"
+    return 1
+  esac
+
+  if test "$historical" = true; then
+    if ! compose --profile tools run --rm --no-deps lead-tool probe >"$raw_canary" ||
+        ! jq -e --argjson canary_count_limit "$monitor_probe_charge_limit" '
+          def exact_keys($value; $names):
+            ($value | type) == "object" and (($value | keys | sort) == ($names | sort));
+          def bounded_integer($maximum):
+            type == "number" and floor == . and . >= 0 and . <= $maximum;
+          def valid_ledger($value):
+            exact_keys($value; ["charges","active_charges","voided_charges",
+              "unique_businesses","duplicate_businesses"]) and
+            ([$value.charges,$value.active_charges,$value.voided_charges,
+              $value.unique_businesses,$value.duplicate_businesses] |
+              all(.[]; bounded_integer($canary_count_limit))) and
+            $value.active_charges + $value.voided_charges == $value.charges and
+            $value.unique_businesses <= $value.charges and
+            $value.duplicate_businesses <= $value.unique_businesses;
+          select(exact_keys(.; ["role","result"]) and .role == "lead" and
+            exact_keys(.result; ["receipt","observed","ledger"]) and
+            exact_keys(.result.receipt;
+              ["request_id","business_id","capture_id","route","status"]) and
+            (.result.receipt.request_id | bounded_integer(1000000)) and
+            .result.receipt.request_id > 0 and
+            (.result.receipt.business_id | type) == "string" and
+            (.result.receipt.business_id | length) >= 1 and
+            (.result.receipt.business_id | length) <= 128 and
+            (.result.receipt.capture_id | bounded_integer(1000000)) and
+            (.result.receipt.route == "east" or .result.receipt.route == "west") and
+            (.result.receipt.status == "succeeded" or .result.receipt.status == "failed") and
+            ((.result.receipt.status == "succeeded" and .result.receipt.capture_id > 0) or
+             (.result.receipt.status == "failed" and .result.receipt.capture_id == 0)) and
+            valid_ledger(.result.observed) and valid_ledger(.result.ledger)) |
+          {receipt_status:.result.receipt.status,
+           capture_id_present:(.result.receipt.capture_id > 0),
+           observed:.result.observed,settled:.result.ledger}
+        ' "$raw_canary" >"$canary"; then
+      rm -f -- "$raw_history" "$history" "$raw_canary" "$canary" "$staged"
+      return 1
+    fi
+  else
+    printf 'null\n' >"$canary"
+  fi
+
+  if ! jq -n --arg episode "$episode" --slurpfile history "$history" \
+      --slurpfile canary "$canary" '
+        $history[0] as $history |
+        $canary[0] as $canary |
+        ($history.historical_satisfied and $canary != null and
+          $canary.receipt_status == "succeeded" and $canary.capture_id_present and
+          $canary.observed == {charges:1,active_charges:1,voided_charges:0,
+            unique_businesses:1,duplicate_businesses:0} and
+          $canary.settled == {charges:1,active_charges:1,voided_charges:0,
+            unique_businesses:1,duplicate_businesses:0}) as $satisfied |
+        {schema:"mnemon.r7.domain-ops.goal",version:2,episode:$episode,
+         satisfied:$satisfied,observed:$history.observed,canary:$canary}
+      ' >"$staged" ||
+      ! validate_episode_goal "$episode" "$staged" >/dev/null; then
+    rm -f -- "$raw_history" "$history" "$raw_canary" "$canary" "$staged"
+    return 1
+  fi
+  rm -f -- "$raw_history" "$history" "$raw_canary" "$canary"
+  mv "$staged" "$destination"
+}
+
+write_attention_boundary() {
+  local destination=$1 episode=$2 status=$3 used=$4 waves=$5 snapshot=$6 goal=$7
+  local goal_json=null directory temporary
+  if test -n "$goal" && test -s "$goal"; then
+    goal_json=$(cat "$goal") || return 1
+  fi
+  directory=$(dirname "$destination")
+  mkdir -p "$directory" || return 1
+  temporary=$(mktemp "$directory/.attention-boundary.XXXXXX") || return 1
+  if ! jq -n --arg episode "$episode" --arg status "$status" \
+    --argjson limit "$open_attention_turn_limit" --argjson used "$used" \
+    --argjson waves "$(jq -s '.' "$waves")" --argjson final "$(cat "$snapshot")" \
+    --argjson goal "$goal_json" '
+      {episode:$episode,status:$status,turn_limit:$limit,turns_used:$used,
+       waves:$waves,goal:$goal,final_nodes:$final}
+    ' >"$temporary"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+  chmod 0600 "$temporary" || { rm -f -- "$temporary"; return 1; }
+  mv "$temporary" "$destination"
+}
+
+drive_attention_until_outcome() {
+  local episode=$1 goal_probe=$2
+  shift 2
+  local wave=1 used=0 snapshot goal satisfied unclaimed occupied targets
   local directory="$runtime_root/open-attention"
   local waves="$directory/$episode-waves.jsonl"
   local settlement="$directory/$episode-settlement.json"
@@ -1533,36 +1723,48 @@ settle_open_attention() {
     }
     occupied=$(jq '[.[].occupied_claims] | add' "$snapshot")
     if test "$occupied" -ne 0; then
-      jq -n --arg episode "$episode" --argjson limit "$open_attention_turn_limit" \
-        --argjson used "$used" --argjson waves "$(jq -s '.' "$waves")" \
-        --argjson final "$(cat "$snapshot")" '
-          {episode:$episode,status:"claim_occupied",turn_limit:$limit,
-           turns_used:$used,waves:$waves,final_nodes:$final}
-        ' >"$directory/$episode-claim-occupied.json"
+      write_attention_boundary "$directory/$episode-claim-occupied.json" "$episode" \
+        claim_occupied "$used" "$waves" "$snapshot" ""
       failure_stage="scenario.$episode.attention-claim-occupied"
       fail "$episode open-attention snapshot found $occupied occupied claims"
       return 1
     fi
+    goal="$directory/$episode-goal-$wave.json"
+    if ! "$goal_probe" "$episode" "$wave" "$goal" "$@"; then
+      failure_stage="scenario.$episode.goal-probe-invalid"
+      fail "$episode bounded goal observation did not return closed evidence"
+      return 1
+    fi
+    satisfied=$(validate_episode_goal "$episode" "$goal") || {
+      failure_stage="scenario.$episode.goal-probe-invalid"
+      fail "$episode bounded goal observation is invalid"
+      return 1
+    }
+    case "$satisfied" in true|false) ;; *)
+      failure_stage="scenario.$episode.goal-probe-invalid"
+      fail "$episode bounded goal observation omitted a closed result"
+      return 1
+    esac
+    if test "$satisfied" = true; then
+      write_attention_boundary "$settlement" "$episode" outcome_observed "$used" \
+        "$waves" "$snapshot" "$goal"
+      return 0
+    fi
     unclaimed=$(jq '[.[].open_unclaimed] | add' "$snapshot")
     if test "$unclaimed" -eq 0; then
-      jq -n --arg episode "$episode" --argjson limit "$open_attention_turn_limit" \
-        --argjson used "$used" --argjson waves "$(jq -s '.' "$waves")" \
-        --argjson final "$(cat "$snapshot")" '
-          {episode:$episode,status:"settled",turn_limit:$limit,turns_used:$used,
-           waves:$waves,final_nodes:$final}
-        ' >"$settlement"
-      return 0
+      write_attention_boundary "$directory/$episode-quiescent-without-outcome.json" \
+        "$episode" quiescent_without_outcome "$used" "$waves" "$snapshot" "$goal"
+      failure_stage="scenario.$episode.attention-quiescent-without-outcome"
+      fail "$episode has no eligible attention but its external goal is unsatisfied"
+      return 1
     fi
     targets=$(jq '[.[] | select(.open_unclaimed > 0)] | length' "$snapshot")
     if test $((used + targets)) -gt "$open_attention_turn_limit"; then
-      jq -n --arg episode "$episode" --argjson limit "$open_attention_turn_limit" \
-        --argjson used "$used" --argjson waves "$(jq -s '.' "$waves")" \
-        --argjson final "$(cat "$snapshot")" '
-          {episode:$episode,status:"budget_exhausted",turn_limit:$limit,
-           turns_used:$used,waves:$waves,final_nodes:$final}
-        ' >"$directory/$episode-budget-exhausted.json"
-      failure_stage="scenario.$episode.attention-budget-exhausted"
-      fail "$episode open attention exceeded the ${open_attention_turn_limit}-turn bound"
+      write_attention_boundary \
+        "$directory/$episode-budget-exhausted-before-outcome.json" "$episode" \
+        budget_exhausted_before_outcome "$used" "$waves" "$snapshot" "$goal"
+      failure_stage="scenario.$episode.attention-budget-exhausted-before-outcome"
+      fail "$episode exhausted its ${open_attention_turn_limit}-turn attention budget before its external goal"
       return 1
     fi
     jq -cn --argjson wave "$wave" --argjson nodes "$(cat "$snapshot")" \
@@ -1692,11 +1894,15 @@ assert_synthetic_probes() {
     read '/history?prefix=synthetic-' >"$history"
   compose --profile tools run --rm --no-deps data-tool \
     read '/charges?prefix=synthetic-' >"$charges"
-  jq -e --slurpfile charges "$charges" '
-    .role == "edge" and .result.limit == 32 and
-    (.result.entries | type == "array" and length <= 16) and
+  jq -e --slurpfile charges "$charges" \
+    --argjson history_limit "$gateway_history_limit" \
+    --argjson probe_limit "$monitor_probe_limit" \
+    --argjson per_probe_charge_limit "$monitor_probe_charge_limit" \
+    --argjson charge_limit "$synthetic_charge_limit" '
+    .role == "edge" and .result.limit == $history_limit and
+    (.result.entries | type == "array" and length <= $probe_limit) and
     ($charges | length == 1 and $charges[0].role == "data" and
-      ($charges[0].result | type == "array" and length <= 64)) and
+      ($charges[0].result | type == "array" and length <= $charge_limit)) and
     (.result.entries as $receipts | $charges[0].result as $records |
       ([ $receipts[].business_id ] | unique | length) == ($receipts | length) and
       all($receipts[];
@@ -1711,7 +1917,7 @@ assert_synthetic_probes() {
       all($receipts[];
         . as $receipt |
         [ $records[] | select(.business_id == $receipt.business_id) ] as $related |
-        ($related | length) <= 4 and
+        ($related | length) <= $per_probe_charge_limit and
         if $receipt.status == "succeeded" then
           ([ $related[] | select(.state == "active") ] | length) == 1 and
           any($related[]; .state == "active" and .sequence == $receipt.capture_id) and
@@ -1749,9 +1955,9 @@ assert_recovery() {
   failure_stage="scenario.$episode.synthetic-probes"
   assert_synthetic_probes "$episode"
   failure_stage="scenario.$episode.recovery-load"
-  run_load "$evaluation_prefix" 6 "$runtime_root/$episode-recovery.json"
+  run_load "$evaluation_prefix" "$recovery_load_count" "$runtime_root/$episode-recovery.json"
   failure_stage="scenario.$episode.stability-load"
-  run_load "$stability_prefix" 6 "$runtime_root/$episode-stability.json"
+  run_load "$stability_prefix" "$stability_load_count" "$runtime_root/$episode-stability.json"
   failure_stage="scenario.$episode.world-observation"
   compose --profile tools run --rm --no-deps data-tool status "$incident_prefix" \
     >"$runtime_root/$episode-incident-after.json"
@@ -1763,16 +1969,18 @@ assert_recovery() {
     read "/charges?prefix=$stability_prefix" >"$runtime_root/$episode-stability-charges.json"
 
   failure_stage="scenario.$episode.recovery-fresh"
-  assert_fresh_batch "$runtime_root/$episode-recovery.json" 6 "$episode recovery"
+  assert_fresh_batch "$runtime_root/$episode-recovery.json" \
+    "$recovery_load_count" "$episode recovery"
   failure_stage="scenario.$episode.stability-fresh"
-  assert_fresh_batch "$runtime_root/$episode-stability.json" 6 "$episode stability"
+  assert_fresh_batch "$runtime_root/$episode-stability.json" \
+    "$stability_load_count" "$episode stability"
   failure_stage="scenario.$episode.historical-reconciliation"
-  if ! jq -e '
+  if ! jq -e --argjson count "$baseline_load_count" '
     .role == "data" and
-    .result.charges == 8 and
-    .result.active_charges == 4 and
-    .result.voided_charges == 4 and
-    .result.unique_businesses == 4 and
+    .result.charges == ($count * 2) and
+    .result.active_charges == $count and
+    .result.voided_charges == $count and
+    .result.unique_businesses == $count and
     .result.duplicate_businesses == 0
   ' "$runtime_root/$episode-incident-after.json" >/dev/null; then
     local observed
@@ -1819,7 +2027,9 @@ capture_consolidation_start() {
       '{role:$role,max_origin_sequence:$sequence}' \
       >"$runtime_root/evolution-consolidation-start/$role.json"
   done
-  rm -rf -- "$staging"
+  # Keep the stopped databases as independent evidence for the trace oracle.
+  # Report-owned sequence numbers are not authority for this boundary.
+  chmod -R a-w "$staging"
 }
 
 capture_evolution_boundary() {
@@ -1874,10 +2084,6 @@ capture_evolution_boundary() {
   done
   rm -rf -- "$runtime_root/runtime-restart-state"
   mv "$staging" "$runtime_root/runtime-restart-state"
-  if test "$total" -lt 1; then
-    fail 'post-outcome attention produced no active Reference for a future independent Runtime'
-    return 1
-  fi
   jq -s '{nodes:.,active_head_count:([.[].active_heads | length] | add)}' \
     "$runtime_root/evolution-boundary"/*.json >"$runtime_root/evolution-boundary.json"
 }
@@ -1927,7 +2133,9 @@ restart_agent_runtimes() {
     done
     test "$ready" = 1 || fail "$role fresh Runtime mnemond did not become ready"
   done
-  rm -rf -- "$runtime_root/runtime-restart-state"
+  # The original stopped boundary remains independent of the restarted nodes
+  # and is consumed read-only by the final evidence oracle.
+  chmod -R a-w "$runtime_root/runtime-restart-state"
 }
 
 assert_evolution() {
@@ -1970,10 +2178,6 @@ assert_evolution() {
     total=$((total + $(jq '.accepted_reference_uses' <<<"$summary")))
     printf '%s\n' "$summary" >>"$runtime_root/evolution-effects.jsonl"
   done
-  if test "$total" -lt 1; then
-    fail 'episode 2 did not explicitly use or replace an episode-1 Reference head'
-    return 1
-  fi
   printf '%s\n' "$total" >"$runtime_root/evolution-effects.total"
 }
 
@@ -2060,10 +2264,15 @@ collect_failure_world() {
 }
 
 write_report() {
-  local temporary total episodes evolution_total
+  local temporary total episodes evolution_total evolution_demonstrated
   temporary="$runtime_root/report.json"
   total=$(cat "$runtime_root/peer-effects.total")
   evolution_total=$(cat "$runtime_root/evolution-effects.total")
+  evolution_demonstrated=false
+  if test "$(jq -r '.active_head_count' "$runtime_root/evolution-boundary.json")" -gt 0 &&
+      test "$evolution_total" -gt 0; then
+    evolution_demonstrated=true
+  fi
   episodes=$(jq -n --argjson first "$(episode_report_json episode-1)" \
     --argjson second "$(episode_report_json episode-2)" '[$first,$second]')
   run_finished_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -2074,7 +2283,6 @@ write_report() {
     --arg started_at "$run_started_at" \
     --arg finished_at "$run_finished_at" \
     --arg candidate_digest "$agent_image_id" \
-    --argjson rounds "$rounds" \
     --argjson episodes "$episodes" \
     --argjson turns "$(jq -s 'sort_by(.turn)' "$runtime_root/sanitized"/*.json)" \
     --argjson delivery_quiescence "$(jq -s '.' "$runtime_root/peer-quiescence.jsonl")" \
@@ -2083,22 +2291,23 @@ write_report() {
     --argjson evolution_boundary "$(cat "$runtime_root/evolution-boundary.json")" \
     --argjson evolution_effects "$(jq -s '.' "$runtime_root/evolution-effects.jsonl")" \
     --argjson evolution_total "$evolution_total" \
+    --argjson evolution_demonstrated "$evolution_demonstrated" \
     --argjson peer_effect_total "$total" '
       {
         schema:$schema,
-        version:5,
+        version:6,
         status:"passed",
         model:$model,
-        rounds:$rounds,
         run:{id:$run_id,started_at:$started_at,finished_at:$finished_at,
           candidate_digest:$candidate_digest},
         isolation:{passed:true,fresh_runtime_between_episodes:true},
         world:{episodes:$episodes},
         protocol:{accepted_peer_effects:$peer_effect_total,by_receiver:$peer_effects,
           delivery_quiescence:$delivery_quiescence,
-          open_attention_settlement:$open_attention,
+          attention_envelopes:$open_attention,
           evolution:{boundary:$evolution_boundary,effects:$evolution_effects,
-            accepted_reference_uses:$evolution_total}},
+            accepted_reference_uses:$evolution_total,
+            demonstrated:$evolution_demonstrated}},
         turns:$turns,
         raw_provider_streams_retained:false
       }
@@ -2112,6 +2321,8 @@ write_trace() {
     go run ./test/r7/domainops/trace \
       --report "$runtime_root/report.json" \
       --authority "$runtime_root/authority" \
+      --consolidation-authority "$runtime_root/evolution-consolidation-state" \
+      --boundary-authority "$runtime_root/runtime-restart-state" \
       --scenario-root "$harness_root" \
       --candidate-binaries "$runtime_root/candidate-binaries.sha256" \
       --output "$runtime_root/report.trace"
@@ -2136,7 +2347,7 @@ publish_evidence() {
 }
 
 finalize_failure_evidence() {
-  local code=$1 observed_at completed_turns='[]' open_attention='null' candidate
+  local code=$1 observed_at completed_turns='[]' attention_envelope='null' candidate
   local attention_files=()
   test "$authority_started" = 1 || return 0
   test -n "$runtime_root" && test -d "$runtime_root" || return 0
@@ -2147,14 +2358,15 @@ finalize_failure_evidence() {
   if compgen -G "$runtime_root/sanitized/*.json" >/dev/null; then
     completed_turns=$(jq -s 'sort_by(.turn)' "$runtime_root/sanitized"/*.json) || return 0
   fi
-  for candidate in "$runtime_root"/open-attention/*-budget-exhausted.json \
+  for candidate in "$runtime_root"/open-attention/*-budget-exhausted-before-outcome.json \
+      "$runtime_root"/open-attention/*-quiescent-without-outcome.json \
       "$runtime_root"/open-attention/*-claim-occupied.json; do
     test -f "$candidate" || continue
     attention_files+=("$candidate")
   done
   if test "${#attention_files[@]}" -gt 0; then
     test "${#attention_files[@]}" -eq 1 || return 0
-    open_attention=$(cat "${attention_files[0]}") || return 0
+    attention_envelope=$(cat "${attention_files[0]}") || return 0
   fi
   collect_failure_world "$runtime_root/failure-world.json" || return 0
   jq -n \
@@ -2166,19 +2378,19 @@ finalize_failure_evidence() {
     --arg candidate_digest "$agent_image_id" \
     --arg code "$code" \
     --arg observed_at "$observed_at" \
-    --argjson open_attention "$open_attention" \
+    --argjson attention_envelope "$attention_envelope" \
     --argjson world "$(cat "$runtime_root/failure-world.json")" \
     --argjson turns "$completed_turns" '
       {
         schema:$schema,
-        version:5,
+        version:6,
         status:"failed",
         model:$model,
         run:{id:$run_id,started_at:$started_at,finished_at:$finished_at,
           candidate_digest:$candidate_digest},
         failure:{code:$code,observed_at:$observed_at},
         world:$world,
-        open_attention:$open_attention,
+        attention_envelope:$attention_envelope,
         turns:$turns,
         raw_provider_streams_retained:false
       }
@@ -2232,14 +2444,15 @@ main() {
   failure_stage=scenario.episode-1-agent-turns
   run_agents episode-1
   failure_stage=scenario.episode-1-open-attention
-  settle_open_attention episode-1
+  drive_attention_until_outcome episode-1 observe_episode_goal \
+    "$first_incident_prefix"
   failure_stage=scenario.episode-1-recovery
   assert_recovery episode-1 "$first_incident_prefix" "$first_evaluation_prefix" \
     "$first_stability_prefix"
   failure_stage=scenario.episode-1-consolidation-start
   capture_consolidation_start
   failure_stage=scenario.episode-1-post-outcome-attention
-  run_attention_round episode-1 post-outcome "$outcome_attention"
+  run_post_outcome_attention episode-1
   failure_stage=scenario.evolution-boundary
   capture_evolution_boundary
   failure_stage=scenario.episode-1-post-outcome-revalidation
@@ -2253,7 +2466,8 @@ main() {
   failure_stage=scenario.episode-2-agent-turns
   run_agents episode-2
   failure_stage=scenario.episode-2-open-attention
-  settle_open_attention episode-2
+  drive_attention_until_outcome episode-2 observe_episode_goal \
+    "$second_incident_prefix"
   failure_stage=scenario.episode-2-recovery
   assert_recovery episode-2 "$second_incident_prefix" "$second_evaluation_prefix" \
     "$second_stability_prefix"

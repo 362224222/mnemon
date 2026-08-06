@@ -21,10 +21,10 @@ type failureReport struct {
 		Code       string `json:"code"`
 		ObservedAt string `json:"observed_at"`
 	} `json:"failure"`
-	World                      []failureWorldSnapshot   `json:"world"`
-	OpenAttention              *openAttentionSettlement `json:"open_attention"`
-	Turns                      []turnSummary            `json:"turns"`
-	RawProviderStreamsRetained bool                     `json:"raw_provider_streams_retained"`
+	World                      []failureWorldSnapshot `json:"world"`
+	Attention                  *attentionEnvelope     `json:"attention_envelope"`
+	Turns                      []turnSummary          `json:"turns"`
+	RawProviderStreamsRetained bool                   `json:"raw_provider_streams_retained"`
 }
 
 type failureWorldSnapshot struct {
@@ -48,7 +48,7 @@ func loadFailureReport(path string) (failureReport, error) {
 }
 
 func validateFailureReport(report failureReport) error {
-	if report.Schema != "mnemon.r7.domain-ops.failure-report" || report.Version != 5 ||
+	if report.Schema != "mnemon.r7.domain-ops.failure-report" || report.Version != 6 ||
 		report.Status != "failed" || report.RawProviderStreamsRetained ||
 		report.Model == "" || report.Failure.Code == "" {
 		return errors.New("sanitized failure report has invalid identity or status")
@@ -80,7 +80,7 @@ func validateFailureReport(report failureReport) error {
 	if err := validateFailureWorld(report.World); err != nil {
 		return err
 	}
-	return validateFailedOpenAttention(report.Failure.Code, report.OpenAttention, report.Turns)
+	return validateFailedAttention(report.Failure.Code, report.Attention, report.Turns)
 }
 
 func validateFailureWorld(values []failureWorldSnapshot) error {
@@ -105,7 +105,7 @@ func validateFailureWorld(values []failureWorldSnapshot) error {
 }
 
 func validateCompletedTurnSubset(turns []turnSummary) error {
-	if len(turns) > 2*(1+8*len(domainRoles))+len(domainRoles)+2*openAttentionTurnLimit {
+	if len(turns) > 3+2*attentionTurnLimit {
 		return errors.New("sanitized failure report contains too many completed turns")
 	}
 	seen := make(map[string]struct{}, len(turns))
@@ -158,21 +158,24 @@ func writeFailureTrace(destination io.Writer, report failureReport,
 	if err := appendDomainEffectFacts(writer, nodes, eventFacts, ordered); err != nil {
 		return err
 	}
-	if _, err := appendReceiptFacts(writer, nodes, eventFacts); err != nil {
-		return err
-	}
-	if _, err := appendDeliveryFacts(writer, nodes, eventFacts); err != nil {
-		return err
-	}
-	attentionFacts, err := appendFailedAttentionFacts(writer, report.OpenAttention, observedAt)
+	receiptFacts, err := appendReceiptFacts(writer, nodes, eventFacts)
 	if err != nil {
 		return err
 	}
-	return finishFailedTrace(writer, report.Failure.Code, attentionFacts, observedAt, finishedAt)
+	readmittedFacts, err := appendDeliveryFacts(writer, nodes, eventFacts)
+	if err != nil {
+		return err
+	}
+	attentionFacts, err := appendFailedAttentionFacts(writer, report.Attention, observedAt)
+	if err != nil {
+		return err
+	}
+	return finishFailedTrace(writer, report.Failure.Code, attentionFacts, receiptFacts,
+		readmittedFacts, observedAt, finishedAt)
 }
 
 func finishFailedTrace(writer *observer.Writer, code string, attentionFacts []string,
-	observedAt, finishedAt time.Time,
+	receiptFacts, readmittedFacts []string, observedAt, finishedAt time.Time,
 ) error {
 	failureFact := hashedFactID("failed-run", code)
 	if _, err := writer.Append(observer.Fact{ID: failureFact, CapturedAt: observedAt,
@@ -185,12 +188,25 @@ func finishFailedTrace(writer *observer.Writer, code string, attentionFacts []st
 	gates := []observer.Gate{{ID: "scenario.run", Status: observer.GateFail,
 		Evidence: evidence}}
 	for _, gate := range []string{"scenario.recovery", "scenario.service-receipts",
-		"r7.operation-receipts", "r7.peer-accepted-effect", "r7.delivery-quiescence",
-		"scenario.isolation", "scenario.evolution"} {
+		"r7.delivery-quiescence", "scenario.isolation", "scenario.evolution"} {
 		gates = append(gates, observer.Gate{ID: gate, Status: observer.GateUnknown})
 	}
+	gates = append(gates,
+		observedProtocolGate("r7.operation-receipts", receiptFacts),
+		observedProtocolGate("r7.peer-accepted-effect", readmittedFacts))
 	gates = append(gates, observer.Gate{ID: "r8.applicability",
 		Status: observer.GateNotApplicable})
 	return writer.Finish(observer.Result{Status: observer.ResultFailed,
 		FinishedAt: finishedAt, Gates: gates})
+}
+
+func observedProtocolGate(id string, facts []string) observer.Gate {
+	if len(facts) == 0 {
+		return observer.Gate{ID: id, Status: observer.GateUnknown}
+	}
+	if len(facts) > 32 {
+		facts = facts[:32]
+	}
+	return observer.Gate{ID: id, Status: observer.GatePass,
+		Evidence: append([]string{}, facts...)}
 }

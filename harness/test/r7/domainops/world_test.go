@@ -120,8 +120,9 @@ func TestGatewayHistoryIsReadOnlyAndBounded(t *testing.T) {
 		t.Fatalf("history entries = %d, want hard limit %d", len(history.Entries),
 			world.GatewayHistoryLimit)
 	}
+	lastBoundedBusiness := fmt.Sprintf("bounded-%03d", world.GatewayHistoryLimit+3)
 	if history.Entries[0].BusinessID != "bounded-004" ||
-		history.Entries[len(history.Entries)-1].BusinessID != "bounded-035" {
+		history.Entries[len(history.Entries)-1].BusinessID != lastBoundedBusiness {
 		t.Fatalf("bounded history retained wrong window: first=%q last=%q",
 			history.Entries[0].BusinessID,
 			history.Entries[len(history.Entries)-1].BusinessID)

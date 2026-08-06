@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -54,5 +55,30 @@ func TestProbeHasNoCallerControlledShape(t *testing.T) {
 	}
 	if string(result) != "{\"observed\":true}\n" {
 		t.Fatalf("probe result = %q", result)
+	}
+}
+
+func TestRequestEnforcesClosedControlResponseBound(t *testing.T) {
+	t.Parallel()
+
+	requestPayload := func(payload string) error {
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter,
+			_ *http.Request,
+		) {
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, payload)
+		}))
+		defer server.Close()
+		_, err := request(context.Background(), http.MethodGet, server.URL, "/status", nil)
+		return err
+	}
+
+	bounded := `"` + strings.Repeat("a", maxControlBytes-2) + `"`
+	if err := requestPayload(bounded); err != nil {
+		t.Fatalf("bounded control response: %v", err)
+	}
+	overflow := `"` + strings.Repeat("a", maxControlBytes-1) + `"`
+	if err := requestPayload(overflow); err == nil {
+		t.Fatal("oversized control response was accepted")
 	}
 }

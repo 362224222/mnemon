@@ -85,9 +85,13 @@ carry their minimum display fields: accepted Events name their semantic kind
 and consequence, resolved Handlings carry an outcome, and R8 seeds, rounds,
 votes, and observations carry the exact preference evidence rendered by the
 coloring view. Attention snapshots report the exact authority predicates
-`open_unclaimed` and `occupied_claims`; an occupied claim is never mislabeled
-as a live Runtime, and the dedicated `test.attention.occupied` kind preserves a
-fail-closed boundary rather than presenting it as exhaustion.
+`open_unclaimed` and `occupied_claims`. Goal-based final assertions bind the
+goal projection digest and observed result: an outcome may retain open
+responsibility but cannot retain an occupied claim, exhaustion and quiescence
+cannot claim goal satisfaction, and quiescence additionally proves that no open
+work remains on that node. The dedicated `test.attention.occupied` kind carries
+no goal observation: it preserves the authority safety boundary before any
+external goal I/O can hide it, without mislabeling the claim as a live Runtime.
 
 The result footer covers the exact preceding JSONL bytes, including their line
 terminators, with `trace_digest`. Its `record_count` counts only `fact` lines.

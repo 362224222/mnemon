@@ -395,6 +395,13 @@ func TestFailureTracePreservesAuthorityButCannotPass(t *testing.T) {
 	if strings.Contains(trace, `"status":"passed"`) || strings.Contains(trace, `"payload":`) {
 		t.Fatal("failed trace claimed success or retained semantic payload")
 	}
+	if status := traceGateStatus(t, trace, "r7.operation-receipts"); status != "unknown" {
+		t.Fatalf("unobserved operation-receipts gate status = %q", status)
+	}
+	if status := traceGateStatus(t, trace, "r7.peer-accepted-effect"); status != "unknown" {
+		t.Fatalf("unobserved peer-accepted-effect gate status = %q", status)
+	}
+
 }
 
 func TestFailureReportRejectsProviderMaterialAndNoncanonicalOutcome(t *testing.T) {
@@ -466,17 +473,10 @@ func assertTraceSeparation(t *testing.T, trace string) {
 	if r8Facts != 0 {
 		t.Fatalf("R7-only trace contains %d R8 facts", r8Facts)
 	}
-}
-
-type testTraceRecord struct {
-	Record string   `json:"record"`
-	ID     string   `json:"id"`
-	Kind   string   `json:"kind"`
-	Causes []string `json:"causes"`
-	Gates  []struct {
-		ID     string `json:"id"`
-		Status string `json:"status"`
-	} `json:"gates"`
+	assertSuccessfulAttentionEvidence(t, trace)
+	if status := traceGateStatus(t, trace, "scenario.evolution"); status != "pass" {
+		t.Fatalf("demonstrated evolution gate status = %q", status)
+	}
 }
 
 func inspectTestTraceRecord(t *testing.T, record testTraceRecord,
@@ -627,8 +627,8 @@ func readRequiredFile(t *testing.T, path string) []byte {
 
 func validReport() liveReport {
 	var report liveReport
-	report.Schema, report.Version, report.Status = "mnemon.r7.domain-ops.live-report", 5, "passed"
-	report.Model, report.Rounds = "deepseek-v4-flash", 1
+	report.Schema, report.Version, report.Status = "mnemon.r7.domain-ops.live-report", 6, "passed"
+	report.Model = "deepseek-v4-flash"
 	report.Run = runReport{ID: "domain-ops-test", StartedAt: "2026-08-04T01:00:00Z",
 		FinishedAt: "2026-08-04T01:01:00Z", CandidateDigest: agency.Sum([]byte("candidate")).String()}
 	report.Isolation.Passed = true
@@ -658,8 +658,8 @@ func validReport() liveReport {
 		report.Protocol.ByReceiver = append(report.Protocol.ByReceiver,
 			peerEffectSummary{Role: role, AcceptedPeerEffects: count})
 	}
-	for _, phase := range []string{"episode-1-initial-lead", "episode-1-round-1",
-		"episode-1-round-post-outcome", "episode-2-initial-lead", "episode-2-round-1"} {
+	for _, phase := range []string{"episode-1-initial-lead", "episode-1-post-outcome-lead",
+		"episode-2-initial-lead"} {
 		barrier := deliveryQuiescenceSummary{Phase: phase, Status: "quiescent", Attempts: 1}
 		for _, role := range domainRoles {
 			barrier.Nodes = append(barrier.Nodes, deliveryNodeOccupancySummary{Role: role})
@@ -667,28 +667,22 @@ func validReport() liveReport {
 		report.Protocol.DeliveryQuiescence = append(report.Protocol.DeliveryQuiescence, barrier)
 	}
 	for episode := 1; episode <= 2; episode++ {
-		settlement := openAttentionSettlement{Episode: fmt.Sprintf("episode-%d", episode),
-			Status: "settled", TurnLimit: openAttentionTurnLimit}
+		envelope := attentionEnvelope{Episode: fmt.Sprintf("episode-%d", episode),
+			Status: "outcome_observed", TurnLimit: attentionTurnLimit,
+			Goal: satisfiedAttentionGoal(fmt.Sprintf("episode-%d", episode))}
 		for _, role := range domainRoles {
-			settlement.Final = append(settlement.Final, openAttentionNode{Role: role})
+			envelope.Final = append(envelope.Final, attentionNode{Role: role})
 		}
-		report.Protocol.OpenAttention = append(report.Protocol.OpenAttention, settlement)
+		report.Protocol.Attention = append(report.Protocol.Attention, envelope)
 	}
 	for episode := 1; episode <= 2; episode++ {
 		report.Turns = append(report.Turns, turnSummary{Role: "lead",
 			Turn:       fmt.Sprintf("episode-%d-initial-lead", episode),
 			CapturedAt: "2026-08-04T01:00:30Z", HookCues: 1, AgentEnd: true})
-		for _, role := range domainRoles {
-			report.Turns = append(report.Turns, turnSummary{Role: role,
-				Turn:       fmt.Sprintf("episode-%d-round-1-%s", episode, role),
-				CapturedAt: "2026-08-04T01:00:45Z", HookCues: 1, AgentEnd: true})
-		}
 	}
-	for _, role := range domainRoles {
-		report.Turns = append(report.Turns, turnSummary{Role: role,
-			Turn:       "episode-1-round-post-outcome-" + role,
-			CapturedAt: "2026-08-04T01:00:50Z", HookCues: 1, AgentEnd: true})
-	}
+	report.Turns = append(report.Turns, turnSummary{Role: "lead",
+		Turn:       "episode-1-post-outcome-lead",
+		CapturedAt: "2026-08-04T01:00:50Z", HookCues: 1, AgentEnd: true})
 	populateValidEvolution(&report)
 	return report
 }
@@ -724,12 +718,13 @@ func populateValidEvolution(report *liveReport) {
 		report.Protocol.Evolution.Effects = append(report.Protocol.Evolution.Effects, effect)
 	}
 	report.Protocol.Evolution.AcceptedReferenceUses = 1
+	report.Protocol.Evolution.Demonstrated = true
 }
 
 func validFailureReport() failureReport {
 	var report failureReport
 	report.Schema, report.Version, report.Status =
-		"mnemon.r7.domain-ops.failure-report", 5, "failed"
+		"mnemon.r7.domain-ops.failure-report", 6, "failed"
 	report.Model = "deepseek-v4-flash"
 	report.Run = runReport{ID: "domain-ops-failed", StartedAt: "2026-08-04T01:00:00Z",
 		FinishedAt:      "2026-08-04T01:01:00Z",

@@ -36,3 +36,16 @@ func TestValidateReportRejectsSyntheticProbeHistoryRegression(t *testing.T) {
 		t.Fatal("validateReport() accepted a regressed cumulative probe audit")
 	}
 }
+
+func TestValidateReportRejectsSyntheticProbeCountAboveGlobalBound(t *testing.T) {
+	report := validReport()
+	report.World.Episodes[0].SyntheticProbes = syntheticProbeAudit{
+		Observed: maxSyntheticProbes + 1,
+		Failed:   maxSyntheticProbes + 1,
+		Ledger:   ledgerStatus{UniqueBusinesses: maxSyntheticProbes + 1},
+	}
+	report.World.Episodes[1].SyntheticProbes = report.World.Episodes[0].SyntheticProbes
+	if err := validateReport(report); err == nil {
+		t.Fatal("validateReport() accepted a synthetic-probe count above the global bound")
+	}
+}

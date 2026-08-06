@@ -472,7 +472,7 @@
     const RESULT_KEYS = Object.freeze(["schema", "version", "record", "status", "finished_at", "record_count", "trace_digest", "gates"]);
     const FACT_FIELDS = Object.freeze([
       "action", "alpha", "artifact_count", "attempt_count", "authenticated", "batched_unattributed_count", "bypassed_hook", "byte_size",
-      "code", "consequence", "count", "duration_ms", "episode", "gate_id", "has_current", "hook_cue", "invalid_result_count", "invalid_votes",
+      "code", "consequence", "count", "duration_ms", "episode", "gate_id", "goal_digest", "goal_satisfied", "has_current", "hook_cue", "invalid_result_count", "invalid_votes",
       "margin_after", "margin_before", "no_vote", "no_votes", "occupied_claims", "open_total", "open_unclaimed", "outcome", "payload_bytes", "phase",
       "preference_after", "preference_before", "recolored", "related_projected", "related_total", "replayed", "reply_required", "result", "role", "round",
       "sample_size", "semantic_kind", "state", "status", "success_count", "target_count", "targets", "timed_out", "tool_error_count", "truncated",
@@ -518,7 +518,9 @@
       "r8.round.settled|r8_selector|local_preference",
       "r8.observation.produced|r8_selector|local_preference",
       "test.attention.wave|oracle|assertion",
+      "test.attention.outcome|oracle|assertion",
       "test.attention.exhausted|oracle|assertion",
+      "test.attention.quiescent|oracle|assertion",
       "test.attention.occupied|oracle|assertion",
       "test.gate.checked|oracle|assertion"
     ]);
@@ -711,8 +713,12 @@
       if (facts.target_count !== undefined && facts.target_count !== (facts.targets || []).length) {
         fail(label + ".target_count", "must equal targets length");
       }
-      ["authenticated", "bypassed_hook", "has_current", "hook_cue", "no_vote", "recolored", "replayed", "reply_required", "timed_out", "truncated", "view_nonempty"].forEach(key => optionalBoolean(facts[key], label + "." + key));
+      ["authenticated", "bypassed_hook", "goal_satisfied", "has_current", "hook_cue", "no_vote", "recolored", "replayed", "reply_required", "timed_out", "truncated", "view_nonempty"].forEach(key => optionalBoolean(facts[key], label + "." + key));
       ["code", "episode", "gate_id", "role", "semantic_kind"].forEach(key => optionalString(facts[key], TOKEN, label + "." + key));
+      if (facts.goal_digest !== undefined) requireString(facts.goal_digest, DIGEST, label + ".goal_digest");
+      if ((facts.goal_digest === undefined) !== (facts.goal_satisfied === undefined)) {
+        fail(label, "must pair goal_digest and goal_satisfied");
+      }
     }
 
     function validateFact(record, expectedSequence, seen, label) {
@@ -794,14 +800,46 @@
           }
           break;
         case "test.attention.wave":
+        case "test.attention.outcome":
         case "test.attention.exhausted":
+        case "test.attention.quiescent":
         case "test.attention.occupied":
           required(record.facts, ["episode", "role", "round", "open_unclaimed", "occupied_claims", "turn_limit", "turns_used"], label + ".facts");
+          if (record.kind === "test.attention.outcome" ||
+              record.kind === "test.attention.exhausted" ||
+              record.kind === "test.attention.quiescent") {
+            required(record.facts, ["goal_digest", "goal_satisfied"], label + ".facts");
+          }
           if (record.causes.length !== 0 || record.facts.round < 1 ||
-              record.facts.turns_used > record.facts.turn_limit ||
-              (record.kind !== "test.attention.occupied" && record.facts.occupied_claims !== 0)) {
+              record.facts.turns_used > record.facts.turn_limit) {
             fail(label, "does not describe a bounded non-causal attention snapshot");
           }
+          if (record.kind === "test.attention.wave" && record.facts.occupied_claims !== 0) {
+            fail(label, "does not describe an unoccupied attention wave");
+          }
+          if (record.kind === "test.attention.outcome" &&
+              (!record.facts.goal_satisfied || record.facts.occupied_claims !== 0)) {
+            fail(label, "does not describe a satisfied unoccupied attention outcome");
+          }
+          if (record.kind === "test.attention.exhausted" &&
+              (record.facts.goal_satisfied || record.facts.occupied_claims !== 0)) {
+            fail(label, "does not describe an unsatisfied unoccupied attention exhaustion");
+          }
+          if (record.kind === "test.attention.quiescent" &&
+              (record.facts.goal_satisfied || record.facts.occupied_claims !== 0 ||
+               record.facts.open_unclaimed !== 0)) {
+            fail(label, "does not describe an unsatisfied empty attention quiescence");
+          }
+          if (record.kind === "test.attention.occupied" &&
+              (record.facts.goal_digest !== undefined ||
+               record.facts.goal_satisfied !== undefined)) {
+            fail(label, "must precede and omit external goal evidence");
+          }
+          break;
+        case "test.gate.checked":
+          required(record.facts, ["gate_id", "status"], label + ".facts");
+          requireEnum(record.facts.status,
+            ["pass", "fail", "unknown", "not_applicable"], label + ".facts.status");
           break;
         case "r8.selection.seeded":
           required(record.facts, ["preference_after", "phase"], label + ".facts");
@@ -821,7 +859,7 @@
       }
     }
 
-    function validateResult(record, factCount, seen, label) {
+    function validateResult(record, factCount, seen, gateAssertions, label) {
       exactObject(record, RESULT_KEYS, ["schema", "version", "record", "status", "finished_at", "record_count", "trace_digest", "gates"], label);
       if (record.schema !== TRACE_SCHEMA || record.version !== TRACE_VERSION || record.record !== "result") fail(label, "has an invalid envelope");
       requireEnum(record.status, ["passed", "failed", "incomplete"], label + ".status");
@@ -830,20 +868,46 @@
       if (record.record_count !== factCount) fail(label + ".record_count", "does not match the fact count");
       requireString(record.trace_digest, DIGEST, label + ".trace_digest");
       if (!Array.isArray(record.gates) || record.gates.length > 64) fail(label + ".gates", "exceeds its array bound");
+      const gateIDs = new Set();
+      let hasFailure = false;
+      let hasPass = false;
       record.gates.forEach((gate, index) => {
         const path = label + ".gates[" + index + "]";
         exactObject(gate, ["id", "status", "evidence"], ["id", "status", "evidence"], path);
         requireString(gate.id, TOKEN, path + ".id");
         requireEnum(gate.status, ["pass", "fail", "unknown", "not_applicable"], path + ".status");
         if (!Array.isArray(gate.evidence) || gate.evidence.length > 32) fail(path + ".evidence", "exceeds its array bound");
+        if (gateIDs.has(gate.id)) fail(path + ".id", "duplicates a gate");
+        gateIDs.add(gate.id);
+        if ((gate.status === "pass" || gate.status === "fail") && gate.evidence.length === 0) {
+          fail(path + ".evidence", "is required for a settled gate");
+        }
+        if (gate.status === "unknown" && gate.evidence.length !== 0) {
+          fail(path + ".evidence", "cannot support an unknown gate");
+        }
+        hasFailure ||= gate.status === "fail";
+        hasPass ||= gate.status === "pass";
         const evidence = new Set();
         gate.evidence.forEach((reference, evidenceIndex) => {
           requireString(reference, TRACE_ID, path + ".evidence[" + evidenceIndex + "]");
           if (evidence.has(reference)) fail(path + ".evidence", "contains a duplicate reference");
           if (!seen.has(reference)) fail(path + ".evidence[" + evidenceIndex + "]", "does not refer to a fact");
+          const assertion = gateAssertions.get(reference);
+          if (assertion && (assertion.id !== gate.id || assertion.status !== gate.status)) {
+            fail(path + ".evidence[" + evidenceIndex + "]", "contradicts its gate assertion");
+          }
           evidence.add(reference);
         });
       });
+      if (record.status === "passed") {
+        if (!hasPass) fail(label + ".status", "requires at least one evidenced pass gate");
+        if (record.gates.some(gate => gate.status === "fail" || gate.status === "unknown")) {
+          fail(label + ".status", "cannot pass with a failed or unresolved gate");
+        }
+      }
+      if (record.status === "failed" && !hasFailure) {
+        fail(label + ".status", "requires at least one failed gate");
+      }
     }
 
     function decodeLines(bytes, name) {
@@ -879,14 +943,18 @@
       validateRun(header, name + " line 1");
       const facts = [];
       const seen = new Set();
+      const gateAssertions = new Map();
       for (let index = 1; index < lines.length - 1; index++) {
         const fact = lines[index].value;
         validateFact(fact, index, seen, name + " line " + (index + 1));
         facts.push(fact);
+        if (fact.kind === "test.gate.checked") {
+          gateAssertions.set(fact.id, { id: fact.facts.gate_id, status: fact.facts.status });
+        }
       }
       const resultLine = lines[lines.length - 1];
       const result = resultLine.value;
-      validateResult(result, facts.length, seen, name + " line " + lines.length);
+      validateResult(result, facts.length, seen, gateAssertions, name + " line " + lines.length);
       const digest = await sha256(bytes.slice(0, resultLine.start), name);
       if (digest !== result.trace_digest) fail(name, "trace_digest does not cover the exact preceding bytes");
       return { name, header, facts, result, errors: [] };

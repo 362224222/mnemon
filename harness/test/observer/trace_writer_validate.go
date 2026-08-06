@@ -87,8 +87,11 @@ var kindEvidenceRules = map[string]kindEvidenceRule{
 	"runtime.intent.denied":    {"Intent denial observation", validIntentDenialEvidence},
 	"r7.event.accepted":        {"accepted Event evidence", validAcceptedEventEvidence},
 	"r7.handling.resolved":     {"terminal Handling evidence", validResolvedHandlingEvidence},
+	"test.gate.checked":        {"gate assertion evidence", validGateAssertionEvidence},
 	"test.attention.wave":      {"attention wave evidence", validAttentionSnapshotEvidence},
-	"test.attention.exhausted": {"attention exhaustion evidence", validAttentionSnapshotEvidence},
+	"test.attention.outcome":   {"attention outcome evidence", validOutcomeAttentionEvidence},
+	"test.attention.exhausted": {"attention exhaustion evidence", validExhaustedAttentionEvidence},
+	"test.attention.quiescent": {"attention quiescence evidence", validQuiescentAttentionEvidence},
 	"test.attention.occupied":  {"occupied attention boundary evidence", validOccupiedAttentionEvidence},
 	"r8.selection.seeded":      {"seed preference evidence", validSelectionSeedEvidence},
 	"r8.round.frozen":          {"frozen round evidence", validFrozenRoundEvidence},
@@ -164,8 +167,36 @@ func validAttentionSnapshotEvidence(fact Fact) bool {
 	return validAttentionFields(fact) && *fact.Fields.OccupiedClaims == 0
 }
 
+func validOutcomeAttentionEvidence(fact Fact) bool {
+	return validFinalAttentionEvidence(fact, true) && *fact.Fields.OccupiedClaims == 0
+}
+
+func validExhaustedAttentionEvidence(fact Fact) bool {
+	return validFinalAttentionEvidence(fact, false) && *fact.Fields.OccupiedClaims == 0
+}
+
+func validQuiescentAttentionEvidence(fact Fact) bool {
+	return validExhaustedAttentionEvidence(fact) && *fact.Fields.OpenUnclaimed == 0
+}
+
 func validOccupiedAttentionEvidence(fact Fact) bool {
-	return validAttentionFields(fact)
+	return validAttentionFields(fact) && fact.Fields.GoalDigest == "" &&
+		fact.Fields.GoalSatisfied == nil
+}
+
+func validGateAssertionEvidence(fact Fact) bool {
+	return validTraceToken(fact.Fields.GateID) && slices.Contains([]string{
+		string(GatePass), string(GateFail), string(GateUnknown), string(GateNotApplicable),
+	}, fact.Fields.Status)
+}
+
+func validFinalAttentionEvidence(fact Fact, goalSatisfied bool) bool {
+	return validFinalAttentionFields(fact) && *fact.Fields.GoalSatisfied == goalSatisfied
+}
+
+func validFinalAttentionFields(fact Fact) bool {
+	return validAttentionFields(fact) && digestPattern.MatchString(fact.Fields.GoalDigest) &&
+		fact.Fields.GoalSatisfied != nil
 }
 
 func validAttentionFields(fact Fact) bool {
@@ -262,10 +293,8 @@ func validateFactFields(fields FactFields, sequence int) error {
 			return fmt.Errorf("trace writer: fact %d has invalid %s", sequence, check.name)
 		}
 	}
-	if !validOptionalTokens(fields.Code, fields.Episode, fields.GateID, fields.Role,
-		fields.SemanticKind) ||
-		len(fields.Targets) > 16 || !validOptionalTokens(fields.Targets...) {
-		return fmt.Errorf("trace writer: fact %d has invalid metadata token", sequence)
+	if err := validateFactMetadata(fields, sequence); err != nil {
+		return err
 	}
 	if fields.TargetCount != nil && *fields.TargetCount != len(fields.Targets) {
 		return fmt.Errorf("trace writer: fact %d has inconsistent target metadata", sequence)
@@ -322,33 +351,6 @@ func validateFactFields(fields FactFields, sequence int) error {
 		return fmt.Errorf("trace writer: fact %d has out-of-bound duration_ms", sequence)
 	}
 	return nil
-}
-
-func (writer *Writer) validateResult(result Result) (string, error) {
-	if !slices.Contains([]ResultStatus{ResultPassed, ResultFailed, ResultIncomplete}, result.Status) {
-		return "", fmt.Errorf("trace writer: invalid result status")
-	}
-	if len(result.Gates) > 64 {
-		return "", fmt.Errorf("trace writer: gates exceed 64")
-	}
-	for _, gate := range result.Gates {
-		if !validTraceToken(gate.ID) || !slices.Contains([]GateStatus{
-			GatePass, GateFail, GateUnknown, GateNotApplicable,
-		}, gate.Status) || len(gate.Evidence) > 32 {
-			return "", fmt.Errorf("trace writer: invalid gate")
-		}
-		unique := make(map[string]struct{}, len(gate.Evidence))
-		for _, evidence := range gate.Evidence {
-			if _, duplicate := unique[evidence]; duplicate {
-				return "", fmt.Errorf("trace writer: gate %q repeats evidence", gate.ID)
-			}
-			if _, exists := writer.seen[evidence]; !exists {
-				return "", fmt.Errorf("trace writer: gate %q cites missing evidence", gate.ID)
-			}
-			unique[evidence] = struct{}{}
-		}
-	}
-	return canonicalTime("result finished_at", result.FinishedAt)
 }
 
 func canonicalTime(label string, value time.Time) (string, error) {

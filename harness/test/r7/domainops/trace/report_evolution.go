@@ -8,7 +8,7 @@ import (
 )
 
 func validateEvolutionSummary(summary evolutionSummary) error {
-	if summary.Boundary.ActiveHeadCount < 1 || summary.AcceptedReferenceUses < 1 ||
+	if summary.Boundary.ActiveHeadCount < 0 || summary.AcceptedReferenceUses < 0 ||
 		len(summary.Boundary.Nodes) != len(domainRoles) ||
 		len(summary.Effects) != len(domainRoles) {
 		return errors.New("sanitized live report has incomplete evolution evidence")
@@ -26,6 +26,10 @@ func validateEvolutionSummary(summary evolutionSummary) error {
 	}
 	if effectTotal != summary.AcceptedReferenceUses {
 		return errors.New("sanitized live report evolution effect total is inconsistent")
+	}
+	demonstrated := summary.Boundary.ActiveHeadCount > 0 && summary.AcceptedReferenceUses > 0
+	if summary.Demonstrated != demonstrated {
+		return errors.New("sanitized live report evolution observation is inconsistent")
 	}
 	return nil
 }

@@ -13,12 +13,14 @@ import (
 )
 
 type options struct {
-	reportPath     string
-	failurePath    string
-	authorityRoot  string
-	outputPath     string
-	scenarioRoot   string
-	binaryManifest string
+	reportPath            string
+	failurePath           string
+	authorityRoot         string
+	consolidationRoot     string
+	boundaryAuthorityRoot string
+	outputPath            string
+	scenarioRoot          string
+	binaryManifest        string
 }
 
 func main() {
@@ -42,7 +44,8 @@ func main() {
 			}
 			return writeFailureTrace(destination, report, scenario, nodes)
 		}
-		proof, err := loadEvidence(config.reportPath, config.authorityRoot)
+		proof, err := loadEvidence(config.reportPath, config.authorityRoot,
+			config.consolidationRoot, config.boundaryAuthorityRoot)
 		if err != nil {
 			return err
 		}
@@ -56,19 +59,26 @@ func main() {
 func parseOptions(arguments []string) (options, error) {
 	set := flag.NewFlagSet("r7-domain-ops-trace", flag.ContinueOnError)
 	set.SetOutput(io.Discard)
-	var report, failure, authority, output, scenario, binaries string
+	var report, failure, authority, consolidation, boundary, output, scenario, binaries string
 	set.StringVar(&report, "report", "", "sanitized live report")
 	set.StringVar(&failure, "failure-report", "", "sanitized failed-run report")
 	set.StringVar(&authority, "authority", "", "stopped per-role authority directories")
+	set.StringVar(&consolidation, "consolidation-authority", "",
+		"stopped pre-consolidation per-role authority directories")
+	set.StringVar(&boundary, "boundary-authority", "",
+		"stopped episode-boundary per-role authority directories")
 	set.StringVar(&output, "output", "", "trace output path")
 	set.StringVar(&scenario, "scenario-root", "", "domain-ops scenario fixture root")
 	set.StringVar(&binaries, "candidate-binaries", "", "candidate sha256sum manifest")
 	if err := set.Parse(arguments); err != nil || set.NArg() != 0 ||
 		(report == "") == (failure == "") || authority == "" || output == "" ||
-		scenario == "" || binaries == "" {
-		return options{}, errors.New("exactly one report type plus authority, output, scenario-root, and candidate-binaries is required")
+		scenario == "" || binaries == "" ||
+		(report != "" && (consolidation == "" || boundary == "")) ||
+		(failure != "" && (consolidation != "" || boundary != "")) {
+		return options{}, errors.New("success requires report plus final, consolidation, and boundary authority; failure requires only final authority")
 	}
 	for label, path := range map[string]string{"report": report, "authority": authority,
+		"consolidation-authority": consolidation, "boundary-authority": boundary,
 		"failure-report": failure, "output": output, "scenario-root": scenario,
 		"candidate-binaries": binaries} {
 		if path == "" {
@@ -79,6 +89,7 @@ func parseOptions(arguments []string) (options, error) {
 		}
 	}
 	return options{reportPath: report, failurePath: failure, authorityRoot: authority,
+		consolidationRoot: consolidation, boundaryAuthorityRoot: boundary,
 		outputPath: output, scenarioRoot: scenario, binaryManifest: binaries}, nil
 }
 

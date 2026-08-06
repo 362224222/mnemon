@@ -103,6 +103,8 @@ type factsWire struct {
 	DurationMillis   *int64   `json:"duration_ms,omitempty"`
 	Episode          string   `json:"episode,omitempty"`
 	GateID           string   `json:"gate_id,omitempty"`
+	GoalDigest       string   `json:"goal_digest,omitempty"`
+	GoalSatisfied    *bool    `json:"goal_satisfied,omitempty"`
 	HasCurrent       *bool    `json:"has_current,omitempty"`
 	HookCue          *bool    `json:"hook_cue,omitempty"`
 	InvalidVotes     *int     `json:"invalid_votes,omitempty"`
@@ -567,28 +569,29 @@ func validateOptionalInt64(t *testing.T, sequence int, name string, value *int64
 func validateResult(t *testing.T, result resultRecord, facts []factRecord, seen map[string]struct{}) {
 	t.Helper()
 	if result.Schema != traceSchema || result.Version != traceVersion || result.Record != "result" ||
-		!slices.Contains([]string{"passed", "failed", "incomplete"}, result.Status) ||
 		!validTime(result.FinishedAt) || result.RecordCount != len(facts) ||
 		!digestPattern.MatchString(result.TraceDigest) || len(result.Gates) > 64 {
 		t.Fatalf("invalid result: %#v", result)
 	}
+	finishedAt, err := time.Parse(time.RFC3339Nano, result.FinishedAt)
+	if err != nil {
+		t.Fatalf("parse result time: %v", err)
+	}
+	writer := &Writer{seen: seen, gateFacts: make(map[string]gateAssertion)}
+	for _, fact := range facts {
+		if fact.Kind == "test.gate.checked" {
+			writer.gateFacts[fact.ID] = gateAssertion{ID: fact.Facts.GateID,
+				Status: GateStatus(fact.Facts.Status)}
+		}
+	}
+	gates := make([]Gate, 0, len(result.Gates))
 	for _, gate := range result.Gates {
-		if !validToken(gate.ID) || !slices.Contains([]string{"pass", "fail", "unknown", "not_applicable"}, gate.Status) {
-			t.Fatalf("invalid gate %#v", gate)
-		}
-		if len(gate.Evidence) > 32 {
-			t.Fatalf("gate %q has %d evidence references, max 32", gate.ID, len(gate.Evidence))
-		}
-		unique := make(map[string]struct{}, len(gate.Evidence))
-		for _, evidence := range gate.Evidence {
-			if _, duplicate := unique[evidence]; duplicate {
-				t.Fatalf("gate %q repeats evidence %q", gate.ID, evidence)
-			}
-			if _, present := seen[evidence]; !present {
-				t.Fatalf("gate %q cites missing evidence %q", gate.ID, evidence)
-			}
-			unique[evidence] = struct{}{}
-		}
+		gates = append(gates, Gate{ID: gate.ID, Status: GateStatus(gate.Status),
+			Evidence: slices.Clone(gate.Evidence)})
+	}
+	if _, err := writer.validateResult(Result{Status: ResultStatus(result.Status),
+		FinishedAt: finishedAt, Gates: gates}); err != nil {
+		t.Fatal(err)
 	}
 }
 

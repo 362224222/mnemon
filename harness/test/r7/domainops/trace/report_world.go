@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	maxSyntheticProbes          = 16
+	maxSyntheticProbes          = 69
 	maxSyntheticChargesPerProbe = 4
 )
 

@@ -106,6 +106,8 @@ type FactFields struct {
 	DurationMillis   *int64   `json:"duration_ms,omitempty"`
 	Episode          string   `json:"episode,omitempty"`
 	GateID           string   `json:"gate_id,omitempty"`
+	GoalDigest       string   `json:"goal_digest,omitempty"`
+	GoalSatisfied    *bool    `json:"goal_satisfied,omitempty"`
 	HasCurrent       *bool    `json:"has_current,omitempty"`
 	HookCue          *bool    `json:"hook_cue,omitempty"`
 	InvalidVotes     *int     `json:"invalid_votes,omitempty"`

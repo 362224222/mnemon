@@ -96,8 +96,11 @@ func TestTraceSchemaRequiresMinimumDisplayEvidence(t *testing.T) {
 		"r7.event.accepted":        {"facts.consequence", "facts.semantic_kind", "refs.event", "refs.event_digest"},
 		"r7.handling.resolved":     {"facts.outcome", "facts.state", "refs.handling"},
 		"test.attention.wave":      {"facts.episode", "facts.occupied_claims", "facts.open_unclaimed", "facts.role", "facts.round", "facts.turn_limit", "facts.turns_used"},
-		"test.attention.exhausted": {"facts.episode", "facts.occupied_claims", "facts.open_unclaimed", "facts.role", "facts.round", "facts.turn_limit", "facts.turns_used"},
+		"test.attention.outcome":   {"facts.episode", "facts.goal_digest", "facts.goal_satisfied", "facts.occupied_claims", "facts.open_unclaimed", "facts.role", "facts.round", "facts.turn_limit", "facts.turns_used"},
+		"test.attention.exhausted": {"facts.episode", "facts.goal_digest", "facts.goal_satisfied", "facts.occupied_claims", "facts.open_unclaimed", "facts.role", "facts.round", "facts.turn_limit", "facts.turns_used"},
+		"test.attention.quiescent": {"facts.episode", "facts.goal_digest", "facts.goal_satisfied", "facts.occupied_claims", "facts.open_unclaimed", "facts.role", "facts.round", "facts.turn_limit", "facts.turns_used"},
 		"test.attention.occupied":  {"facts.episode", "facts.occupied_claims", "facts.open_unclaimed", "facts.role", "facts.round", "facts.turn_limit", "facts.turns_used"},
+		"test.gate.checked":        {"facts.gate_id", "facts.status"},
 		"r8.selection.seeded":      {"facts.phase", "facts.preference_after"},
 		"r8.round.frozen":          {"facts.alpha", "facts.margin_before", "facts.preference_before", "facts.round", "facts.sample_size"},
 		"r8.vote.observed":         {"facts.authenticated", "facts.round", "facts.votes_a", "facts.votes_b"},
@@ -106,6 +109,161 @@ func TestTraceSchemaRequiresMinimumDisplayEvidence(t *testing.T) {
 	}
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("display-evidence schema = %#v, want %#v", actual, expected)
+	}
+}
+
+func TestFinalAttentionSemanticsMatchSchema(t *testing.T) {
+	root := decodeJSONObject(t, readFile(t, "trace-schema.json"), "schema root")
+	factsDefinition := objectField(t, objectField(t, root, "$defs"), "facts")
+	paired := objectField(t, factsDefinition, "dependentRequired")
+	if !slices.Equal(stringArrayField(t, paired, "goal_digest"), []string{"goal_satisfied"}) ||
+		!slices.Equal(stringArrayField(t, paired, "goal_satisfied"), []string{"goal_digest"}) {
+		t.Fatalf("goal metadata pairing = %#v", paired)
+	}
+	factVariant := schemaRecordVariant(t, arrayField(t, root, "oneOf"), "fact")
+	combined := arrayField(t, factVariant, "allOf")[0].(map[string]any)
+	conditions := arrayField(t, combined, "allOf")
+	want := map[string]map[string]any{
+		"test.attention.outcome":   {"goal_satisfied": true, "occupied_claims": float64(0)},
+		"test.attention.exhausted": {"goal_satisfied": false, "occupied_claims": float64(0)},
+		"test.attention.quiescent": {"goal_satisfied": false, "occupied_claims": float64(0), "open_unclaimed": float64(0)},
+	}
+	got := collectAttentionConstants(t, conditions, want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("attention schema semantics = %#v, want %#v", got, want)
+	}
+	occupiedForbiddenFields := collectOccupiedForbiddenFields(t, conditions)
+	slices.Sort(occupiedForbiddenFields)
+	if !slices.Equal(occupiedForbiddenFields, []string{"goal_digest", "goal_satisfied"}) {
+		t.Fatal("attention schema permits occupied evidence to depend on an external goal")
+	}
+}
+
+func TestFinalAttentionSemanticsMatchBrowser(t *testing.T) {
+	html := string(readFile(t, "index.html"))
+	for _, required := range []string{
+		`record.kind === "test.attention.outcome"`,
+		`!record.facts.goal_satisfied || record.facts.occupied_claims !== 0`,
+		`record.kind === "test.attention.exhausted"`,
+		`record.facts.goal_satisfied || record.facts.occupied_claims !== 0`,
+		`record.kind === "test.attention.quiescent"`,
+		`record.facts.open_unclaimed !== 0`,
+		`record.kind === "test.attention.occupied"`,
+		`record.facts.goal_digest !== undefined`,
+		`must precede and omit external goal evidence`,
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("browser attention validator is missing %q", required)
+		}
+	}
+}
+
+func collectAttentionConstants(t *testing.T, conditions []any,
+	want map[string]map[string]any,
+) map[string]map[string]any {
+	t.Helper()
+	result := make(map[string]map[string]any, len(want))
+	for _, value := range conditions {
+		condition, ok := value.(map[string]any)
+		if !ok {
+			t.Fatal("attention condition is not an object")
+		}
+		kind := schemaConditionKind(t, condition)
+		if _, tracked := want[kind]; !tracked {
+			continue
+		}
+		facts := schemaConditionFacts(t, condition)
+		properties := objectField(t, facts, "properties")
+		result[kind] = make(map[string]any, len(properties))
+		for field, value := range properties {
+			definition, ok := value.(map[string]any)
+			if !ok {
+				t.Fatalf("%s.%s constraint is not an object", kind, field)
+			}
+			result[kind][field] = definition["const"]
+		}
+	}
+	return result
+}
+
+func collectOccupiedForbiddenFields(t *testing.T, conditions []any) []string {
+	t.Helper()
+	for _, value := range conditions {
+		condition, ok := value.(map[string]any)
+		if !ok {
+			t.Fatal("attention condition is not an object")
+		}
+		if schemaConditionKind(t, condition) != "test.attention.occupied" {
+			continue
+		}
+		var result []string
+		facts := schemaConditionFacts(t, condition)
+		for _, raw := range arrayField(t, objectField(t, facts, "not"), "anyOf") {
+			forbidden, ok := raw.(map[string]any)
+			if !ok {
+				t.Fatal("occupied forbidden-goal condition is not an object")
+			}
+			result = append(result, stringArrayField(t, forbidden, "required")...)
+		}
+		return result
+	}
+	t.Fatal("occupied attention condition is absent")
+	return nil
+}
+
+func schemaConditionKind(t *testing.T, condition map[string]any) string {
+	t.Helper()
+	kind, _ := objectField(t,
+		objectField(t, objectField(t, condition, "if"), "properties"), "kind")["const"].(string)
+	return kind
+}
+
+func schemaConditionFacts(t *testing.T, condition map[string]any) map[string]any {
+	t.Helper()
+	return objectField(t,
+		objectField(t, objectField(t, condition, "then"), "properties"), "facts")
+}
+
+func TestGateSettlementSemanticsMatchSchemaAndBrowser(t *testing.T) {
+	root := decodeJSONObject(t, readFile(t, "trace-schema.json"), "schema root")
+	gate := objectField(t, objectField(t, root, "$defs"), "gate")
+	gateConditions := arrayField(t, gate, "allOf")
+	if len(gateConditions) != 2 {
+		t.Fatalf("gate settlement condition count = %d, want 2", len(gateConditions))
+	}
+	gateJSON := fmt.Sprintf("%v", gateConditions)
+	for _, required := range []string{"pass", "fail", "unknown", "minItems:1", "maxItems:0"} {
+		if !strings.Contains(gateJSON, required) {
+			t.Fatalf("gate schema is missing settlement constraint %q", required)
+		}
+	}
+	result := schemaRecordVariant(t, arrayField(t, root, "oneOf"), "result")
+	resultConditions := arrayField(t, result, "allOf")
+	if len(resultConditions) != 2 {
+		t.Fatalf("result settlement condition count = %d, want 2", len(resultConditions))
+	}
+	resultJSON := fmt.Sprintf("%v", resultConditions)
+	for _, required := range []string{
+		"passed", "pass", "not_applicable", "contains", "minContains:1", "failed", "fail",
+	} {
+		if !strings.Contains(resultJSON, required) {
+			t.Fatalf("result schema is missing settlement constraint %q", required)
+		}
+	}
+
+	html := string(readFile(t, "index.html"))
+	for _, required := range []string{
+		`gateIDs.has(gate.id)`,
+		`gate.evidence.length === 0`,
+		`gate.status === "unknown" && gate.evidence.length !== 0`,
+		`assertion.id !== gate.id || assertion.status !== gate.status`,
+		`if (!hasPass) fail`,
+		`record.gates.some(gate => gate.status === "fail" || gate.status === "unknown")`,
+		`record.status === "failed" && !hasFailure`,
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("browser gate settlement validator is missing %q", required)
+		}
 	}
 }
 

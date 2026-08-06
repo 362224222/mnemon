@@ -21,9 +21,11 @@ const (
 )
 
 type evidence struct {
-	Report   liveReport
-	Scenario scenarioEvidence
-	Nodes    []nodeEvidence
+	Report             liveReport
+	Scenario           scenarioEvidence
+	Nodes              []nodeEvidence
+	ConsolidationNodes []nodeEvidence
+	BoundaryNodes      []nodeEvidence
 }
 
 type nodeEvidence struct {
@@ -102,7 +104,7 @@ type deliveryEvidence struct {
 	Accepted                bool
 }
 
-func loadEvidence(reportPath, authorityRoot string) (evidence, error) {
+func loadEvidence(reportPath, authorityRoot, consolidationRoot, boundaryRoot string) (evidence, error) {
 	report, err := loadReport(reportPath)
 	if err != nil {
 		return evidence{}, err
@@ -111,7 +113,16 @@ func loadEvidence(reportPath, authorityRoot string) (evidence, error) {
 	if err != nil {
 		return evidence{}, err
 	}
-	proof := evidence{Report: report, Nodes: nodes}
+	consolidation, err := loadAuthorityNodes(consolidationRoot)
+	if err != nil {
+		return evidence{}, fmt.Errorf("load consolidation authority: %w", err)
+	}
+	boundary, err := loadAuthorityNodes(boundaryRoot)
+	if err != nil {
+		return evidence{}, fmt.Errorf("load evolution boundary authority: %w", err)
+	}
+	proof := evidence{Report: report, Nodes: nodes,
+		ConsolidationNodes: consolidation, BoundaryNodes: boundary}
 	if err := validateCombinedEvidence(proof); err != nil {
 		return evidence{}, err
 	}

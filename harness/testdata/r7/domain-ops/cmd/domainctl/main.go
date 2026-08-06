@@ -16,7 +16,9 @@ import (
 	"time"
 )
 
-const maxControlBytes = 8 << 10
+// maxControlBytes covers the closed 69-probe x 4-charge live-case envelope
+// while retaining a small, explicit ceiling for every control response.
+const maxControlBytes = 64 << 10
 
 type configuration struct {
 	role     string

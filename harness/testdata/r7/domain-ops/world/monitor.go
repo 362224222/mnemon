@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	MonitorProbeLimit       = 16
+	MonitorProbeLimit       = 69
 	MonitorProbeChargeLimit = 4
 	monitorProbeSettle      = 500 * time.Millisecond
 	monitorProbeVoidReason  = "synthetic-probe-reconciliation"
