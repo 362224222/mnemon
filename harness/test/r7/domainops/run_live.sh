@@ -29,6 +29,7 @@ persisted_evidence_max_bytes=$((8 * 1024 * 1024))
 persisted_evidence_max_blocks=$((persisted_evidence_max_bytes / 1024))
 peer_quiescence_seconds=30
 open_attention_turn_limit=16
+attention_exhausted_reason='Attention budget exhausted. This tool did not run. Only mnemond_submit may remain.'
 report_path=${DOMAIN_OPS_REPORT:-$repository_root/.testdata/r7-domain-ops-live/last-report.json}
 trace_path=${DOMAIN_OPS_TRACE:-$repository_root/.testdata/r7-domain-ops-live/last.trace}
 failure_report_path=${DOMAIN_OPS_FAILURE_REPORT:-$repository_root/.testdata/r7-domain-ops-live/last-failure.json}
@@ -459,6 +460,7 @@ write_key_once() {
 sanitize_turn() {
   local role=$1 tag=$2 raw=$3 output=$4
   jq -s -e --arg role "$role" --arg turn "$tag" \
+    --arg attention_exhausted "$attention_exhausted_reason" \
     --arg captured_at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" '
     def command: (.args.command // "");
     def invocation_pattern($verb):
@@ -487,6 +489,16 @@ sanitize_turn() {
       else empty end;
     def result_objects:
       [result_texts | split("\n")[] | fromjson? | select(type == "object")];
+    def host_attention_disposition:
+      .isError == true and
+      ((.result | type) == "object") and
+      ((.result | keys | sort) == ["content", "details"]) and
+      .result.details == {} and
+      ((.result.content | type) == "array") and
+      (.result.content | length) == 1 and
+      ((.result.content[0] | type) == "object") and
+      ((.result.content[0] | keys | sort) == ["text", "type"]) and
+      .result.content[0] == {type:"text", text:$attention_exhausted};
     def valid_receipt:
       .schema == "mnemon.agent.receipt" and .version == 1 and
       (.replayed | type == "boolean") and
@@ -518,12 +530,13 @@ sanitize_turn() {
       $id != null and (($ids | index($id)) != null);
     def valid_delegate_result:
       (.result.details? // null) as $details |
-      ($details | type) == "object" and
-      $details.schema == "mnemon.pi.delegate" and $details.version == 1 and
-      (($details.status == "completed" and .isError == false) or
-       (($details.status as $status |
-         ["slot_used", "task_invalid", "model_unavailable", "auth_unavailable", "failed"] |
-         index($status)) != null and .isError == true));
+      host_attention_disposition or
+      (($details | type) == "object" and
+       $details.schema == "mnemon.pi.delegate" and $details.version == 1 and
+       (($details.status == "completed" and .isError == false) or
+        (($details.status as $status |
+          ["slot_used", "task_invalid", "model_unavailable", "auth_unavailable", "failed"] |
+          index($status)) != null and .isError == true)));
     . as $stream |
     ([$stream[] | select(.type == "message_end" and .message.role == "assistant")]) as
       $assistant_ends |
@@ -721,7 +734,7 @@ release_turn_window() {
 
 summarize_partial_turn() {
   local raw=$1
-  jq -s -c '
+  jq -s -c --arg attention_exhausted "$attention_exhausted_reason" '
     def command: (.args.command // "");
     def invocation_pattern($verb):
       (("(^|[|;&\n][[:space:]]*)([^[:space:];|&]*/)?mnemon-harness" +
@@ -742,6 +755,28 @@ summarize_partial_turn() {
       else empty end;
     def result_objects:
       [result_strings | split("\n")[] | fromjson? | select(type == "object")];
+    def host_attention_disposition:
+      .isError == true and
+      ((.result | type) == "object") and
+      ((.result | keys | sort) == ["content", "details"]) and
+      .result.details == {} and
+      ((.result.content | type) == "array") and
+      (.result.content | length) == 1 and
+      ((.result.content[0] | type) == "object") and
+      ((.result.content[0] | keys | sort) == ["text", "type"]) and
+      .result.content[0] == {type:"text", text:$attention_exhausted};
+    def delegate_result_class:
+      (.result.details? // null) as $details |
+      if host_attention_disposition then "host_attention_disposition"
+      elif (($details | type) == "object" and
+        $details.schema == "mnemon.pi.delegate" and $details.version == 1 and
+        $details.status == "completed" and .isError == false) then "completed"
+      elif (($details | type) == "object" and
+        $details.schema == "mnemon.pi.delegate" and $details.version == 1 and
+        (($details.status as $status |
+          ["slot_used", "task_invalid", "model_unavailable", "auth_unavailable", "failed"] |
+          index($status)) != null and .isError == true)) then "delegate_error"
+      else "invalid" end;
     def valid_control_error:
       (keys | sort) == ["code", "message", "operation_id", "replayed", "retryable",
         "schema_version", "status"] and
@@ -779,6 +814,9 @@ summarize_partial_turn() {
         .toolName == "bash" and (command | contains("domainctl")))] | length),
       delegate_attempts:([.[] | select(.type == "tool_execution_start" and
         .toolName == "delegate")] | length),
+      delegate_results:([.[] | select(.type == "tool_execution_end" and
+        .toolName == "delegate") |
+        {class:delegate_result_class,is_error:(.isError == true)}]),
       delegate_effects:([.[] | select(.type == "tool_execution_end" and
         .toolName == "delegate" and .isError == false and
         .result.details.schema == "mnemon.pi.delegate" and

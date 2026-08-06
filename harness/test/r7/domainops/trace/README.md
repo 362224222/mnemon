@@ -53,6 +53,9 @@ invent a causal edge to an Event.
 `turns[].delegate_calls` counts completed child-Pi effects, not tool attempts.
 The Runtime may return a closed `slot_used` result for a repeated attempt, but
 the report still requires at most one completed delegate per parent turn.
+An exploration call stopped by the Host attention gate is a closed Runtime
+disposition, not a delegate effect; it may close the turn but never increments
+`delegate_calls` or supplies evidence for an Event.
 The `submit_*`, `intent_submits`, and `*_receipts` turn counters describe paired
 Pi Bash envelopes that visibly contained submit traffic; they do not count
 shell processes or canonical Effects. Sequential corrections inside one

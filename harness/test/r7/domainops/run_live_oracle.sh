@@ -12,6 +12,12 @@ oracle_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 # shellcheck source=run_live.sh
 source "$oracle_dir/run_live.sh"
 
+test "$(grep -Fxc -- "  \"$attention_exhausted_reason\";" \
+  "$harness_root/internal/attach/assets/pi/mnemond.ts")" = 1 || {
+  printf 'runtime oracle: Host attention disposition drifted from the observer\n' >&2
+  exit 1
+}
+
 scratch=$(mktemp -d /tmp/mnr7-runtime-oracle.XXXXXX)
 cleanup_oracle() {
   chmod -R u+w "$scratch" >/dev/null 2>&1 || true
@@ -636,6 +642,21 @@ write_delegate_stream() {
   jq -nc '{type:"agent_end"}' >>"$destination"
 }
 
+write_host_delegate_disposition_stream() {
+  local destination=$1 reason=$2
+  jq -nc '{type:"message_start",message:{role:"custom",customType:"mnemond"}}' \
+    >"$destination"
+  jq -nc '{type:"tool_execution_start",toolCallId:"delegate-host",toolName:"delegate",
+    args:{task:"bounded independent analysis"}}' >>"$destination"
+  jq -nc --arg reason "$reason" \
+    '{type:"tool_execution_end",toolCallId:"delegate-host",toolName:"delegate",
+      isError:true,result:{content:[{type:"text",text:$reason}],details:{}}}' \
+    >>"$destination"
+  jq -nc '{type:"message_end",message:{role:"assistant",stopReason:"stop"}}' \
+    >>"$destination"
+  jq -nc '{type:"agent_end"}' >>"$destination"
+}
+
 write_delegate_stream "$scratch/delegate.jsonl" completed
 sanitize_turn lead oracle-delegate "$scratch/delegate.jsonl" "$scratch/delegate.json"
 test "$(jq '.delegate_calls' "$scratch/delegate.json")" = 1
@@ -643,6 +664,30 @@ write_delegate_stream "$scratch/contained-delegate.jsonl" completed slot_used
 sanitize_turn lead oracle-contained-delegate "$scratch/contained-delegate.jsonl" \
   "$scratch/contained-delegate.json"
 test "$(jq '.delegate_calls' "$scratch/contained-delegate.json")" = 1
+write_host_delegate_disposition_stream "$scratch/host-delegate.jsonl" \
+  "$attention_exhausted_reason"
+sanitize_turn lead oracle-host-delegate "$scratch/host-delegate.jsonl" \
+  "$scratch/host-delegate.json"
+test "$(jq '.delegate_calls' "$scratch/host-delegate.json")" = 0
+host_delegate_partial=$(summarize_partial_turn "$scratch/host-delegate.jsonl")
+jq -e '
+  .delegate_attempts == 1 and .delegate_effects == 0 and
+  .delegate_results == [{class:"host_attention_disposition",is_error:true}]
+' <<<"$host_delegate_partial" >/dev/null
+write_host_delegate_disposition_stream "$scratch/unclassified-delegate.jsonl" \
+  'unclassified delegate failure'
+if sanitize_turn lead oracle-unclassified-delegate \
+    "$scratch/unclassified-delegate.jsonl" "$scratch/unclassified-delegate.json"; then
+  printf 'runtime oracle: an unclassified delegate error was accepted\n' >&2
+  exit 1
+fi
+jq -c 'if .type == "tool_execution_end" then .result.extra = true else . end' \
+  "$scratch/host-delegate.jsonl" >"$scratch/malformed-host-delegate.jsonl"
+if sanitize_turn lead oracle-malformed-host-delegate \
+    "$scratch/malformed-host-delegate.jsonl" "$scratch/malformed-host-delegate.json"; then
+  printf 'runtime oracle: a malformed Host attention disposition was accepted\n' >&2
+  exit 1
+fi
 write_delegate_stream "$scratch/two-delegates.jsonl" completed completed
 if sanitize_turn lead oracle-two-delegates "$scratch/two-delegates.jsonl" \
     "$scratch/two-delegates.json"; then
