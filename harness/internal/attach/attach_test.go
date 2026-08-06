@@ -75,12 +75,17 @@ func assertGuideTerminalSurface(t *testing.T, guide string) {
 		"mnemon-harness agent current --json",
 		"mnemon-harness artifact capture --json < PATH",
 		"mnemon-harness artifact read \"$HANDLE\"",
-		"mnemon-harness agent submit --json",
+		"mnemon-harness agent submit --json <<'JSON'",
+		"exactly one nonempty",
+		"no Markdown",
 		"VIEW_TARGET", "VIEW_REPLY_TARGET", "CURRENT_HANDLE", "CAPTURE_HANDLE",
 	} {
 		if !strings.Contains(guide, required) {
 			t.Errorf("guide lacks complete, bounded terminal surface %q", required)
 		}
+	}
+	if strings.Contains(guide, "$INTENT_JSON") {
+		t.Error("guide relies on an undefined cross-tool shell variable")
 	}
 }
 

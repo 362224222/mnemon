@@ -518,21 +518,30 @@ sanitize_turn() {
     ([$submit_starts[].toolCallId] | unique) as $submit_calls |
     ([$stream[] | select(.type == "tool_execution_end" and .toolName == "bash" and
       belongs($submit_calls))]) as $submit_ends |
+    ([$submit_ends[] |
+      (any(result_objects[];
+        valid_receipt and .outcome == "accepted")) as $accepted |
+      (if $accepted then false else
+        any(result_objects[]; valid_receipt and .outcome == "rejected") end) as $rejected |
+      (if $accepted or $rejected then false else
+        any(result_objects[]; valid_control_error) end) as $denied |
+      (if $accepted or $rejected or $denied then false else
+        .isError == true end) as $failed |
+      {tool_call_id:.toolCallId,
+        accepted:(if $accepted then 1 else 0 end),
+        rejected:(if $rejected then 1 else 0 end),
+        denials:(if $denied then 1 else 0 end),
+        invocation_failures:(if $failed then 1 else 0 end),
+        closed:($accepted or $rejected or $denied or $failed)}
+    ]) as $submit_outcomes |
     ([$stream[] | select(.type == "tool_execution_start" and
       .toolName == "delegate") | .toolCallId] | unique) as $delegate_attempts |
     ([$stream[] | select(.type == "tool_execution_end" and
       .toolName == "delegate" and belongs($delegate_attempts))]) as $delegate_ends |
-    (reduce $stream[] as $record (
+    (reduce $submit_outcomes[] as $outcome (
       {accepted_seen:false, denials:0};
-      if ($record.type == "tool_execution_end" and $record.toolName == "bash" and
-          ($record | belongs($submit_calls))) then
-        .denials += (if .accepted_seen then
-          (if ($record | (any(result_objects[]; valid_receipt) | not) and
-              any(result_objects[]; valid_control_error)) then 1 else 0 end)
-        else 0 end) |
-        .accepted_seen = (.accepted_seen or
-          ($record | any(result_objects[]; valid_receipt and .outcome == "accepted")))
-      else . end
+      .denials += (if .accepted_seen then $outcome.denials else 0 end) |
+      .accepted_seen = (.accepted_seen or $outcome.accepted == 1)
     )) as $post_accept |
     {
       role: $role,
@@ -550,19 +559,12 @@ sanitize_turn() {
         belongs($current_calls) and
         any(result_objects[]; .schema == "mnemon.agent.view" and .version == 4 and
           (.view | type == "string" and length > 0)))] | length),
-      submit_attempts: ($submit_starts | length),
-      intent_submits: ([$submit_ends[] |
-        select(any(result_objects[]; valid_receipt))] | length),
-      accepted_receipts: ([$submit_ends[] |
-        select(any(result_objects[]; valid_receipt and .outcome == "accepted"))] | length),
-      rejected_receipts: ([$submit_ends[] |
-        select(any(result_objects[]; valid_receipt and .outcome == "rejected"))] | length),
-      submit_denials: ([$submit_ends[] |
-        select((any(result_objects[]; valid_receipt) | not) and
-          any(result_objects[]; valid_control_error))] | length),
-      submit_invocation_failures: ([$submit_ends[] |
-        select((any(result_objects[]; valid_receipt) | not) and
-          (any(result_objects[]; valid_control_error) | not) and .isError == true)] | length),
+      submit_attempts: ($submit_outcomes | length),
+      intent_submits: ([$submit_outcomes[] | .accepted + .rejected] | add // 0),
+      accepted_receipts: ([$submit_outcomes[].accepted] | add // 0),
+      rejected_receipts: ([$submit_outcomes[].rejected] | add // 0),
+      submit_denials: ([$submit_outcomes[].denials] | add // 0),
+      submit_invocation_failures: ([$submit_outcomes[].invocation_failures] | add // 0),
       post_accept_denials: $post_accept.denials,
       private_binding_probes: ([$stream[] | select(.type == "tool_execution_start" and
         .toolName == "bash" and
@@ -583,14 +585,12 @@ sanitize_turn() {
         ($delegate_ends | length) == ($delegate_attempts | length) and
         ([$delegate_ends[].toolCallId] | unique | sort) == ($delegate_attempts | sort) and
         all($delegate_ends[]; valid_delegate_result) and
-        all($submit_starts[]; invocation_count("submit") == 1) and
+        ($submit_starts | length) == ($submit_calls | length) and
         ($submit_ends | length) == ($submit_calls | length) and
         ([$submit_ends[].toolCallId] | unique | sort) == ($submit_calls | sort) and
-        all($submit_ends[];
-          ((any(result_objects[]; valid_receipt and .outcome == "accepted") and
-            any(result_objects[]; valid_receipt and .outcome == "rejected")) | not) and
-          (any(result_objects[]; valid_receipt) or
-            any(result_objects[]; valid_control_error) or .isError == true)) and
+        all($submit_outcomes[];
+          .closed and
+          (.accepted + .rejected + .denials + .invocation_failures) == 1) and
         .accepted_receipts <= 1 and
         .post_accept_denials <= .submit_denials and
         (.post_accept_denials == 0 or .accepted_receipts == 1) and
@@ -664,9 +664,9 @@ summarize_partial_turn() {
         .result.details.version == 1 and .result.details.status == "completed")] | length),
       current_attempts:([.[] | select(.type == "tool_execution_start" and
         .toolName == "bash" and (command | test("mnemon-harness[[:space:]]+agent[[:space:]]+current")))] | length),
-      submit_attempts:($submit_starts | length),
+      submit_command_occurrences:([$submit_starts[] | invocation_count("submit")] | add // 0),
       submit_ends:($submit_ends | length),
-      submit_invocation_cardinality:(reduce $submit_starts[] as $start ({};
+      submit_command_cardinality:(reduce $submit_starts[] as $start ({};
         ($start | invocation_count("submit") | tostring) as $count |
         .[$count] = ((.[$count] // 0) + 1))),
       submit_control_error_codes:(reduce ([$submit_ends[] | result_objects[] |

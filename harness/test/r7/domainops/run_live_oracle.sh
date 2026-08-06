@@ -226,6 +226,33 @@ write_submit_stream() {
   jq -nc '{type:"agent_end"}' >>"$destination"
 }
 
+write_sequential_submit_stream() {
+  local destination=$1 count=$2
+  shift 2
+  local command= index result combined= is_error=false
+  for index in $(seq 1 "$count"); do
+    command="${command:+$command; }mnemon-harness agent submit --json"
+  done
+  for result in "$@"; do
+    combined="${combined:+$combined
+}$result"
+    case "$result" in *'"status":"error"'*) is_error=true ;; esac
+  done
+  test "$is_error" = false || combined="$combined"$'\n\nCommand exited with code 3'
+  jq -nc '{type:"message_start",message:{role:"custom",customType:"mnemond"}}' \
+    >"$destination"
+  jq -nc --arg command "$command" \
+    '{type:"tool_execution_start",toolCallId:"submit-batch",toolName:"bash",
+      args:{command:$command}}' >>"$destination"
+  jq -nc --arg text "$combined" --argjson is_error "$is_error" \
+    '{type:"tool_execution_end",toolCallId:"submit-batch",toolName:"bash",
+      isError:$is_error,result:{content:[{type:"text",text:$text}],details:{output:$text}}}' \
+    >>"$destination"
+  jq -nc '{type:"message_end",message:{role:"assistant",stopReason:"stop"}}' \
+    >>"$destination"
+  jq -nc '{type:"agent_end"}' >>"$destination"
+}
+
 write_sanitizer_stream stop "$scratch/stop.jsonl"
 sanitize_turn lead oracle "$scratch/stop.jsonl" "$scratch/stop.json"
 test "$(jq '.delegate_calls' "$scratch/stop.json")" = 0
@@ -294,6 +321,7 @@ if sanitize_turn lead oracle-two-delegates "$scratch/two-delegates.jsonl" \
 fi
 
 accepted_receipt='{"schema":"mnemon.agent.receipt","version":1,"outcome":"accepted","replayed":false}'
+rejected_receipt='{"schema":"mnemon.agent.receipt","version":1,"outcome":"rejected","replayed":false,"diagnostic":"bounded correction required"}'
 closed_denial='{"code":"context_required","message":"a bounded View is required","operation_id":null,"replayed":false,"retryable":false,"schema_version":1,"status":"error"}'
 write_submit_stream "$scratch/accounted.jsonl" "$accepted_receipt" "$closed_denial"
 sanitize_turn lead oracle-accounted "$scratch/accounted.jsonl" "$scratch/accounted.json"
@@ -310,6 +338,35 @@ sanitize_turn lead oracle-duplicate-rendering "$scratch/duplicate-rendering.json
 jq -e '
   .submit_attempts == 1 and .intent_submits == 0 and .submit_denials == 1
 ' "$scratch/duplicate-rendering.json" >/dev/null
+
+write_sequential_submit_stream "$scratch/sequential-denials.jsonl" 3 \
+  "$closed_denial" "$closed_denial" "$closed_denial"
+sanitize_turn lead oracle-sequential-denials "$scratch/sequential-denials.jsonl" \
+  "$scratch/sequential-denials.json"
+jq -e '
+  .bash_calls == 1 and .submit_attempts == 1 and .intent_submits == 0 and
+  .submit_denials == 1 and .submit_invocation_failures == 0
+' "$scratch/sequential-denials.json" >/dev/null
+
+write_sequential_submit_stream "$scratch/sequential-rejections.jsonl" 3 \
+  "$rejected_receipt" "$rejected_receipt" "$rejected_receipt"
+sanitize_turn lead oracle-sequential-rejections "$scratch/sequential-rejections.jsonl" \
+  "$scratch/sequential-rejections.json"
+jq -e '
+  .bash_calls == 1 and .submit_attempts == 1 and .intent_submits == 1 and
+  .rejected_receipts == 1 and .submit_denials == 0 and
+  .submit_invocation_failures == 0
+' "$scratch/sequential-rejections.json" >/dev/null
+
+write_sequential_submit_stream "$scratch/sequential-repair.jsonl" 3 \
+  "$closed_denial" "$closed_denial" "$accepted_receipt"
+sanitize_turn lead oracle-sequential-repair "$scratch/sequential-repair.jsonl" \
+  "$scratch/sequential-repair.json"
+jq -e '
+  .bash_calls == 1 and .submit_attempts == 1 and .intent_submits == 1 and
+  .accepted_receipts == 1 and .submit_denials == 0 and
+  .submit_invocation_failures == 0
+' "$scratch/sequential-repair.json" >/dev/null
 
 write_submit_stream "$scratch/repaired-operation.jsonl" \
   "$closed_denial"$'\n'"$accepted_receipt"

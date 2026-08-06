@@ -13,6 +13,50 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
+func TestAgentSubmitReturnsBoundedInputDiagnostics(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		code    controlErrorCode
+		message string
+	}{
+		{name: "syntax", input: "{", code: codeInvalidArgument,
+			message: "exactly one JSON object"},
+		{name: "required", input: `{"kind":"work","payload":"brief"}`,
+			code: codeInvalidArgument, message: "include kind, payload, and consequence"},
+		{name: "unknown", input: `{"kind":"work","payload":"brief","consequence":"handling.create","extra":true}`,
+			code: codeInvalidArgument, message: "contains a non-canonical field"},
+		{name: "duplicate", input: `{"kind":"work","kind":"work","payload":"brief","consequence":"handling.create"}`,
+			code: codeInvalidArgument, message: "contains a duplicate JSON field"},
+		{name: "shape", input: `{"kind":"work","payload":"brief","consequence":"not.closed"}`,
+			code: codeInvalidArgument, message: "invalid canonical field or structural shape"},
+		{name: "field-bound",
+			input: `{"kind":"work","payload":"` + strings.Repeat("x", agency.MaxSemanticPayloadBytes+1) +
+				`","consequence":"handling.create"}`,
+			code: codeContentTooLarge, message: "exceeds a closed field or collection bound"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newAppFixture(t)
+			fixture.attach(t)
+			var output bytes.Buffer
+			exit := fixture.app(strings.NewReader(test.input), &output).
+				Run(context.Background(), []string{"agent", "submit", "--json"})
+			if exit != test.code.exitStatus() ||
+				!strings.Contains(output.String(), `"code":"`+string(test.code)+`"`) ||
+				!strings.Contains(output.String(), test.message) {
+				t.Fatalf("submit diagnostic = exit %d output %q", exit, output.String())
+			}
+			fixture.client.mu.Lock()
+			submitCalls := len(fixture.client.submitOperations)
+			fixture.client.mu.Unlock()
+			if submitCalls != 0 {
+				t.Fatalf("invalid input reached authority %d times", submitCalls)
+			}
+		})
+	}
+}
+
 func TestCaptureKeepsDigestPrivateAndSubmitReplaysAfterPresentationLoss(t *testing.T) {
 	fixture := newAppFixture(t)
 	fixture.attach(t)

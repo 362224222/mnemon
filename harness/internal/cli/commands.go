@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
@@ -161,8 +162,7 @@ func (app *App) runSubmit(ctx context.Context, store *journalStore, client agenc
 	defer clear(raw)
 	intent, err := agency.ParseAgentIntentJSON(raw)
 	if err != nil {
-		return app.writeError(newControlError(codeInvalidArgument,
-			"Intent input is not one canonical AgentIntent"))
+		return app.writeError(intentInputControlError(err))
 	}
 	var receipt []byte
 	var terminal clientJournal
@@ -229,6 +229,32 @@ func (app *App) runSubmit(ctx context.Context, store *journalStore, client agenc
 	defer terminal.clear()
 	app.finishPresentedReceipt(ctx, store, client, terminal)
 	return 0
+}
+
+func intentInputControlError(err error) *controlError {
+	if errors.Is(err, agency.ErrLimit) {
+		return newControlError(codeContentTooLarge,
+			"Intent input exceeds a closed field or collection bound")
+	}
+	var validation *agency.ValidationError
+	if errors.As(err, &validation) {
+		switch {
+		case strings.Contains(validation.Problem, "omits a required field"):
+			return newControlError(codeInvalidArgument,
+				"Intent input must include kind, payload, and consequence")
+		case strings.Contains(validation.Problem, "duplicate object key"):
+			return newControlError(codeInvalidArgument,
+				"Intent input contains a duplicate JSON field")
+		case strings.Contains(validation.Problem, "non-canonical field name"):
+			return newControlError(codeInvalidArgument,
+				"Intent input contains a non-canonical field")
+		default:
+			return newControlError(codeInvalidArgument,
+				"Intent input has an invalid canonical field or structural shape")
+		}
+	}
+	return newControlError(codeInvalidArgument,
+		"Intent input must be exactly one JSON object without Markdown or trailing text")
 }
 
 func (app *App) finishPresentedReceipt(ctx context.Context, store *journalStore,

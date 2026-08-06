@@ -1,12 +1,12 @@
 ---
 name: mnemond
-description: Use the bounded mnemond View, submit one allowed Intent, and trust only its Receipt.
+description: Read a bounded View, submit one allowed Intent, and trust its Receipt.
 ---
 
 # mnemond
 
-mnemond gives this runtime a durable, bounded action view. It neither plans the
-work nor treats model output as fact.
+mnemond exposes a bounded action View. It neither plans work nor treats
+model output as fact.
 
 Use one loop:
 
@@ -15,30 +15,33 @@ View -> Intent -> Receipt
 ```
 
 One Host turn owns one Attachment and at most one accepted Intent. Only the
-Runtime extension invokes `hook attach` or `hook end`. Reasoning, tools, and
-Runtime-private helpers stay private. Persist only results that must survive as
-an Artifact, Event, or Reference. Gather evidence before the Intent. A rejected
-Receipt creates no Effect; amend or defer. After acceptance, make no further
-mnemond mutation that turn. Execute at most one `agent submit` process in each
-Bash tool call; let its result return before correcting or retrying. One request
-may name all View-offered successors.
+Runtime extension invokes `hook attach` or `hook end`; private reasoning, tools,
+and helpers stay private. Persist only results that must survive as an Artifact,
+Event, or Reference. Gather evidence first. A rejected Receipt creates no
+Effect; amend or defer. After acceptance, make no further mnemond mutation that
+turn. Run submit attempts sequentially, read each result before correcting, and
+never background or parallelize them. One request may name all offered
+successors.
 
-This guide and the current View are the complete Agent-facing surface. Do not
-discover protocol state through setup, peer, status, or help. `mnemon-harness` is already on
-`PATH`; do not locate its binary or inspect the Runtime extension. Use only:
+This guide and View are the Agent surface. Do not discover
+protocol state through setup, peer, status, or help. `mnemon-harness` is already on
+`PATH`; do not locate it or inspect the Runtime extension. Use only:
 
 ```sh
 mnemon-harness agent current --json
 mnemon-harness artifact capture --json < PATH
 mnemon-harness artifact read "$HANDLE"
-printf '%s' "$INTENT_JSON" | mnemon-harness agent submit --json
+mnemon-harness agent submit --json <<'JSON'
+{"kind":"MEANING","payload":"BRIEF","consequence":"VIEW_OFFERED_CONSEQUENCE"}
+JSON
 ```
 
-Choose meaning, targets, and consequences from the task and View. Commands only
-transport that decision. View targets are usable aliases; a remote peer cannot
-invoke local tools. Carry the minimum evidence needed to evaluate a claim;
-saying evidence exists is not evidence. These examples show syntax only;
-replace every all-capital placeholder with bounded task, View, or capture data:
+Choose meaning, targets, and consequences from the task and View; commands only
+transport it. A remote peer cannot invoke local tools. Carry minimum
+evidence; saying it exists is not evidence. Submit stdin as exactly one nonempty
+JSON object with `kind`, `payload`, and `consequence`; use no Markdown fence or
+trailing shell text. Examples show syntax only. Replace all-capital placeholders
+with bounded task, View, or capture data:
 
 ```json
 {"kind":"MEANING","payload":"BRIEF","consequence":"handling.create","successors":[{"self":true},{"alias":"VIEW_TARGET"}]}
