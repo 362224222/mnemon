@@ -489,6 +489,23 @@ write_submit_stream() {
   jq -nc '{type:"agent_end"}' >>"$destination"
 }
 
+write_native_submit_stream() {
+  local destination=$1 result=$2
+  jq -nc '{type:"message_start",message:{role:"custom",customType:"mnemond"}}' \
+    >"$destination"
+  jq -nc '{type:"tool_execution_start",toolCallId:"native-submit",toolName:"mnemond_submit",
+    args:{intent:{kind:"opaque",payload:"bounded",consequence:"handling.advance"}}}' \
+    >>"$destination"
+  jq -nc --arg text "$result" \
+    '{type:"tool_execution_end",toolCallId:"native-submit",toolName:"mnemond_submit",
+      isError:false,result:{content:[{type:"text",text:$text}],
+        details:{schema:"mnemon.pi.effect",version:1,status:"settled"}}}' \
+    >>"$destination"
+  jq -nc '{type:"message_end",message:{role:"assistant",stopReason:"stop"}}' \
+    >>"$destination"
+  jq -nc '{type:"agent_end"}' >>"$destination"
+}
+
 write_sequential_submit_stream() {
   local destination=$1 count=$2
   shift 2
@@ -636,6 +653,18 @@ fi
 accepted_receipt='{"schema":"mnemon.agent.receipt","version":1,"outcome":"accepted","replayed":false}'
 rejected_receipt='{"schema":"mnemon.agent.receipt","version":1,"outcome":"rejected","replayed":false,"diagnostic":"bounded correction required"}'
 closed_denial='{"code":"context_required","message":"a bounded View is required","operation_id":null,"replayed":false,"retryable":false,"schema_version":1,"status":"error"}'
+write_native_submit_stream "$scratch/native-submit.jsonl" "$accepted_receipt"
+sanitize_turn lead oracle-native-submit "$scratch/native-submit.jsonl" \
+  "$scratch/native-submit.json"
+jq -e '
+  .bash_calls == 0 and .submit_attempts == 1 and .intent_submits == 1 and
+  .accepted_receipts == 1 and .rejected_receipts == 0
+' "$scratch/native-submit.json" >/dev/null
+native_partial=$(summarize_partial_turn "$scratch/native-submit.jsonl")
+jq -e '
+  .submit_command_occurrences == 1 and .submit_ends == 1 and
+  .submit_command_cardinality == {"1":1} and .accepted_receipts == 1
+' <<<"$native_partial" >/dev/null
 write_submit_stream "$scratch/accounted.jsonl" "$accepted_receipt" "$closed_denial"
 sanitize_turn lead oracle-accounted "$scratch/accounted.jsonl" "$scratch/accounted.json"
 jq -e '

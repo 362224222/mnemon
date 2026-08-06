@@ -91,8 +91,8 @@
           "test": "./internal/authority::TestAttachmentSchemaAllowsOneUnendedInteractiveBoundaryPerPrincipal"
         },
         {
-          "id": "pi-host-boundary-uses-lifecycle-callbacks",
-          "test": "./internal/attach::TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface"
+          "id": "pi-host-boundary-has-one-cue-and-bounded-receipt",
+          "test": "./internal/attach::TestLoadHasOneFixedCueOneBoundedReceiptAndNoAuthorityOrSecretSurface"
         },
         {
           "id": "pi-host-retries-one-private-boundary",
@@ -397,8 +397,12 @@
           "test": "./internal/agency::TestVerifiedPeerArtifactBounds"
         },
         {
-          "id": "pi-tool-call-budget-fails-closed",
-          "test": "./internal/attach::TestPiHookBoundsGovernedToolAttemptsAndRestoresAtSettlement"
+          "id": "pi-effect-settlement-is-fixed-and-no-shell",
+          "test": "./internal/attach::TestPiEffectSettlementUsesOneNativeBoundedToolWithoutShellInference"
+        },
+        {
+          "id": "pi-exploration-and-effect-budgets-fail-closed",
+          "test": "./internal/attach::TestPiHookSeparatesExplorationFromBoundedEffectSettlement"
         },
         {
           "id": "reference-projection-bound-fails-closed",
@@ -573,9 +577,10 @@
             "test:./internal/agency::TestVerifiedPeerDeliveryRequiresParsedEnvelopeAndCompleteArtifacts",
             "test:./internal/attach::TestGuideDeclineExampleReturnsCorrelatedDisposition",
             "test:./internal/attach::TestGuideResponseExampleAtomicallyClosesAndReturnsCorrelatedEvidence",
-            "test:./internal/attach::TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface",
-            "test:./internal/attach::TestPiHookBoundsGovernedToolAttemptsAndRestoresAtSettlement",
+            "test:./internal/attach::TestLoadHasOneFixedCueOneBoundedReceiptAndNoAuthorityOrSecretSurface",
+            "test:./internal/attach::TestPiEffectSettlementUsesOneNativeBoundedToolWithoutShellInference",
             "test:./internal/attach::TestPiHookRetriesOnePrivateBoundaryAndEmitsNoCueOnFailure",
+            "test:./internal/attach::TestPiHookSeparatesExplorationFromBoundedEffectSettlement",
             "test:./internal/authority::TestAcceptedOperationReplayPrecedesStaleSubjectAndReferenceAuthority",
             "test:./internal/authority::TestAdmissionRejectsSameOperationKeyWithDifferentRequestDigest",
             "test:./internal/authority::TestAdmissionRequiresExactDurablyIssuedView",
@@ -643,6 +648,17 @@
             "test:./internal/cli::TestPresentedTerminalCannotReactivateAfterBoundaryEndFailure",
             "test:./internal/cli::TestSameHookAttachFinishesPresentedHandlingButNeverReturnsReady",
             "test:./internal/daemon::TestAttachmentBeginResponseExactlyReplaysAcrossDaemonRestart"
+          ]
+        },
+        {
+          "id": "pi-runtime",
+          "kind": "shell",
+          "argv": [
+            "bash",
+            "harness/test/r7/runtime/pi/run_delegate_oracle.sh"
+          ],
+          "oracles": [
+            "stdout:pi Runtime oracle: PASS"
           ]
         },
         {

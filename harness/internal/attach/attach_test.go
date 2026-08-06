@@ -16,7 +16,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
-func TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface(t *testing.T) {
+func TestLoadHasOneFixedCueOneBoundedReceiptAndNoAuthorityOrSecretSurface(t *testing.T) {
 	projection, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -42,8 +42,9 @@ func TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface(t *testing.T) {
 			t.Fatalf("Pi extension lacks %q", required)
 		}
 	}
-	if strings.Count(source, "content:") != 1 || !strings.Contains(source, cue) {
-		t.Fatal("fixed cue is not the extension's unique model-content source")
+	if strings.Count(source, "content: HOOK_CUE") != 1 ||
+		strings.Count(source, "text: receiptText") != 1 || !strings.Contains(source, cue) {
+		t.Fatal("extension does not expose exactly one fixed cue and one bounded Receipt surface")
 	}
 	for _, forbidden := range []string{`pi.on("turn_end"`, `pi.on("agent_end"`} {
 		if strings.Contains(source, forbidden) {
@@ -55,7 +56,7 @@ func TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface(t *testing.T) {
 		"review", "workflow", "case", "contract-net", "blackboard", "memory.wiki",
 		"--event-id", "--operation-id", "--principal", "--fence", "--peer-id",
 		"deepseek", "api_key", "api-key", "authorization:", "bearer ", "sk-",
-		"process.env", "content: output", "content: result", "json.parse(",
+		"process.env", "content: output", "content: result", "text: output", "text: result", "json.parse(",
 		"model:", "provider:",
 	} {
 		if strings.Contains(all, forbidden) {
@@ -89,7 +90,7 @@ func assertGuideTerminalSurface(t *testing.T, guide string) {
 	for _, required := range []string{
 		"Current is the local anchor; self creates responsibility, not reply keepalive",
 		"self anchors the outcome. Sending is not completion",
-		"Artifact is only the completed floor: locally verify the requested contribution first",
+		"Completed needs a verified local Artifact",
 		"`current.facts.reply_required` is machine-owned",
 		"When true and current asks for evidence, action, or a decision, return one correlated terminal disposition",
 		"including declined or unresolved; never close silently",
@@ -409,7 +410,7 @@ func TestPiHookRetriesOnePrivateBoundaryAndEmitsNoCueOnFailure(t *testing.T) {
 	}
 }
 
-func TestPiHookBoundsGovernedToolAttemptsAndRestoresAtSettlement(t *testing.T) {
+func TestPiHookSeparatesExplorationFromBoundedEffectSettlement(t *testing.T) {
 	projection, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -421,9 +422,11 @@ func TestPiHookBoundsGovernedToolAttemptsAndRestoresAtSettlement(t *testing.T) {
 		"toolCallAttempts < MAX_TOOL_CALL_ATTEMPTS_PER_RUN",
 		"savedActiveTools = [...pi.getActiveTools()];",
 		"ownsToolOverride = true;",
-		"pi.setActiveTools([]);",
+		"savedActiveTools.includes(EFFECT_SETTLEMENT_TOOL)",
+		"settlementAllowed ? [EFFECT_SETTLEMENT_TOOL] : []",
 		"return { block: true, reason: ATTENTION_EXHAUSTED_REASON };",
-		"if (postBudgetTurns > 1) abortOnce(ctx);",
+		"postBudgetTurns > MAX_EFFECT_SETTLEMENT_ATTEMPTS - effectSettlementAttempts",
+		"if (postSettlementFinalTurns > 1) abortOnce(ctx);",
 		"pi.setActiveTools(savedActiveTools);",
 	} {
 		if !strings.Contains(source, required) {

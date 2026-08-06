@@ -57,4 +57,4 @@ docker run --rm --entrypoint node \
   --mount "type=bind,src=$attention_extension,dst=/attention-test/mnemond.ts,readonly" \
   "$image" --experimental-strip-types /delegate-test/attention-budget.test.mjs
 
-printf 'pi delegate Runtime oracle: PASS\n'
+printf 'pi Runtime oracle: PASS\n'

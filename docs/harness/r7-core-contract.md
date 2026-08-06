@@ -568,16 +568,25 @@ per Event, keeps at most eight active References and eight active Peer routes,
 and limits semantic payload to 4 KiB of JSON-encoded string content; larger
 content belongs in an Artifact. Agent and peer input that exceeds a bound fails
 closed rather than being truncated, and no semantic payload can raise a bound.
-The Pi reference attachment admits at most sixteen tool calls in one governed
-run. The next call is blocked before execution, later calls in the same batch
-remain blocked, and the Runtime receives one tool-free turn to summarize
-existing evidence before a repeated turn is aborted. Automatic retry or
-compaction cannot refresh this budget: the attachment restores the exact tool
-set captured at cutoff only after Pi reports the whole run settled. Attachment
-failure leaves an ordinary Pi run untouched. A failed tool restore retains the
-exact snapshot and prevents a later governed run until restoration succeeds.
-This is a Runtime attention bound; it creates no Event, Receipt, completion, or
-other domain fact.
+The Pi reference attachment separates two closed budgets in one governed run:
+at most sixteen exploration tool calls and at most two calls to one native
+Effect-settlement tool. The latter executes only the fixed
+`mnemon-harness agent submit --json` argv without a shell, accepts one bounded
+Intent object on stdin, and returns only the bounded Agent-terminal result. It
+does not inspect Event kind or payload, choose an Intent, or imply acceptance.
+The first excess exploration call is blocked before execution and later
+exploration calls remain blocked. At cutoff, only the settlement tool may
+remain active, and only when it was already present in the Host tool snapshot;
+the attachment never widens the Host allowlist. The two-call limit permits one
+correction after rejection. Once cutoff has occurred, the final settlement
+attempt disables tools and leaves one bounded final-response turn. If no
+settlement is submitted, the remaining post-cutoff turns are bounded by the
+unused settlement slots. Automatic retry or compaction cannot refresh either budget:
+the attachment restores the exact tool set captured at cutoff only after Pi
+reports the whole run settled. Attachment failure leaves an ordinary Pi run
+untouched. A failed tool restore retains the exact snapshot and prevents a
+later governed run until restoration succeeds. These are Runtime attention
+bounds; they create no Event, Receipt, completion, or other domain fact.
 These cross-field maxima are tested together, not only one at a time, so every
 accepted responsibility remains representable within the 16 KiB private and
 Agent View envelopes. Internal
@@ -705,7 +714,7 @@ mnemond does not promote that requirement into a global rule.
 
 | Gate | Requirement |
 |---|---|
-| `G-R7-CORE` | Unit, race, and process suites cover P-01 through P-10 and every named sub-assertion in section 10 with independent oracles. |
+| `G-R7-CORE` | Unit, race, process, and pinned Pi Runtime suites cover P-01 through P-10 and every named sub-assertion in section 10 with independent oracles. |
 | `G-R7-CASES` | `review/`, `contract-net/`, and `blackboard/` fixtures all exist under `harness/testdata/r7/cases/`, run, and pass their independent deterministic oracles. |
 | `G-R7-PATTERN-FREE` | In a temporary copy, deleting both `harness/testdata/r7/examples/` and `harness/testdata/r7/cases/` leaves the P-01 through P-10 Core conformance command passing; case acceptance and case-presence checks are excluded from this deletion run. |
 | `G-R7-NO-CASE-KIND` | No production Go source contains a case-specific kind literal such as `review.request`. |
@@ -752,7 +761,7 @@ unbound, partially proven, or failing.
 | P-06 | Authenticated delivery is re-admitted under the restricted peer subset; rejection creates no receiving fact; acceptance creates a new receiving Event, preserves provenance and an unchanged stable correlation root, resolves the target locally, and follows the bounded outbox/inbox lifecycle; a View offers a route only to its fixed local-target Principal; ordinary imported work preserves `reply_required=true` and its authenticated reply context across local advances; every ordinary remote-directed Event atomically binds each outbox to its exact source-local open reply anchor and machine-derived expected reply root — the current Handling for subject advance, or a new source-local successor for root and ordinary resolve — while an exact correlated terminal disposition closes only the responder's imported Handling, creates exactly one unanchored return delivery, and cannot request another reply; terminal return admission requires the exact bound route, root, Principal, and still-open Handling; missing correlation or binding, a closed anchor, wrong Principal, and wrong route reject regardless of `kind` or payload; an imported integration standing alone grants no reply authority, but a later explicit local ordinary outbound Intent may bind that still-open Handling as its new anchor; an accepted terminal response creates a separate integration Handling with `reply_required=false`, no `reply_target`, and no automatic effect on the requester anchor; stale routes, remote rejection, and expiry cannot change these rules. |
 | P-07 | Same key/same digest replays the byte-stable attachment-begin proof, frozen View including its focus projection, admission Receipt, or internal outcome before the relevant mutable validation; same key/different digest conflicts; Host retries reuse one nonce and compare replayed proof with private journal authority; response loss, missing journal commit, restart, and retry create at most one attachment, claim, local Event, or machine disposition; begin replay never renews expiry or revives an ended boundary. |
 | P-08 | Valid first-publish key creation without a prior handle, invalid key rejection, first-publish CAS, concurrent first publish, active supersede, tombstone retract/reactivation, stale head, forward reference, concurrent mutation, and replay all match section 5; a provenance citation records the exact head, mutates nothing, and cannot stand in for a Reference action. |
-| P-09 | Any missing or mismatched Artifact keeps peer input unadmitted and cannot activate a Reference or complete; every Agent/peer resource bound fails closed independently and payload cannot raise it; Pi executes no more than sixteen tool calls per governed run, blocks the excess batch, permits one tool-free settlement turn, and cannot refresh the budget through automatic continuation; the maximum accepted payload, Artifact, Reference, route, current, and related combination remains representable; related evidence has explicit prefix/count/truncation, and JSON-escaped current plus related payloads cannot overflow the focus or canonical View budget; more than the expiry-maintenance limit settles only the bounded prefix and leaves all excess claims unchanged for later natural turns. |
+| P-09 | Any missing or mismatched Artifact keeps peer input unadmitted and cannot activate a Reference or complete; every Agent/peer resource bound fails closed independently and payload cannot raise it; Pi executes no more than sixteen exploration calls plus two calls to its fixed no-shell Effect-settlement tool per governed run, never re-enables a Host-disabled tool, blocks excess calls, and after cutoff allows only one bounded final-response turn after the last settlement attempt; automatic continuation cannot refresh either budget; the maximum accepted payload, Artifact, Reference, route, current, and related combination remains representable; related evidence has explicit prefix/count/truncation, and JSON-escaped current plus related payloads cannot overflow the focus or canonical View budget; more than the expiry-maintenance limit settles only the bounded prefix and leaves all excess claims unchanged for later natural turns. |
 | P-10 | Only explicit completed with attached verified Artifact projects completed; other terminal outcomes close without Artifact; final/exit/idle/provider/ACK/disposition cannot complete. |
 
 Ten rows is the point. A row may bind several test symbols, but it is verified

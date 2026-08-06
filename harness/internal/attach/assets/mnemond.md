@@ -13,8 +13,10 @@ After the cue, `mnemon-harness` is already on `PATH`. Read one View:
 mnemon-harness agent current --json
 ```
 
-Choose one `allowed_intents` shape. Submit once, correct one rejection, then
-stop. No effect means no Intent.
+Choose one `allowed_intents` shape. Submit once; correct one rejection; stop.
+No effect means no Intent.
+
+Pi: `mnemond_submit` sends it; if Host-enabled, it may remain after cutoff.
 
 ## Offered shapes
 
@@ -24,8 +26,8 @@ stop. No effect means no Intent.
 - Current: copy `current.facts.handle` to `subject_handling`; use
   `handling.advance`, `handling.resolve.completed`,
   `handling.resolve.declined`, or `handling.resolve.unresolved`. Current is the
-  local anchor; self creates responsibility, not reply keepalive. Artifact is
-  only the completed floor: locally verify the requested contribution first.
+  local anchor; self creates responsibility, not reply keepalive. Completed
+  needs a verified local Artifact.
 - Reference: `reference.publish` takes `reference_key` plus one Artifact;
   `reference.supersede` takes offered `reference_head` plus one; and
   `reference.retract` takes only the head. Omit successors.

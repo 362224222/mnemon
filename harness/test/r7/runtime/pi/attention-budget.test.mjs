@@ -12,19 +12,25 @@ async function withFakeHarness(fn) {
   const directory = await mkdtemp(path.join(tmpdir(), "mnemon-pi-attention-"));
   const executable = path.join(directory, "mnemon-harness");
   const log = path.join(directory, "calls.log");
+  const submitInput = path.join(directory, "submit.jsonl");
   const oldPath = process.env.PATH;
   const oldLog = process.env.MNEMON_HOOK_LOG;
   const oldFail = process.env.MNEMON_HOOK_FAIL;
+  const oldSubmitInput = process.env.MNEMON_SUBMIT_INPUT;
   await writeFile(
     executable,
-    '#!/bin/sh\ncat >/dev/null\nprintf "%s\\n" "$*" >>"$MNEMON_HOOK_LOG"\ntest "${MNEMON_HOOK_FAIL:-0}" != 1\n',
+    '#!/bin/sh\ninput=$(cat)\nprintf "%s\\n" "$*" >>"$MNEMON_HOOK_LOG"\n' +
+      'if test "$*" = "agent submit --json"; then printf "%s\\n" "$input" >>"$MNEMON_SUBMIT_INPUT"; ' +
+      'printf "%s\\n" \'{"schema":"mnemon.agent.receipt","version":1,"outcome":"accepted","replayed":false}\'; fi\n' +
+      'test "${MNEMON_HOOK_FAIL:-0}" != 1\n',
   );
   await chmod(executable, 0o755);
   process.env.PATH = `${directory}:${oldPath ?? ""}`;
   process.env.MNEMON_HOOK_LOG = log;
+  process.env.MNEMON_SUBMIT_INPUT = submitInput;
   delete process.env.MNEMON_HOOK_FAIL;
   try {
-    await fn({ log });
+    await fn({ log, submitInput });
   } finally {
     if (oldPath === undefined) delete process.env.PATH;
     else process.env.PATH = oldPath;
@@ -32,6 +38,8 @@ async function withFakeHarness(fn) {
     else process.env.MNEMON_HOOK_LOG = oldLog;
     if (oldFail === undefined) delete process.env.MNEMON_HOOK_FAIL;
     else process.env.MNEMON_HOOK_FAIL = oldFail;
+    if (oldSubmitInput === undefined) delete process.env.MNEMON_SUBMIT_INPUT;
+    else process.env.MNEMON_SUBMIT_INPUT = oldSubmitInput;
     await rm(directory, { recursive: true, force: true });
   }
 }
@@ -39,6 +47,7 @@ async function withFakeHarness(fn) {
 function fakePi(initialTools = ["bash", "read", "delegate"]) {
   const handlers = new Map();
   const setCalls = [];
+  const registeredTools = new Map();
   let activeTools = [...initialTools];
   let getFailure = false;
   let setFailure = false;
@@ -56,6 +65,11 @@ function fakePi(initialTools = ["bash", "read", "delegate"]) {
       if (setFailure) throw new Error("set failure");
       activeTools = [...names];
     },
+    registerTool(tool) {
+      assert.equal(registeredTools.has(tool.name), false, `duplicate ${tool.name} tool`);
+      registeredTools.set(tool.name, tool);
+      if (!activeTools.includes(tool.name)) activeTools.push(tool.name);
+    },
   };
   mnemondExtension(pi);
   return {
@@ -65,6 +79,7 @@ function fakePi(initialTools = ["bash", "read", "delegate"]) {
     replaceTools: (tools) => { activeTools = [...tools]; },
     failGet: (value) => { getFailure = value; },
     failSet: (value) => { setFailure = value; },
+    tool: (name) => registeredTools.get(name),
   };
 }
 
@@ -87,7 +102,7 @@ async function exhaust(runtime, context) {
   return toolCall({ toolName: "bash", toolCallId: "17" }, context);
 }
 
-test("a governed Pi run executes at most sixteen tool calls and gets one tool-free settlement turn", async () => {
+test("a governed Pi run preserves only a bounded native Effect slot after sixteen exploration calls", async () => {
   await withFakeHarness(async ({ log }) => {
     const runtime = fakePi();
     const abort = abortContext();
@@ -98,26 +113,89 @@ test("a governed Pi run executes at most sixteen tool calls and gets one tool-fr
     assert.match(blocked.reason, /Attention budget exhausted/);
     assert.match(blocked.reason, /This tool did not run/);
     assert.doesNotMatch(blocked.reason.toLowerCase(), /accepted|completed|receipt/);
-    assert.deepEqual(runtime.activeTools(), []);
-    assert.deepEqual(runtime.setCalls, [[]]);
+    assert.deepEqual(runtime.activeTools(), ["mnemond_submit"]);
+    assert.deepEqual(runtime.setCalls, [["mnemond_submit"]]);
 
     const alsoBlocked = await runtime.handlers.get("tool_call")(
       { toolName: "read", toolCallId: "18" },
       abort.context,
     );
     assert.equal(alsoBlocked.block, true);
-    assert.deepEqual(runtime.setCalls, [[]], "a parallel excess call changed the saved tool snapshot");
+    assert.deepEqual(runtime.setCalls, [["mnemond_submit"]], "a parallel excess call changed the saved tool snapshot");
 
     await runtime.handlers.get("turn_start")({ turnIndex: 2 }, abort.context);
-    assert.equal(abort.count(), 0, "the single tool-free settlement turn was aborted");
+    assert.equal(abort.count(), 0, "the first Effect settlement opportunity was aborted");
     await runtime.handlers.get("turn_start")({ turnIndex: 3 }, abort.context);
+    assert.equal(abort.count(), 0, "the correction opportunity was aborted");
     await runtime.handlers.get("turn_start")({ turnIndex: 4 }, abort.context);
     assert.equal(abort.count(), 1, "the hard fallback was not idempotent");
 
     await runtime.handlers.get("agent_settled")({}, {});
-    assert.deepEqual(runtime.activeTools(), ["bash", "read", "delegate"]);
-    assert.deepEqual(runtime.setCalls, [[], ["bash", "read", "delegate"]]);
+    assert.deepEqual(runtime.activeTools(), ["bash", "read", "delegate", "mnemond_submit"]);
+    assert.deepEqual(runtime.setCalls, [
+      ["mnemond_submit"],
+      ["bash", "read", "delegate", "mnemond_submit"],
+    ]);
     assert.deepEqual((await readFile(log, "utf8")).trim().split("\n"), ["hook attach --json"]);
+  });
+});
+
+test("Effect settlement is separate from exploration and executes exactly one fixed stdin command", async () => {
+  await withFakeHarness(async ({ log, submitInput }) => {
+    const runtime = fakePi(["bash", "read"]);
+    const abort = abortContext();
+    await attach(runtime);
+    const toolCall = runtime.handlers.get("tool_call");
+    const submit = runtime.tool("mnemond_submit");
+    const firstIntent = { kind: "opaque.first", payload: "one", consequence: "handling.advance" };
+    const secondIntent = { kind: "opaque.second", payload: "two", consequence: "handling.resolve.unresolved" };
+
+    assert.equal(await toolCall({ toolName: "mnemond_submit", toolCallId: "settle-1" }, abort.context), undefined);
+    const first = await submit.execute("settle-1", { intent: firstIntent }, new AbortController().signal);
+    assert.equal(first.details.status, "settled");
+    assert.match(first.content[0].text, /mnemon\.agent\.receipt/);
+    assert.equal(await runtime.handlers.get("tool_result")({
+      toolName: "mnemond_submit",
+      details: first.details,
+    }), undefined);
+
+    for (let attempt = 1; attempt <= 16; attempt += 1) {
+      assert.equal(await toolCall({ toolName: "bash", toolCallId: `explore-${attempt}` }, abort.context), undefined);
+    }
+    const blocked = await toolCall({ toolName: "read", toolCallId: "explore-17" }, abort.context);
+    assert.equal(blocked.block, true);
+    assert.deepEqual(runtime.activeTools(), ["mnemond_submit"]);
+
+    assert.equal(await toolCall({ toolName: "mnemond_submit", toolCallId: "settle-2" }, abort.context), undefined);
+    assert.deepEqual(runtime.activeTools(), [], "the second Effect attempt did not close the slot");
+    const second = await submit.execute("settle-2", { intent: secondIntent }, new AbortController().signal);
+    assert.equal(second.details.status, "settled");
+    assert.deepEqual(await runtime.handlers.get("tool_result")({
+      toolName: "mnemond_submit",
+      details: { schema: "mnemon.pi.effect", version: 1, status: "failed" },
+    }), { isError: true });
+    assert.deepEqual(await runtime.handlers.get("tool_result")({
+      toolName: "mnemond_submit",
+      details: { schema: "wrong", version: 1, status: "settled" },
+    }), { isError: true });
+    assert.deepEqual(await runtime.handlers.get("tool_result")({
+      toolName: "mnemond_submit",
+    }), { isError: true });
+    assert.equal((await toolCall({ toolName: "mnemond_submit", toolCallId: "settle-3" }, abort.context)).block, true);
+
+    await runtime.handlers.get("turn_start")({ turnIndex: 5 }, abort.context);
+    assert.equal(abort.count(), 0, "the final response turn after settlement was aborted");
+    await runtime.handlers.get("turn_start")({ turnIndex: 6 }, abort.context);
+    assert.equal(abort.count(), 1, "the final response bound did not close the run");
+    assert.deepEqual((await readFile(submitInput, "utf8")).trim().split("\n"), [
+      JSON.stringify(firstIntent),
+      JSON.stringify(secondIntent),
+    ]);
+    assert.deepEqual((await readFile(log, "utf8")).trim().split("\n"), [
+      "hook attach --json",
+      "agent submit --json",
+      "agent submit --json",
+    ]);
   });
 });
 
@@ -129,13 +207,13 @@ test("automatic continuation cannot regain tools before agent_settled", async ()
     await exhaust(runtime, abort.context);
 
     assert.equal(runtime.handlers.has("agent_end"), false);
-    assert.deepEqual(runtime.activeTools(), []);
+    assert.deepEqual(runtime.activeTools(), ["mnemond_submit"]);
     const blocked = await runtime.handlers.get("tool_call")(
       { toolName: "bash", toolCallId: "retry" },
       abort.context,
     );
     assert.equal(blocked.block, true);
-    assert.deepEqual(runtime.activeTools(), []);
+    assert.deepEqual(runtime.activeTools(), ["mnemond_submit"]);
 
     await runtime.handlers.get("agent_settled")({}, {});
     await attach(runtime);
@@ -146,6 +224,18 @@ test("automatic continuation cannot regain tools before agent_settled", async ()
       ),
       undefined,
     );
+  });
+});
+
+test("cutoff never re-enables a settlement tool removed by the Host allowlist", async () => {
+  await withFakeHarness(async () => {
+    const runtime = fakePi(["bash", "read"]);
+    const abort = abortContext();
+    await attach(runtime);
+    runtime.replaceTools(["bash", "read"]);
+    await exhaust(runtime, abort.context);
+    assert.deepEqual(runtime.activeTools(), []);
+    assert.deepEqual(runtime.setCalls.at(-1), []);
   });
 });
 
@@ -208,7 +298,7 @@ test("attachment and Host API failures stay bounded without creating a fresh too
       ),
       undefined,
     );
-    assert.deepEqual(runtime.activeTools(), ["bash"]);
+    assert.deepEqual(runtime.activeTools(), ["bash", "mnemond_submit"]);
 
     process.env.MNEMON_HOOK_FAIL = "0";
     await attach(runtime);
@@ -218,7 +308,7 @@ test("attachment and Host API failures stay bounded without creating a fresh too
     assert.equal(abort.count(), 1, "a failed tool override did not abort the run");
     runtime.failSet(false);
     await runtime.handlers.get("agent_settled")({}, {});
-    assert.deepEqual(runtime.activeTools(), ["bash"]);
+    assert.deepEqual(runtime.activeTools(), ["bash", "mnemond_submit"]);
 
     await attach(runtime);
     runtime.failGet(true);
@@ -236,18 +326,18 @@ test("a failed tool restore retains authority and blocks the next governed run",
     const abort = abortContext();
     await attach(runtime);
     await exhaust(runtime, abort.context);
-    assert.deepEqual(runtime.activeTools(), []);
+    assert.deepEqual(runtime.activeTools(), ["mnemond_submit"]);
 
     runtime.failSet(true);
     await runtime.handlers.get("agent_settled")({}, {});
-    assert.deepEqual(runtime.activeTools(), []);
+    assert.deepEqual(runtime.activeTools(), ["mnemond_submit"]);
     assert.equal(await runtime.handlers.get("before_agent_start")({}, {}), undefined);
-    assert.deepEqual(runtime.activeTools(), []);
+    assert.deepEqual(runtime.activeTools(), ["mnemond_submit"]);
     assert.deepEqual((await readFile(log, "utf8")).trim().split("\n"), ["hook attach --json"]);
 
     runtime.failSet(false);
     await attach(runtime);
-    assert.deepEqual(runtime.activeTools(), ["bash", "read"]);
+    assert.deepEqual(runtime.activeTools(), ["bash", "read", "mnemond_submit"]);
     assert.equal(
       await runtime.handlers.get("tool_call")(
         { toolName: "bash", toolCallId: "recovered" },

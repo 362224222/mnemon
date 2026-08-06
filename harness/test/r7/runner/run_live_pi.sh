@@ -287,12 +287,19 @@ r7_live_assert_pi_trace() {
       ((.args.command // "") | contains("mnemon-harness agent current --json")))
   ' "$events" >/dev/null || r7_live_fail 'Pi did not obtain an R7 View through the Agent terminal'
   jq -s -e '
-    any(.[]; .type == "tool_execution_start" and .toolName == "bash" and
-      ((.args.command // "") | contains("mnemon-harness agent submit --json")))
+    any(.[]; .type == "tool_execution_start" and
+      (.toolName == "mnemond_submit" or
+       (.toolName == "bash" and
+        ((.args.command // "") | contains("mnemon-harness agent submit --json")))))
   ' "$events" >/dev/null || r7_live_fail 'Pi did not submit an Intent through the Agent terminal'
   jq -s -e '
-    ([.[] | select(.type == "tool_execution_end" and .toolName == "bash" and
-      .isError == false and
+    ([.[] | select(.type == "tool_execution_start" and
+      (.toolName == "mnemond_submit" or
+       (.toolName == "bash" and
+        ((.args.command // "") | contains("mnemon-harness agent submit --json"))))) |
+      .toolCallId] | unique) as $submits |
+    ([.[] | select(.type == "tool_execution_end" and
+      (.toolCallId as $id | $submits | index($id) != null) and .isError == false and
       any((.result | .. | strings);
         contains("\"schema\":\"mnemon.agent.receipt\"") and
         contains("\"outcome\":\"accepted\"")))] | length) == 1

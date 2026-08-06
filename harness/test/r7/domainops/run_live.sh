@@ -467,6 +467,10 @@ sanitize_turn() {
     def invocation_count($verb): [command | scan(invocation_pattern($verb))] | length;
     def invokes($verb):
       (invocation_count($verb) > 0);
+    def is_submit_start:
+      .type == "tool_execution_start" and
+      (.toolName == "mnemond_submit" or
+       (.toolName == "bash" and invokes("submit")));
     def domain_invocation_pattern($verb):
       (("(^|[|;&\n])[[:space:]]*([^[:space:];|&]*/)?domainctl" +
         "(?:[[:space:]]+--?(?:role|endpoint|timeout)" +
@@ -525,10 +529,9 @@ sanitize_turn() {
       $assistant_ends |
     ([$stream[] | select(.type == "tool_execution_start" and .toolName == "bash" and
       invokes("current")) | .toolCallId] | unique) as $current_calls |
-    ([$stream[] | select(.type == "tool_execution_start" and .toolName == "bash" and
-      invokes("submit"))]) as $submit_starts |
+    ([$stream[] | select(is_submit_start)]) as $submit_starts |
     ([$submit_starts[].toolCallId] | unique) as $submit_calls |
-    ([$stream[] | select(.type == "tool_execution_end" and .toolName == "bash" and
+    ([$stream[] | select(.type == "tool_execution_end" and
       belongs($submit_calls))]) as $submit_ends |
     ([$submit_ends[] |
       (any(result_objects[];
@@ -724,6 +727,12 @@ summarize_partial_turn() {
       (("(^|[|;&\n][[:space:]]*)([^[:space:];|&]*/)?mnemon-harness" +
         "[[:space:]]+agent[[:space:]]+" + $verb + "([[:space:];|&]|$)"));
     def invocation_count($verb): [command | scan(invocation_pattern($verb))] | length;
+    def is_submit_start:
+      .type == "tool_execution_start" and
+      (.toolName == "mnemond_submit" or
+       (.toolName == "bash" and invocation_count("submit") > 0));
+    def submit_count:
+      if .toolName == "mnemond_submit" then 1 else invocation_count("submit") end;
     def result_strings:
       if (.result | type) == "object" and
           (.result.content? | type) == "array" then
@@ -747,10 +756,9 @@ summarize_partial_turn() {
       ] | index($code) != null) and
       (.retryable == (.code == "operation_pending" or .code == "mnemond_unavailable"));
     . as $stream |
-    ([$stream[] | select(.type == "tool_execution_start" and .toolName == "bash" and
-      invocation_count("submit") > 0)]) as $submit_starts |
+    ([$stream[] | select(is_submit_start)]) as $submit_starts |
     ([$submit_starts[].toolCallId] | unique) as $submit_calls |
-    ([$stream[] | select(.type == "tool_execution_end" and .toolName == "bash" and
+    ([$stream[] | select(.type == "tool_execution_end" and
       (.toolCallId as $id | $submit_calls | index($id) != null))]) as $submit_ends |
     {
       stream_records:length,
@@ -777,10 +785,10 @@ summarize_partial_turn() {
         .result.details.version == 1 and .result.details.status == "completed")] | length),
       current_attempts:([.[] | select(.type == "tool_execution_start" and
         .toolName == "bash" and (command | test("mnemon-harness[[:space:]]+agent[[:space:]]+current")))] | length),
-      submit_command_occurrences:([$submit_starts[] | invocation_count("submit")] | add // 0),
+      submit_command_occurrences:([$submit_starts[] | submit_count] | add // 0),
       submit_ends:($submit_ends | length),
       submit_command_cardinality:(reduce $submit_starts[] as $start ({};
-        ($start | invocation_count("submit") | tostring) as $count |
+        ($start | submit_count | tostring) as $count |
         .[$count] = ((.[$count] // 0) + 1))),
       submit_control_error_codes:(reduce ([$submit_ends[] | result_objects[] |
         select(valid_control_error) | .code][]) as $code ({};
@@ -790,23 +798,19 @@ summarize_partial_turn() {
           contains("\"schema\":\"mnemon.agent.receipt\"") or
           contains("\"schema_version\":1") and contains("\"status\":\"error\"")) | not) and
         .isError != true)] | length),
-      accepted_receipts:([.[] | select(.type == "tool_execution_end" and
-        .toolName == "bash" and any(result_strings;
+      accepted_receipts:([$submit_ends[] | select(any(result_strings;
           contains("\"schema\":\"mnemon.agent.receipt\"") and
           contains("\"outcome\":\"accepted\"")))] | length),
-      rejected_receipts:([.[] | select(.type == "tool_execution_end" and
-        .toolName == "bash" and any(result_strings;
+      rejected_receipts:([$submit_ends[] | select(any(result_strings;
           contains("\"schema\":\"mnemon.agent.receipt\"") and
           contains("\"outcome\":\"rejected\"")))] | length),
-      submit_denials:([$stream[] | select(.type == "tool_execution_end" and
-        .toolName == "bash" and (.toolCallId as $id | $submit_calls | index($id) != null) and
+      submit_denials:([$submit_ends[] | select(
         (any(result_strings;
           contains("\"schema\":\"mnemon.agent.receipt\"") and
           (contains("\"outcome\":\"accepted\"") or
             contains("\"outcome\":\"rejected\""))) | not) and
         any(result_objects[]; valid_control_error))] | length),
-      submit_invocation_failures:([$stream[] | select(.type == "tool_execution_end" and
-        .toolName == "bash" and (.toolCallId as $id | $submit_calls | index($id) != null) and
+      submit_invocation_failures:([$submit_ends[] | select(
         (any(result_strings;
           contains("\"schema\":\"mnemon.agent.receipt\"") or
           contains("\"schema_version\":1") and contains("\"status\":\"error\"")) | not) and
