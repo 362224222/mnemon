@@ -28,6 +28,7 @@ rounds=${DOMAIN_OPS_ROUNDS:-3}
 persisted_evidence_max_bytes=$((8 * 1024 * 1024))
 persisted_evidence_max_blocks=$((persisted_evidence_max_bytes / 1024))
 peer_quiescence_seconds=30
+first_attention_turn_limit=16
 report_path=${DOMAIN_OPS_REPORT:-$repository_root/.testdata/r7-domain-ops-live/last-report.json}
 trace_path=${DOMAIN_OPS_TRACE:-$repository_root/.testdata/r7-domain-ops-live/last.trace}
 failure_report_path=${DOMAIN_OPS_FAILURE_REPORT:-$repository_root/.testdata/r7-domain-ops-live/last-failure.json}
@@ -851,28 +852,29 @@ unpause_agent_containers() {
   test "$failed" = 0
 }
 
-snapshot_peer_delivery_occupancy() {
-  local attempt=$1 snapshot role container database values pending staged failed=0 total=0
-  snapshot="$runtime_root/quiescence/snapshot-$attempt"
-  rm -rf -- "$snapshot"
-  mkdir -p "$snapshot"
-  : >"$runtime_root/quiescence/counts.jsonl"
-
+capture_authority_snapshot() {
+  local destination=$1 role container failed=0
+  rm -rf -- "$destination"
+  mkdir -p "$destination"
   pause_agent_containers || return 1
   for role in $roles; do
     container=$(container_for "$role")
-    mkdir -p "$snapshot/$role"
+    mkdir -p "$destination/$role"
     if ! docker cp "$container:/workspace/.mnemon/harness/node/." \
-        "$snapshot/$role" >/dev/null; then
+        "$destination/$role" >/dev/null; then
       failed=1
       break
     fi
   done
   unpause_agent_containers || failed=1
-  if test "$failed" != 0; then
-    rm -rf -- "$snapshot"
-    return 1
-  fi
+  test "$failed" = 0
+}
+
+snapshot_peer_delivery_occupancy() {
+  local attempt=$1 snapshot role database values pending staged total=0
+  snapshot="$runtime_root/quiescence/snapshot-$attempt"
+  : >"$runtime_root/quiescence/counts.jsonl"
+  capture_authority_snapshot "$snapshot" || return 1
 
   for role in $roles; do
     database="$snapshot/$role/agency.db"
@@ -895,6 +897,103 @@ EOF
   done
   rm -rf -- "$snapshot"
   printf '%s\n' "$total"
+}
+
+snapshot_first_attention_debt() {
+  local episode=$1 wave=$2 snapshot role database values unseen active
+  local nodes="$runtime_root/first-attention/$episode-wave-$wave-nodes.jsonl"
+  local output="$runtime_root/first-attention/$episode-wave-$wave.json"
+  snapshot="$runtime_root/first-attention/snapshot-$episode-$wave"
+  : >"$nodes"
+  capture_authority_snapshot "$snapshot" || return 1
+
+  for role in $roles; do
+    database="$snapshot/$role/agency.db"
+    values=$(sqlite3 -readonly -batch -cmd '.timeout 5000' \
+      -cmd 'PRAGMA query_only=ON;' "$database" '
+        SELECT
+          (SELECT COUNT(*) FROM handlings
+            WHERE state = '\''open'\'' AND claim_fence = 0
+              AND claim_attachment_id IS NULL),
+          (SELECT COUNT(*) FROM handlings
+            WHERE state = '\''open'\'' AND claim_attachment_id IS NOT NULL);') || {
+      rm -rf -- "$snapshot"
+      return 1
+    }
+    IFS='|' read -r unseen active <<EOF
+$values
+EOF
+    case "$unseen" in ''|*[!0-9]*) rm -rf -- "$snapshot"; return 1 ;; esac
+    case "$active" in ''|*[!0-9]*) rm -rf -- "$snapshot"; return 1 ;; esac
+    jq -cn --arg role "$role" --argjson unseen "$unseen" --argjson active "$active" \
+      '{role:$role,unseen_open:$unseen,active_claims:$active}' >>"$nodes"
+  done
+  rm -rf -- "$snapshot"
+  jq -s '.' "$nodes" >"$output"
+  printf '%s\n' "$output"
+}
+
+run_first_attention_wave() {
+  local episode=$1 wave=$2 snapshot=$3 role pid failed=0
+  local wave_pids=()
+  while IFS= read -r role; do
+    run_turn "$role" "$neutral_attention" \
+      "$episode-attention-debt-$wave-$role" &
+    pid=$!
+    wave_pids+=("$pid")
+    turn_pids+=("$pid")
+  done < <(jq -r '.[] | select(.unseen_open > 0) | .role' "$snapshot")
+  for pid in "${wave_pids[@]}"; do
+    if ! wait "$pid"; then failed=1; fi
+  done
+  if test "$failed" != 0; then
+    fail "$episode first-attention wave $wave did not finish cleanly"
+    return 1
+  fi
+  turn_pids=()
+  wait_for_peer_delivery_quiescence "$episode-attention-debt-$wave"
+}
+
+settle_first_attention_debt() {
+  local episode=$1 wave=1 used=0 snapshot unseen active targets
+  local directory="$runtime_root/first-attention"
+  local waves="$directory/$episode-waves.jsonl"
+  local settlement="$directory/$episode-settlement.json"
+  mkdir -p "$directory"
+  : >"$waves"
+  while :; do
+    snapshot=$(snapshot_first_attention_debt "$episode" "$wave") || {
+      fail "$episode could not inspect protocol-neutral first-attention debt"
+      return 1
+    }
+    active=$(jq '[.[].active_claims] | add' "$snapshot")
+    if test "$active" -ne 0; then
+      failure_stage="scenario.$episode.attention-boundary-open"
+      fail "$episode first-attention snapshot found $active live claims"
+      return 1
+    fi
+    unseen=$(jq '[.[].unseen_open] | add' "$snapshot")
+    if test "$unseen" -eq 0; then
+      jq -n --arg episode "$episode" --argjson limit "$first_attention_turn_limit" \
+        --argjson used "$used" --argjson waves "$(jq -s '.' "$waves")" \
+        --argjson final "$(cat "$snapshot")" '
+          {episode:$episode,status:"settled",turn_limit:$limit,turns_used:$used,
+           waves:$waves,final_nodes:$final}
+        ' >"$settlement"
+      return 0
+    fi
+    targets=$(jq '[.[] | select(.unseen_open > 0)] | length' "$snapshot")
+    if test $((used + targets)) -gt "$first_attention_turn_limit"; then
+      failure_stage="scenario.$episode.attention-budget-exhausted"
+      fail "$episode first-attention debt exceeded the ${first_attention_turn_limit}-turn bound"
+      return 1
+    fi
+    jq -cn --argjson wave "$wave" --argjson nodes "$(cat "$snapshot")" \
+      '{wave:$wave,nodes:$nodes}' >>"$waves"
+    run_first_attention_wave "$episode" "$wave" "$snapshot" || return 1
+    used=$((used + targets))
+    wave=$((wave + 1))
+  done
 }
 
 wait_for_peer_delivery_quiescence() {
@@ -1377,6 +1476,7 @@ write_report() {
     --argjson episodes "$episodes" \
     --argjson turns "$(jq -s 'sort_by(.turn)' "$runtime_root/sanitized"/*.json)" \
     --argjson delivery_quiescence "$(jq -s '.' "$runtime_root/peer-quiescence.jsonl")" \
+    --argjson first_attention "$(jq -s '.' "$runtime_root/first-attention"/*-settlement.json)" \
     --argjson peer_effects "$(jq -s '.' "$runtime_root/peer-effects.jsonl")" \
     --argjson evolution_boundary "$(cat "$runtime_root/evolution-boundary.json")" \
     --argjson evolution_effects "$(jq -s '.' "$runtime_root/evolution-effects.jsonl")" \
@@ -1384,7 +1484,7 @@ write_report() {
     --argjson peer_effect_total "$total" '
       {
         schema:$schema,
-        version:2,
+        version:3,
         status:"passed",
         model:$model,
         rounds:$rounds,
@@ -1394,6 +1494,7 @@ write_report() {
         world:{episodes:$episodes},
         protocol:{accepted_peer_effects:$peer_effect_total,by_receiver:$peer_effects,
           delivery_quiescence:$delivery_quiescence,
+          first_attention_settlement:$first_attention,
           evolution:{boundary:$evolution_boundary,effects:$evolution_effects,
             accepted_reference_uses:$evolution_total}},
         turns:$turns,
@@ -1513,6 +1614,8 @@ main() {
   prepare_agents
   failure_stage=scenario.episode-1-agent-turns
   run_agents episode-1
+  failure_stage=scenario.episode-1-first-attention
+  settle_first_attention_debt episode-1
   failure_stage=scenario.episode-1-recovery
   assert_recovery episode-1 "$first_incident_prefix" "$first_evaluation_prefix" \
     "$first_stability_prefix"
@@ -1532,6 +1635,8 @@ main() {
   seed_incident episode-2 "$second_incident_prefix" west
   failure_stage=scenario.episode-2-agent-turns
   run_agents episode-2
+  failure_stage=scenario.episode-2-first-attention
+  settle_first_attention_debt episode-2
   failure_stage=scenario.episode-2-recovery
   assert_recovery episode-2 "$second_incident_prefix" "$second_evaluation_prefix" \
     "$second_stability_prefix"

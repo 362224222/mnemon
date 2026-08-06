@@ -64,15 +64,19 @@ authority state does that. `turns[].submit_control_diagnostics` retains only the
 bounded, deduplicated control code and safe CLI message needed to diagnose an
 Agent-surface failure; it contains no submitted Intent or provider prose.
 
-The passed runner report is `mnemon.r7.domain-ops.live-report` version 2. It
+The passed runner report is `mnemon.r7.domain-ops.live-report` version 3. It
 contains two ordered service-world episodes and a bounded authority boundary
-between them. A runner-attested sequence captured after the external recovery
+between them. Before either business oracle, its first-attention settlement
+records only protocol-derived `open && claim_fence == 0` counts, the bounded
+neutral turns given to those Principals, and a final zero-debt snapshot. It
+never records Event kinds, payloads, or expected remediation. A runner-attested
+sequence captured after the external recovery
 oracle starts the consolidation interval; the adapter independently verifies
 that every reported boundary head was accepted after that sequence, exists in
 the stopped Reference lineage, and is no newer than the end boundary. Every
 reported later use must be an exact causation or supersede/retract edge from a
 post-boundary accepted Event. It does not inspect Artifact bytes, semantic kinds, or remediation
-choices. Version 1 passed reports are intentionally not accepted as two-episode
+choices. Earlier passed-report versions are intentionally not accepted as two-episode
 evidence; failed reports retain their independent version-1 shape below.
 
 ## Failed-run input

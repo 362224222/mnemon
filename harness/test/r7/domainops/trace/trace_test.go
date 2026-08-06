@@ -651,7 +651,7 @@ func readRequiredFile(t *testing.T, path string) []byte {
 
 func validReport() liveReport {
 	var report liveReport
-	report.Schema, report.Version, report.Status = "mnemon.r7.domain-ops.live-report", 2, "passed"
+	report.Schema, report.Version, report.Status = "mnemon.r7.domain-ops.live-report", 3, "passed"
 	report.Model, report.Rounds = "deepseek-v4-flash", 1
 	report.Run = runReport{ID: "domain-ops-test", StartedAt: "2026-08-04T01:00:00Z",
 		FinishedAt: "2026-08-04T01:01:00Z", CandidateDigest: agency.Sum([]byte("candidate")).String()}
@@ -689,6 +689,14 @@ func validReport() liveReport {
 			barrier.Nodes = append(barrier.Nodes, deliveryNodeOccupancySummary{Role: role})
 		}
 		report.Protocol.DeliveryQuiescence = append(report.Protocol.DeliveryQuiescence, barrier)
+	}
+	for episode := 1; episode <= 2; episode++ {
+		settlement := firstAttentionSettlement{Episode: fmt.Sprintf("episode-%d", episode),
+			Status: "settled", TurnLimit: firstAttentionTurnLimit}
+		for _, role := range domainRoles {
+			settlement.Final = append(settlement.Final, firstAttentionNode{Role: role})
+		}
+		report.Protocol.FirstAttention = append(report.Protocol.FirstAttention, settlement)
 	}
 	for episode := 1; episode <= 2; episode++ {
 		report.Turns = append(report.Turns, turnSummary{Role: "lead",

@@ -35,6 +35,7 @@ type liveReport struct {
 		AcceptedPeerEffects int                         `json:"accepted_peer_effects"`
 		ByReceiver          []peerEffectSummary         `json:"by_receiver"`
 		DeliveryQuiescence  []deliveryQuiescenceSummary `json:"delivery_quiescence"`
+		FirstAttention      []firstAttentionSettlement  `json:"first_attention_settlement"`
 		Evolution           evolutionSummary            `json:"evolution"`
 	} `json:"protocol"`
 	Turns                      []turnSummary `json:"turns"`
@@ -203,7 +204,7 @@ func loadReport(path string) (liveReport, error) {
 }
 
 func validateReport(report liveReport) error {
-	if report.Schema != "mnemon.r7.domain-ops.live-report" || report.Version != 2 ||
+	if report.Schema != "mnemon.r7.domain-ops.live-report" || report.Version != 3 ||
 		report.Status != "passed" || report.Model == "" || report.Rounds < 1 || report.Rounds > 8 ||
 		report.RawProviderStreamsRetained || !report.Isolation.Passed ||
 		!report.Isolation.FreshRuntimeBetweenEpisodes {
@@ -229,18 +230,30 @@ func validateReport(report liveReport) error {
 	if err := validateWorld(report); err != nil {
 		return err
 	}
+	attention, err := validateReportProtocol(report)
+	if err != nil {
+		return err
+	}
+	return validateTurns(report.Rounds, report.Turns, attention.Turns)
+}
+
+func validateReportProtocol(report liveReport) (firstAttentionValidation, error) {
 	if err := validateProtocolSummary(report.Protocol.AcceptedPeerEffects,
 		report.Protocol.ByReceiver); err != nil {
-		return err
+		return firstAttentionValidation{}, err
+	}
+	attention, err := validateFirstAttention(report.Protocol.FirstAttention)
+	if err != nil {
+		return firstAttentionValidation{}, err
 	}
 	if err := validateDeliveryQuiescence(report.Rounds,
-		report.Protocol.DeliveryQuiescence); err != nil {
-		return err
+		report.Protocol.DeliveryQuiescence, attention.Barriers); err != nil {
+		return firstAttentionValidation{}, err
 	}
 	if err := validateEvolutionSummary(report.Protocol.Evolution); err != nil {
-		return err
+		return firstAttentionValidation{}, err
 	}
-	return validateTurns(report.Rounds, report.Turns)
+	return attention, nil
 }
 
 func validateProtocolSummary(total int, values []peerEffectSummary) error {
@@ -270,8 +283,10 @@ func validateProtocolSummary(total int, values []peerEffectSummary) error {
 	return nil
 }
 
-func validateDeliveryQuiescence(rounds int, values []deliveryQuiescenceSummary) error {
-	want := make(map[string]struct{}, 2*(rounds+1)+1)
+func validateDeliveryQuiescence(rounds int, values []deliveryQuiescenceSummary,
+	attention map[string]struct{},
+) error {
+	want := make(map[string]struct{}, 2*(rounds+1)+1+len(attention))
 	for episode := 1; episode <= 2; episode++ {
 		want[fmt.Sprintf("episode-%d-initial-lead", episode)] = struct{}{}
 		for round := 1; round <= rounds; round++ {
@@ -279,6 +294,9 @@ func validateDeliveryQuiescence(rounds int, values []deliveryQuiescenceSummary) 
 		}
 	}
 	want["episode-1-round-post-outcome"] = struct{}{}
+	for phase := range attention {
+		want[phase] = struct{}{}
+	}
 	if len(values) != len(want) {
 		return errors.New("sanitized live report has an incomplete delivery barrier summary")
 	}
@@ -305,8 +323,11 @@ func validateDeliveryQuiescence(rounds int, values []deliveryQuiescenceSummary) 
 	return nil
 }
 
-func validateTurns(rounds int, turns []turnSummary) error {
+func validateTurns(rounds int, turns []turnSummary, attention map[string]string) error {
 	expected := expectedTurnRoles(rounds)
+	for turn, role := range attention {
+		expected[turn] = role
+	}
 	if len(turns) != len(expected) {
 		return fmt.Errorf("sanitized live report has %d turns, want %d", len(turns), len(expected))
 	}
