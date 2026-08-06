@@ -81,7 +81,7 @@ func projectViewContentTx(ctx context.Context, tx *sql.Tx, principal agency.Agen
 	var reply currentReplyContext
 	if claim != nil {
 		var err error
-		reply, err = currentReplyContextTx(ctx, tx, claim.head)
+		reply, err = currentReplyContextTx(ctx, tx, claim.handlingID, claim.head)
 		if err != nil {
 			return err
 		}

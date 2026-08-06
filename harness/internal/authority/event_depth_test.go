@@ -36,6 +36,12 @@ func TestLocalCausalDepthInheritsEveryAcceptedInputWithoutAddingHop(t *testing.T
 
 	t.Run("subject", func(t *testing.T) {
 		handle := mustHandle(t, "subject:depth")
+		if _, err := fixture.store.db.Exec(`INSERT INTO handlings(
+			handling_id, target_principal_id, head_event_id, state, created_sequence)
+			VALUES('handling:depth', ?, ?, 'open', 100)`, fixture.principal.String(),
+			predecessor.ID().String()); err != nil {
+			t.Fatal(err)
+		}
 		subject, err := agency.NewSubjectBinding(handle, mustHandling(t, "handling:depth"),
 			predecessor, 1)
 		if err != nil {

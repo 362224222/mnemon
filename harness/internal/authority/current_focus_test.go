@@ -83,6 +83,111 @@ func TestImportedCurrentProjectsOneAuthenticatedReplyTarget(t *testing.T) {
 	})
 }
 
+func TestImportedHandlingKeepsReplyContextAcrossLocalAdvance(t *testing.T) {
+	fixture := newPeerRoundTripFixture(t)
+	request := fixture.admitOrigin(t)
+	fixture.admitReceiver(t, request)
+
+	firstView := fixture.receiver.current(t)
+	first := requireReplyContext(t, firstView, fixture.receiverRoute.PublicAlias.String(), "")
+	advance := subjectRequest(t, firstView, "operation:reply-context-advance",
+		agency.ConsequenceAdvanceHandling, "local work remains in progress", nil)
+	result, err := fixture.receiver.store.Admit(fixture.receiver.ctx, fixture.receiver.proof, advance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+
+	continuedView := fixture.receiver.current(t)
+	continued := requireReplyContext(t, continuedView, first.Current.Facts.ReplyTarget,
+		"local work remains in progress")
+	admitReplyFromContinuedHandling(t, fixture, continuedView, continued)
+	reply := requireOnePendingDelivery(t, fixture.receiver)
+	requireOriginCorrelation(t, reply, request.OriginEvent())
+	if reply.CausalDepth() != request.CausalDepth()+1 {
+		t.Fatalf("continued reply causal depth = %d; want %d",
+			reply.CausalDepth(), request.CausalDepth()+1)
+	}
+	requireRevokedRouteOmitsReplyTarget(t, fixture)
+	requireCorruptHandlingCreationFailsClosed(t, fixture)
+}
+
+func requireReplyContext(t *testing.T, view BoundView, wantTarget, wantPayload string) focusViewWire {
+	t.Helper()
+	result := decodeFocusView(t, view)
+	if result.Current == nil || result.Current.Facts.ReplyTo == "" ||
+		result.Current.Facts.ReplyTarget != wantTarget ||
+		(wantPayload != "" && result.Current.Semantic.Payload != wantPayload) {
+		t.Fatalf("imported reply context = %#v; want target %q payload %q",
+			result.Current, wantTarget, wantPayload)
+	}
+	return result
+}
+
+func admitReplyFromContinuedHandling(t *testing.T, fixture peerRoundTripFixture,
+	view BoundView, public focusViewWire,
+) {
+	t.Helper()
+	target, err := agency.AliasTarget(mustHandle(t, public.Current.Facts.ReplyTarget))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := mustIntent(t, agency.IntentSpec{
+		Kind:              mustLabel(t, "opaque.result"),
+		Payload:           mustPayload(t, "bounded work could not be completed"),
+		Consequence:       agency.ConsequenceAdvanceHandling,
+		SubjectHandling:   mustHandle(t, public.Current.Facts.Handle),
+		Successors:        []agency.TargetRef{target},
+		CorrelationHandle: mustHandle(t, public.Current.Facts.ReplyTo),
+	})
+	response, err := view.Bind(intent,
+		mustOperation(t, "operation:reply-context-result"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := fixture.receiver.store.Admit(fixture.receiver.ctx, fixture.receiver.proof, response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+}
+
+func requireRevokedRouteOmitsReplyTarget(t *testing.T, fixture peerRoundTripFixture) {
+	t.Helper()
+	if _, err := fixture.receiver.store.RevokePeerRoute(fixture.receiver.ctx,
+		fixture.receiverRoute.RouteID); err != nil {
+		t.Fatal(err)
+	}
+	revoked := decodeFocusView(t, fixture.receiver.current(t))
+	if revoked.Current == nil || revoked.Current.Facts.ReplyTo == "" ||
+		revoked.Current.Facts.ReplyTarget != "" ||
+		containsString(revoked.Targets, fixture.receiverRoute.PublicAlias.String()) {
+		t.Fatalf("reply context after route revocation = current:%#v targets:%v",
+			revoked.Current, revoked.Targets)
+	}
+}
+
+func requireCorruptHandlingCreationFailsClosed(t *testing.T, fixture peerRoundTripFixture) {
+	t.Helper()
+	resultSQL, err := fixture.receiver.store.db.Exec(`UPDATE handlings
+		SET created_sequence = (SELECT MAX(origin_sequence) + 1 FROM events)
+		WHERE state = 'open'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := requireOneRow(resultSQL, "corrupt Handling creation sequence"); err != nil {
+		t.Fatal(err)
+	}
+	operation, err := NewCurrentOperation(mustOperation(t, "operation:corrupt-reply-context"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.receiver.store.Current(fixture.receiver.ctx, fixture.receiver.proof,
+		operation); err == nil || !strings.Contains(err.Error(), "corrupt Handling creation authority") {
+		t.Fatalf("Current with corrupt Handling creation sequence = %v", err)
+	}
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {

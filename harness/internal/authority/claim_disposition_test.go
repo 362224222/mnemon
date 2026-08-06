@@ -131,7 +131,7 @@ func TestCurrentDoesNotSettleAnotherPrincipalsExpiredClaim(t *testing.T) {
 	if _, err := fixture.store.db.Exec(`INSERT INTO handlings(
 		handling_id, target_principal_id, head_event_id, state, claim_attachment_id,
 		claim_fence, claim_until, created_sequence)
-		VALUES('handling:expiry-other', ?, ?, 'open', ?, 1, ?, 2)`, other.String(), headEvent,
+		VALUES('handling:expiry-other', ?, ?, 'open', ?, 1, ?, 1)`, other.String(), headEvent,
 		otherProof.ID().String(), formatTime(otherProof.ExpiresAt())); err != nil {
 		t.Fatal(err)
 	}
@@ -227,8 +227,8 @@ func installExpiredClaimFixtures(t *testing.T, fixture *authorityFixture,
 		if _, err := fixture.store.db.Exec(`INSERT INTO handlings(
 			handling_id, target_principal_id, head_event_id, state, claim_attachment_id,
 			claim_fence, claim_until, created_sequence)
-			VALUES(?, ?, ?, 'open', ?, 1, ?, ?)`, handling, fixture.principal.String(),
-			headEvent, proof.ID().String(), formatTime(proof.ExpiresAt()), index+2); err != nil {
+			VALUES(?, ?, ?, 'open', ?, 1, ?, 1)`, handling, fixture.principal.String(),
+			headEvent, proof.ID().String(), formatTime(proof.ExpiresAt())); err != nil {
 			t.Fatal(err)
 		}
 	}

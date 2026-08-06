@@ -11,28 +11,33 @@ import (
 )
 
 type currentReplyContext struct {
-	root   agency.EventRef
-	target agency.TargetRef
+	root     agency.EventRef
+	target   agency.TargetRef
+	imported bool
 }
 
-// currentReplyContextTx freezes the stable correlation root and, for a directly
-// imported current Event on an active route, the exact public alias that can
-// carry a response to its authenticated sender. Route and peer identity remain
+// currentReplyContextTx freezes the stable correlation root at the Event that
+// created the durable Handling. When that Event was imported on an active
+// route, the exact public alias can carry a response to its authenticated
+// sender across any number of local advances. Route and peer identity remain
 // private authority and never enter the Agent View.
 func currentReplyContextTx(ctx context.Context, tx *sql.Tx,
-	current agency.EventRef,
+	handling agency.HandlingID, current agency.EventRef,
 ) (currentReplyContext, error) {
-	details, err := loadStoredEventDetailsTx(ctx, tx, current.ID().String())
-	if err != nil || details.ref != current {
+	if handling.IsZero() || current.IsZero() {
 		return currentReplyContext{}, errors.New("current View: corrupt current reply context")
 	}
-	delivery, route, imported, err := peerDeliveryForLocalEventTx(ctx, tx, current)
+	creation, err := handlingCreationEventTx(ctx, tx, handling, current)
 	if err != nil {
 		return currentReplyContext{}, err
 	}
-	result := currentReplyContext{root: current}
-	if !details.correlation.IsZero() {
-		result.root = details.correlation
+	delivery, route, imported, err := peerDeliveryForLocalEventTx(ctx, tx, creation.ref)
+	if err != nil {
+		return currentReplyContext{}, err
+	}
+	result := currentReplyContext{root: creation.ref, imported: imported}
+	if !creation.correlation.IsZero() {
+		result.root = creation.correlation
 	} else if imported {
 		if correlation, present := delivery.OriginCorrelation(); present {
 			result.root = correlation
@@ -48,6 +53,27 @@ func currentReplyContextTx(ctx context.Context, tx *sql.Tx,
 		return currentReplyContext{}, errors.New("current View: corrupt reply target alias")
 	}
 	return result, nil
+}
+
+func handlingCreationEventTx(ctx context.Context, tx *sql.Tx, handling agency.HandlingID,
+	current agency.EventRef,
+) (storedEventDetails, error) {
+	var eventID string
+	err := tx.QueryRowContext(ctx, `SELECT created.event_id
+		FROM handlings h JOIN events created ON created.origin_sequence = h.created_sequence
+		WHERE h.handling_id = ? AND h.state = 'open' AND h.head_event_id = ?`,
+		handling.String(), current.ID().String()).Scan(&eventID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return storedEventDetails{}, errors.New("current View: corrupt Handling creation authority")
+	}
+	if err != nil {
+		return storedEventDetails{}, fmt.Errorf("current View: load Handling creation authority: %w", err)
+	}
+	creation, err := loadStoredEventDetailsTx(ctx, tx, eventID)
+	if err != nil {
+		return storedEventDetails{}, err
+	}
+	return creation, nil
 }
 
 func peerDeliveryForLocalEventTx(ctx context.Context, tx *sql.Tx,

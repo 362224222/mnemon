@@ -316,15 +316,19 @@ exception to revalidating mutable authority.
 
 An Agent View has at most one writable `current`. Its `reply_to` is a
 provenance-only handle for one machine-derived stable correlation root. A
-directly imported current may also carry `reply_target`: the machine-derived
-public alias of its authenticated immediate sender, sealed as one exact offered
-remote target. It is absent for local work and unavailable routes, and exposes
-no RouteID, PeerID, remote target alias, or Principal. A bounded `related_open`
-projection may show locally accepted open Events whose correlation equals that
-root, but it exposes no Handling handle, fence, claim, or second writable
-subject. `outstanding` reports the exact local open and related counts, the
-projected prefix, and whether evidence was truncated. Semantic `kind` never
-changes these projection rules.
+current whose durable Handling was created by a directly imported Event may
+also carry `reply_target`: the machine-derived public alias of its authenticated
+immediate sender, sealed as one exact offered remote target. The correlation
+root and reply capability derive from the immutable Handling creation Event and
+survive local advances. Opaque handles are valid only in the exact View that
+offers them; no handle may be carried across Views. `reply_target` is absent for
+local work and unavailable routes, and exposes no RouteID, PeerID, remote target
+alias, or Principal. A bounded `related_open` projection may show
+locally accepted open Events whose correlation equals that root, but it exposes
+no Handling handle, fence, claim, or second writable subject. `outstanding`
+reports the exact local open and related counts, the projected prefix, and
+whether evidence was truncated. Semantic `kind` never changes these projection
+rules.
 
 **P-02 Open labels, closed structure.**
 `kind` and a first-publish `reference_key` are bounded opaque labels with no
@@ -427,15 +431,16 @@ digest conflicts. Missing Artifacts keep the envelope staged without creating a
 local Event. Either-side delivery expiry changes no domain state and never means
 completed.
 
-An accepted Event's correlation is copied unchanged into PeerDelivery. For an
-imported current Event, the receiving View derives `reply_to` from the
-authenticated origin correlation, or from the origin Event when none exists.
-When the immediate inbound route remains active, the same View independently
-derives `reply_target` from that inbox route's public alias. The next local
-Intent can therefore preserve one conversation root and address its
-authenticated sender without a transport rewrite or semantic target inference.
-A returning delivery is re-admitted as a new local Event; only then may it
-appear as read-only related evidence beside the origin Handling.
+An accepted Event's correlation is copied unchanged into PeerDelivery. For a
+Handling created by an imported Event, every receiving View derives `reply_to`
+from the authenticated origin correlation, or from the origin Event when none
+exists. When the immediate inbound route remains active, the same View
+independently derives `reply_target` from that inbox route's public alias. A
+local advance changes the Handling head but not this creation-bound reply
+context. A later Intent can therefore preserve one conversation root and
+address its authenticated sender without a transport rewrite or semantic target
+inference. A returning delivery is re-admitted as a new local Event; only then
+may it appear as read-only related evidence beside the origin Handling.
 
 **P-07 Exactly-once effect.**
 Every attachment-begin request, CurrentRequest, AdmissionRequest, and machine disposition carries a
@@ -664,7 +669,7 @@ unbound, partially proven, or failing.
 | P-03 | Interactive root initiation succeeds; a private Host-boundary nonce binds one attachment; authority permits one unended attachment per Principal; same-boundary begin exactly replays and must match the private journal across response loss, missing journal commit, and restart; a fresh nonce atomically replaces its predecessor even when the journal is absent; expired, ended, or divergent outcomes never report ready; Pi retries only the same nonce and emits no cue on failure; a new boundary or Hook end finishes a presented terminal without replaying its old Intent; T0 exposes no managed-wake issuance path; every accepted local target creates exactly one Handling; wrong-Principal and wrong-attachment claim fail. |
 | P-04 | At most one live claim exists; a fresh operation with stale fence fails; accepted advance updates the Handling head and releases the claim; bounded lease-expiry and Host-boundary-end dispositions, including transactional boundary replacement, clear occupancy but cannot change domain state, create an Event, or create completion; repeated fresh boundaries over a fixed bounded open set select the least previously claimed Handling and cannot be monopolized by one old responsibility. |
 | P-05 | Fault injection at each BoundIntent and VerifiedPeerDelivery transaction boundary yields either the whole local outcome or none, including outbox obligation and Reference head where allowed. |
-| P-06 | Authenticated delivery is re-admitted under the restricted peer subset; rejection creates no receiving fact; acceptance creates a new receiving Event, preserves provenance and an unchanged stable correlation root, resolves the target locally, and follows the bounded outbox/inbox lifecycle; an origin request exporting its sole responsibility fails, while remote rejection or expiry leaves the required local Handling open. |
+| P-06 | Authenticated delivery is re-admitted under the restricted peer subset; rejection creates no receiving fact; acceptance creates a new receiving Event, preserves provenance and an unchanged stable correlation root, resolves the target locally, and follows the bounded outbox/inbox lifecycle; an imported Handling preserves its authenticated reply context across local advances; an origin request exporting its sole responsibility fails, while remote rejection or expiry leaves the required local Handling open. |
 | P-07 | Same key/same digest replays the byte-stable attachment-begin proof, frozen View including its focus projection, admission Receipt, or internal outcome before the relevant mutable validation; same key/different digest conflicts; Host retries reuse one nonce and compare replayed proof with private journal authority; response loss, missing journal commit, restart, and retry create at most one attachment, claim, local Event, or machine disposition; begin replay never renews expiry or revives an ended boundary. |
 | P-08 | Valid first-publish key creation without a prior handle, invalid key rejection, first-publish CAS, concurrent first publish, active supersede, tombstone retract/reactivation, stale head, forward reference, concurrent mutation, and replay all match section 5; a provenance citation records the exact head, mutates nothing, and cannot stand in for a Reference action. |
 | P-09 | Any missing or mismatched Artifact keeps peer input unadmitted and cannot activate a Reference or complete; every Agent/peer resource bound fails closed independently and payload cannot raise it; the maximum accepted payload, Artifact, Reference, route, current, and related combination remains representable; related evidence has explicit prefix/count/truncation, and JSON-escaped current plus related payloads cannot overflow the focus or canonical View budget; more than the expiry-maintenance limit settles only the bounded prefix and leaves all excess claims unchanged for later natural turns. |

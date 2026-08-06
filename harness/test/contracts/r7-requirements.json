@@ -182,6 +182,10 @@
           "test": "./internal/authority::TestPeerInboxRejectsSameDeliveryIDDifferentEnvelope"
         },
         {
+          "id": "imported-handling-preserves-reply-context-across-advance",
+          "test": "./internal/authority::TestImportedHandlingKeepsReplyContextAcrossLocalAdvance"
+        },
+        {
           "id": "missing-artifact-creates-no-fact",
           "test": "./internal/authority::TestMissingPeerArtifactExpiresWithoutCreatingDomainState"
         },
@@ -518,6 +522,7 @@
             "test:./internal/authority::TestFocusProjectionUsesDeterministicBoundedPrefixAndPayloadBudget",
             "test:./internal/authority::TestFreshBoundaryAtomicallyReplacesPredecessorWithoutDomainEffect",
             "test:./internal/authority::TestFreshCurrentDurablySettlesExpiredClaimWithoutDomainEffect",
+            "test:./internal/authority::TestImportedHandlingKeepsReplyContextAcrossLocalAdvance",
             "test:./internal/authority::TestInteractiveAttachmentBeginCannotReviveEndedBoundary",
             "test:./internal/authority::TestInteractiveAttachmentBeginExactlyReplaysAcrossRestart",
             "test:./internal/authority::TestInteractiveAttachmentBeginRejectsSameOperationDifferentPrincipal",

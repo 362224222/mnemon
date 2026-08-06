@@ -86,10 +86,10 @@ func assertGuideTerminalSurface(t *testing.T, guide string) {
 	}
 	normalized := strings.Join(strings.Fields(guide), " ")
 	for _, required := range []string{
-		"A local Receipt never needs a reply",
-		"Never acknowledge an acknowledgement",
-		"to match the actual outcome",
-		"only while the same local responsibility truly remains open",
+		"the current remains the required local causal anchor",
+		"matching completed, declined, or unresolved to the actual outcome",
+		"For a local current, or when no reply is warranted",
+		"A Receipt never needs a reply; never acknowledge an acknowledgement",
 	} {
 		if !strings.Contains(normalized, required) {
 			t.Errorf("guide lacks response convergence rule %q", required)
@@ -100,7 +100,7 @@ func assertGuideTerminalSurface(t *testing.T, guide string) {
 	}
 }
 
-func TestGuideResponseExampleIsTerminalCorrelatedEvidence(t *testing.T) {
+func TestGuideResponseExampleIsCorrelatedEvidenceWithLocalAnchor(t *testing.T) {
 	projection, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -114,20 +114,11 @@ func TestGuideResponseExampleIsTerminalCorrelatedEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("guide work.response is not a valid AgentIntent: %v", err)
 	}
-	switch intent.Consequence() {
-	case agency.ConsequenceResolveCompleted, agency.ConsequenceResolveDeclined,
-		agency.ConsequenceResolveUnresolved:
-	default:
-		t.Fatalf("guide work.response consequence = %q; want terminal resolve", intent.Consequence())
-	}
 	successors := intent.Successors()
-	if intent.SubjectHandling().IsZero() || len(successors) != 1 || successors[0].IsSelf() ||
+	if intent.Consequence() != agency.ConsequenceAdvanceHandling ||
+		intent.SubjectHandling().IsZero() || len(successors) != 1 || successors[0].IsSelf() ||
 		successors[0].Alias().IsZero() || intent.CorrelationHandle().IsZero() || len(intent.Artifacts()) == 0 {
-		t.Fatal("guide work.response does not bind one subject, reply, correlation, and evidence")
-	}
-	if intent.Consequence() == agency.ConsequenceResolveCompleted &&
-		!strings.Contains(intent.Payload().String(), "successfully completed") {
-		t.Fatal("guide completed response does not state that the actual outcome succeeded")
+		t.Fatal("guide work.response does not retain its subject while returning correlated evidence")
 	}
 }
 
