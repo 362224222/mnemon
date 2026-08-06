@@ -74,8 +74,11 @@ func projectDomainOperationFacts(turn turnSummary, capturedAt time.Time) []obser
 			continue
 		}
 		fields := observer.FactFields{Action: operation.action,
-			AttemptCount: intPointer(operation.value.Attempts),
-			SuccessCount: intPointer(operation.value.Successes)}
+			AttemptCount:   intPointer(operation.value.Attempts),
+			SuccessCount:   intPointer(operation.value.Successes),
+			ToolErrorCount: intPointer(operation.value.ToolErrors),
+			InvalidCount:   intPointer(operation.value.InvalidResults),
+			BatchedCount:   intPointer(operation.value.Batched)}
 		facts = append(facts, runtimeFact(turn, capturedAt, "domain-"+operation.action,
 			"runtime.domain.operation", observer.TruthObservation, fields))
 	}

@@ -38,8 +38,14 @@ func validateTurnBounds(turn turnSummary) error {
 		turn.SubmitDenials, turn.SubmitInvocationFailures, turn.PostAcceptDenials,
 		turn.PrivateBindingProbes,
 		turn.DomainOperations.Read.Attempts, turn.DomainOperations.Read.Successes,
+		turn.DomainOperations.Read.ToolErrors, turn.DomainOperations.Read.InvalidResults,
+		turn.DomainOperations.Read.Batched,
 		turn.DomainOperations.Probe.Attempts, turn.DomainOperations.Probe.Successes,
-		turn.DomainOperations.Mutation.Attempts, turn.DomainOperations.Mutation.Successes}
+		turn.DomainOperations.Probe.ToolErrors, turn.DomainOperations.Probe.InvalidResults,
+		turn.DomainOperations.Probe.Batched,
+		turn.DomainOperations.Mutation.Attempts, turn.DomainOperations.Mutation.Successes,
+		turn.DomainOperations.Mutation.ToolErrors, turn.DomainOperations.Mutation.InvalidResults,
+		turn.DomainOperations.Mutation.Batched}
 	if _, err := parseReportTime("turn captured_at", turn.CapturedAt); err != nil {
 		return err
 	}
@@ -53,9 +59,9 @@ func validateTurnBounds(turn turnSummary) error {
 func validateRuntimeObservationConsistency(turn turnSummary) error {
 	if turn.PrivateBindingProbes != 0 || turn.DelegateCalls > 1 ||
 		turn.CurrentReads > turn.BashCalls || turn.AcceptedReceipts > 1 ||
-		turn.DomainOperations.Read.Successes > turn.DomainOperations.Read.Attempts ||
-		turn.DomainOperations.Probe.Successes > turn.DomainOperations.Probe.Attempts ||
-		turn.DomainOperations.Mutation.Successes > turn.DomainOperations.Mutation.Attempts ||
+		!domainOperationClosed(turn.DomainOperations.Read) ||
+		!domainOperationClosed(turn.DomainOperations.Probe) ||
+		!domainOperationClosed(turn.DomainOperations.Mutation) ||
 		turn.PostAcceptDenials > turn.SubmitDenials ||
 		(turn.PostAcceptDenials > 0 && turn.AcceptedReceipts != 1) ||
 		turn.IntentSubmits != turn.AcceptedReceipts+turn.RejectedReceipts ||
@@ -63,6 +69,11 @@ func validateRuntimeObservationConsistency(turn turnSummary) error {
 		return errors.New("sanitized report contains inconsistent Runtime observations")
 	}
 	return nil
+}
+
+func domainOperationClosed(operation domainOperationSummary) bool {
+	return operation.Attempts == operation.Successes+operation.ToolErrors+
+		operation.InvalidResults+operation.Batched
 }
 
 func validateControlDenials(turn turnSummary) error {

@@ -28,6 +28,9 @@ type domainOperationsSummary struct {
 }
 
 type domainOperationSummary struct {
-	Attempts  int `json:"attempts"`
-	Successes int `json:"successes"`
+	Attempts       int `json:"attempts"`
+	Successes      int `json:"successes"`
+	ToolErrors     int `json:"tool_errors"`
+	InvalidResults int `json:"invalid_results"`
+	Batched        int `json:"batched_unattributed"`
 }

@@ -1,11 +1,33 @@
 package observer
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
+
+func factEvidenceInput(fact factRecord) Fact {
+	return Fact{Kind: fact.Kind, Causes: slices.Clone(fact.Causes), References: References{
+		Event: fact.Refs.Event, EventDigest: fact.Refs.EventDigest, Handling: fact.Refs.Handling,
+	}, Fields: FactFields{
+		SemanticKind: fact.Facts.SemanticKind, Consequence: fact.Facts.Consequence,
+		Outcome: fact.Facts.Outcome, State: fact.Facts.State, Phase: fact.Facts.Phase,
+		Action: fact.Facts.Action, Code: fact.Facts.Code, Count: fact.Facts.Count,
+		AttemptCount: fact.Facts.AttemptCount, SuccessCount: fact.Facts.SuccessCount,
+		ToolErrorCount: fact.Facts.ToolErrorCount, InvalidCount: fact.Facts.InvalidCount,
+		BatchedCount: fact.Facts.BatchedCount, PreferenceBefore: fact.Facts.PreferenceBefore,
+		PreferenceAfter: fact.Facts.PreferenceAfter, Result: fact.Facts.Result,
+		Round: fact.Facts.Round, SampleSize: fact.Facts.SampleSize, Alpha: fact.Facts.Alpha,
+		VotesA: fact.Facts.VotesA, VotesB: fact.Facts.VotesB,
+		MarginBefore: fact.Facts.MarginBefore, MarginAfter: fact.Facts.MarginAfter,
+		Authenticated: fact.Facts.Authenticated, Recolored: fact.Facts.Recolored,
+	}}
+}
 
 func TestRuntimeObservationEvidenceIsClosed(t *testing.T) {
-	attempts, successes, count := 2, 1, 1
+	attempts, successes, toolErrors, invalidResults, batched, count := 2, 1, 1, 0, 0, 1
 	domain := Fact{Kind: "runtime.domain.operation", Fields: FactFields{
 		Action: "mutation", AttemptCount: &attempts, SuccessCount: &successes,
+		ToolErrorCount: &toolErrors, InvalidCount: &invalidResults, BatchedCount: &batched,
 	}}
 	if err := validateKindEvidence(domain, 1); err != nil {
 		t.Fatalf("valid domain observation: %v", err)
@@ -15,11 +37,9 @@ func TestRuntimeObservationEvidenceIsClosed(t *testing.T) {
 		t.Fatal("domain observation accepted a causal edge")
 	}
 	domain.Causes = nil
-	domain.Fields.SuccessCount = &attempts
-	zero := 0
-	domain.Fields.AttemptCount = &zero
+	domain.Fields.ToolErrorCount = &attempts
 	if err := validateKindEvidence(domain, 1); err == nil {
-		t.Fatal("domain observation accepted successes without attempts")
+		t.Fatal("domain observation accepted unbalanced outcome classes")
 	}
 
 	denial := Fact{Kind: "runtime.intent.denied", Fields: FactFields{
@@ -31,5 +51,22 @@ func TestRuntimeObservationEvidenceIsClosed(t *testing.T) {
 	denial.Fields.Code = "provider-prose"
 	if err := validateKindEvidence(denial, 2); err == nil {
 		t.Fatal("Intent denial accepted an open diagnostic class")
+	}
+}
+
+func TestFactEvidenceInputCarriesClosedDomainOutcomes(t *testing.T) {
+	attempts, successes, toolErrors, invalid, batched := 4, 1, 1, 1, 1
+	fact := factRecord{Sequence: 1, Kind: "runtime.domain.operation", Facts: factsWire{
+		Action: "read", AttemptCount: &attempts, SuccessCount: &successes,
+		ToolErrorCount: &toolErrors, InvalidCount: &invalid, BatchedCount: &batched,
+	}}
+	projected := factEvidenceInput(fact)
+	if projected.Fields.ToolErrorCount == nil || *projected.Fields.ToolErrorCount != 1 ||
+		projected.Fields.InvalidCount == nil || *projected.Fields.InvalidCount != 1 ||
+		projected.Fields.BatchedCount == nil || *projected.Fields.BatchedCount != 1 {
+		t.Fatalf("domain outcome mapping = %#v", projected.Fields)
+	}
+	if err := validateKindEvidence(projected, fact.Sequence); err != nil {
+		t.Fatalf("mapped domain observation: %v", err)
 	}
 }

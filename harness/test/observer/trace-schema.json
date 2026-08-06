@@ -38,6 +38,11 @@
           "minimum": 0,
           "type": "integer"
         },
+        "batched_unattributed_count": {
+          "maximum": 256,
+          "minimum": 0,
+          "type": "integer"
+        },
         "authenticated": {
           "type": "boolean"
         },
@@ -85,6 +90,11 @@
         },
         "invalid_votes": {
           "maximum": 128,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "invalid_result_count": {
+          "maximum": 256,
           "minimum": 0,
           "type": "integer"
         },
@@ -195,6 +205,11 @@
         },
         "target_count": {
           "maximum": 16,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tool_error_count": {
+          "maximum": 256,
           "minimum": 0,
           "type": "integer"
         },
@@ -825,7 +840,10 @@
                     "required": [
                       "action",
                       "attempt_count",
-                      "success_count"
+                      "batched_unattributed_count",
+                      "invalid_result_count",
+                      "success_count",
+                      "tool_error_count"
                     ]
                   }
                 }

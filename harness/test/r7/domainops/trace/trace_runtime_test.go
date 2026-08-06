@@ -17,11 +17,14 @@ type projectedRuntimeFact struct {
 	Kind   string   `json:"kind"`
 	Causes []string `json:"causes"`
 	Facts  struct {
-		Action       string `json:"action"`
-		Code         string `json:"code"`
-		Count        *int   `json:"count"`
-		AttemptCount *int   `json:"attempt_count"`
-		SuccessCount *int   `json:"success_count"`
+		Action         string `json:"action"`
+		Code           string `json:"code"`
+		Count          *int   `json:"count"`
+		AttemptCount   *int   `json:"attempt_count"`
+		SuccessCount   *int   `json:"success_count"`
+		ToolErrorCount *int   `json:"tool_error_count"`
+		InvalidCount   *int   `json:"invalid_result_count"`
+		BatchedCount   *int   `json:"batched_unattributed_count"`
 	} `json:"facts"`
 }
 
@@ -43,7 +46,7 @@ func projectTestRuntime(t *testing.T) string {
 		CapturedAt: started.Add(time.Minute).Format(time.RFC3339Nano), BashCalls: 4,
 		DomainOperations: domainOperationsSummary{
 			Read:     domainOperationSummary{Attempts: 2, Successes: 2},
-			Mutation: domainOperationSummary{Attempts: 1, Successes: 0},
+			Mutation: domainOperationSummary{Attempts: 1, ToolErrors: 1},
 		},
 		DelegateCalls: 1, CurrentReads: 1, SubmitAttempts: 2, IntentSubmits: 1,
 		SubmitDenials: 1, SubmitControlDenials: []controlDenial{{
@@ -96,17 +99,23 @@ func TestRuntimeProjectionIncludesBoundedOperationAndDenialCounts(t *testing.T) 
 		t.Fatalf("missing observations: delegate=%t read=%t mutation=%t denial=%t",
 			foundDelegate, foundRead, foundMutation, foundDenial)
 	}
-	if read.Facts.AttemptCount == nil || *read.Facts.AttemptCount != 2 ||
-		read.Facts.SuccessCount == nil || *read.Facts.SuccessCount != 2 {
-		t.Fatalf("read observation = %+v", read.Facts)
-	}
-	if mutation.Facts.AttemptCount == nil || *mutation.Facts.AttemptCount != 1 ||
-		mutation.Facts.SuccessCount == nil || *mutation.Facts.SuccessCount != 0 {
-		t.Fatalf("mutation observation = %+v", mutation.Facts)
-	}
+	assertRuntimeCount(t, "read attempts", read.Facts.AttemptCount, 2)
+	assertRuntimeCount(t, "read successes", read.Facts.SuccessCount, 2)
+	assertRuntimeCount(t, "mutation attempts", mutation.Facts.AttemptCount, 1)
+	assertRuntimeCount(t, "mutation successes", mutation.Facts.SuccessCount, 0)
+	assertRuntimeCount(t, "mutation tool errors", mutation.Facts.ToolErrorCount, 1)
+	assertRuntimeCount(t, "mutation invalid results", mutation.Facts.InvalidCount, 0)
+	assertRuntimeCount(t, "mutation batched calls", mutation.Facts.BatchedCount, 0)
 	if denial.Facts.Code != "authentication_failed" || denial.Facts.Count == nil ||
 		*denial.Facts.Count != 1 {
 		t.Fatalf("denial observation = %+v", denial.Facts)
+	}
+}
+
+func assertRuntimeCount(t *testing.T, label string, actual *int, expected int) {
+	t.Helper()
+	if actual == nil || *actual != expected {
+		t.Fatalf("%s = %v, want %d", label, actual, expected)
 	}
 }
 
@@ -139,6 +148,9 @@ func TestTurnSummaryFailsClosedOnUnsafeObservationCounts(t *testing.T) {
 	}{
 		{"success without attempt", func(turn *turnSummary) {
 			turn.DomainOperations.Mutation.Successes = 2
+		}},
+		{"unclassified operation", func(turn *turnSummary) {
+			turn.DomainOperations.Mutation.Successes = 0
 		}},
 		{"unclassified denial", func(turn *turnSummary) {
 			turn.SubmitControlDenials = nil

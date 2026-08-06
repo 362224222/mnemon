@@ -64,14 +64,16 @@ authority state does that. `turns[].submit_control_denials` retains only a
 bounded closed code and count; diagnostic messages, submitted Intents, and
 provider prose are never retained.
 
-`turns[].domain_operations` contains bounded requested-command and success
-counters for the neutral `read`, `probe`, and `mutation` classes. `attempts`
-counts exact `domainctl` occurrences in Bash input; it does not claim that shell
-control flow reached or executed each occurrence. A success additionally
-requires a non-error tool result containing the closed `domainctl` role/result
-envelope for the current Agent role; a shell pipeline, wrong-role result, or
-`|| true` cannot turn an empty failed invocation into a success. The sanitizer
-never retains paths, endpoints, payloads, or results.
+`turns[].domain_operations` contains bounded outcome counters for the neutral
+`read`, `probe`, and `mutation` classes. `attempts` counts exact `domainctl`
+occurrences in Bash input; it does not claim that shell control flow reached
+each occurrence. Every attempt is classified as `success`, `tool_error`,
+`invalid_result`, or `batched_unattributed`, and the counts must balance. A
+success requires a non-error tool result containing the closed `domainctl`
+role/result envelope for the current Agent role. Multiple operations in one
+Bash call are deliberately unattributed; a wrong-role result or `|| true`
+becomes invalid rather than successful. The sanitizer never retains paths,
+endpoints, payloads, results, or error text.
 These counters are Runtime observations: they do not assert why an external
 state changed and cannot prove a business repair. The external world oracle
 remains the sole evidence for that result.

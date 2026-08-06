@@ -565,6 +565,28 @@ sanitize_turn() {
     ([$domain_starts[].tool_call_id] | unique) as $domain_calls |
     ([$stream[] | select(.type == "tool_execution_end" and .toolName == "bash" and
       belongs($domain_calls))]) as $domain_ends |
+    def domain_outcome($start):
+      if $start.total != 1 then "batched_unattributed"
+      else first($domain_ends[] | select(.toolCallId == $start.tool_call_id)) as $end |
+        if $end.isError == true then "tool_error"
+        elif $end.isError == false and
+          ($end | any(result_objects[]; valid_domain_result)) then "success"
+        else "invalid_result" end
+      end;
+    def domain_summary($name):
+      {attempts:([$domain_starts[] | .[$name]] | add // 0),
+       successes:([$domain_starts[] as $start |
+         select($start[$name] > 0 and domain_outcome($start) == "success") |
+         $start[$name]] | add // 0),
+       tool_errors:([$domain_starts[] as $start |
+         select($start[$name] > 0 and domain_outcome($start) == "tool_error") |
+         $start[$name]] | add // 0),
+       invalid_results:([$domain_starts[] as $start |
+         select($start[$name] > 0 and domain_outcome($start) == "invalid_result") |
+         $start[$name]] | add // 0),
+       batched_unattributed:([$domain_starts[] as $start |
+         select($start[$name] > 0 and domain_outcome($start) == "batched_unattributed") |
+         $start[$name]] | add // 0)};
     (reduce $submit_outcomes[] as $outcome (
       {accepted_seen:false, denials:0};
       .denials += (if .accepted_seen then $outcome.denials else 0 end) |
@@ -596,30 +618,9 @@ sanitize_turn() {
         select(.denials == 1) | .denial_code] | group_by(.) |
         map({code:.[0],count:length}) | sort_by(.code)),
       domain_operations:{
-        read:{
-          attempts:([$domain_starts[].read] | add // 0),
-          successes:([$domain_starts[] as $start |
-            select($start.total == 1 and $start.read == 1) |
-            select(any($domain_ends[];
-              .toolCallId == $start.tool_call_id and .isError == false and
-              any(result_objects[]; valid_domain_result)))] | length)
-        },
-        probe:{
-          attempts:([$domain_starts[].probe] | add // 0),
-          successes:([$domain_starts[] as $start |
-            select($start.total == 1 and $start.probe == 1) |
-            select(any($domain_ends[];
-              .toolCallId == $start.tool_call_id and .isError == false and
-              any(result_objects[]; valid_domain_result)))] | length)
-        },
-        mutation:{
-          attempts:([$domain_starts[].mutation] | add // 0),
-          successes:([$domain_starts[] as $start |
-            select($start.total == 1 and $start.mutation == 1) |
-            select(any($domain_ends[];
-              .toolCallId == $start.tool_call_id and .isError == false and
-              any(result_objects[]; valid_domain_result)))] | length)
-        }
+        read:domain_summary("read"),
+        probe:domain_summary("probe"),
+        mutation:domain_summary("mutation")
       },
       post_accept_denials: $post_accept.denials,
       private_binding_probes: ([$stream[] | select(.type == "tool_execution_start" and
@@ -636,9 +637,10 @@ sanitize_turn() {
         .agent_end == true and
         (.submit_control_denials | length) <= 14 and
         ([.submit_control_denials[].count] | add // 0) == .submit_denials and
-        ([.domain_operations[] | .attempts, .successes] |
+        ([.domain_operations[] | .[]] |
           all(. >= 0 and . <= 256)) and
-        all(.domain_operations[]; .successes <= .attempts) and
+        all(.domain_operations[];
+          (.successes + .tool_errors + .invalid_results + .batched_unattributed) == .attempts) and
         ([.hook_cues, .bash_calls, .delegate_calls, .current_reads, .submit_attempts, .intent_submits,
           .accepted_receipts, .rejected_receipts, .submit_denials, .submit_invocation_failures,
           .post_accept_denials, .private_binding_probes] | all(. >= 0 and . <= 256)) and

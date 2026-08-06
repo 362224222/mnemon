@@ -323,6 +323,12 @@ write_domain_observation_stream() {
     isError:false,result:{content:[{type:"text",
       text:"{\"role\":\"other\",\"result\":{\"wrong-role-sentinel\":true}}"}]}}' \
     >>"$destination"
+  jq -nc '{type:"tool_execution_start",toolCallId:"domain-missing-error",toolName:"bash",
+    args:{command:"domainctl probe"}}' >>"$destination"
+  jq -nc '{type:"tool_execution_end",toolCallId:"domain-missing-error",toolName:"bash",
+    result:{content:[{type:"text",
+      text:"{\"role\":\"lead\",\"result\":{\"secret-untyped-sentinel\":true}}"}]}}' \
+    >>"$destination"
   jq -nc '{type:"tool_execution_start",toolCallId:"domain-action",toolName:"bash",
     args:{command:"domainctl --endpoint=http://secret-endpoint-sentinel action /secret-action-sentinel '\''{\"secret-payload-sentinel\":true}'\''"}}' \
     >>"$destination"
@@ -410,9 +416,12 @@ sanitize_turn lead oracle-domain-observations "$scratch/domain-observations.json
   "$scratch/domain-observations.json"
 jq -e '
   .domain_operations == {
-    read:{attempts:4,successes:1},
-    probe:{attempts:2,successes:1},
-    mutation:{attempts:2,successes:1}
+    read:{attempts:4,successes:1,tool_errors:1,invalid_results:1,
+      batched_unattributed:1},
+    probe:{attempts:3,successes:1,tool_errors:0,invalid_results:2,
+      batched_unattributed:0},
+    mutation:{attempts:2,successes:1,tool_errors:0,invalid_results:0,
+      batched_unattributed:1}
   }
 ' "$scratch/domain-observations.json" >/dev/null
 if grep -E 'secret-|ambiguous-result|wrong-role' "$scratch/domain-observations.json" >/dev/null; then

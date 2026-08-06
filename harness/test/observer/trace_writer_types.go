@@ -97,6 +97,7 @@ type FactFields struct {
 	Alpha            *int     `json:"alpha,omitempty"`
 	ArtifactCount    *int     `json:"artifact_count,omitempty"`
 	AttemptCount     *int     `json:"attempt_count,omitempty"`
+	BatchedCount     *int     `json:"batched_unattributed_count,omitempty"`
 	Authenticated    *bool    `json:"authenticated,omitempty"`
 	BypassedHook     *bool    `json:"bypassed_hook,omitempty"`
 	ByteSize         *int64   `json:"byte_size,omitempty"`
@@ -108,6 +109,7 @@ type FactFields struct {
 	GateID           string   `json:"gate_id,omitempty"`
 	HookCue          *bool    `json:"hook_cue,omitempty"`
 	InvalidVotes     *int     `json:"invalid_votes,omitempty"`
+	InvalidCount     *int     `json:"invalid_result_count,omitempty"`
 	MarginAfter      *int     `json:"margin_after,omitempty"`
 	MarginBefore     *int     `json:"margin_before,omitempty"`
 	NoVote           *bool    `json:"no_vote,omitempty"`
@@ -128,6 +130,7 @@ type FactFields struct {
 	Status           string   `json:"status,omitempty"`
 	SuccessCount     *int     `json:"success_count,omitempty"`
 	TargetCount      *int     `json:"target_count,omitempty"`
+	ToolErrorCount   *int     `json:"tool_error_count,omitempty"`
 	Targets          []string `json:"targets,omitempty"`
 	TimedOut         *bool    `json:"timed_out,omitempty"`
 	TurnLimit        *int     `json:"turn_limit,omitempty"`

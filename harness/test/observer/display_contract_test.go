@@ -73,7 +73,7 @@ func TestTraceSchemaRequiresMinimumDisplayEvidence(t *testing.T) {
 		slices.Sort(actual[kind])
 	}
 	expected := map[string][]string{
-		"runtime.domain.operation": {"facts.action", "facts.attempt_count", "facts.success_count"},
+		"runtime.domain.operation": {"facts.action", "facts.attempt_count", "facts.batched_unattributed_count", "facts.invalid_result_count", "facts.success_count", "facts.tool_error_count"},
 		"runtime.intent.denied":    {"facts.action", "facts.code", "facts.count"},
 		"r7.event.accepted":        {"facts.consequence", "facts.semantic_kind", "refs.event", "refs.event_digest"},
 		"r7.handling.resolved":     {"facts.outcome", "facts.state", "refs.handling"},

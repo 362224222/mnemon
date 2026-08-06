@@ -471,11 +471,11 @@
     const FACT_KEYS = Object.freeze(["schema", "version", "record", "seq", "id", "captured_at", "source", "agent", "turn", "kind", "truth", "causes", "refs", "facts"]);
     const RESULT_KEYS = Object.freeze(["schema", "version", "record", "status", "finished_at", "record_count", "trace_digest", "gates"]);
     const FACT_FIELDS = Object.freeze([
-      "action", "active_claims", "alpha", "artifact_count", "attempt_count", "authenticated", "bypassed_hook", "byte_size",
-      "code", "consequence", "count", "duration_ms", "episode", "gate_id", "hook_cue", "invalid_votes",
+      "action", "active_claims", "alpha", "artifact_count", "attempt_count", "authenticated", "batched_unattributed_count", "bypassed_hook", "byte_size",
+      "code", "consequence", "count", "duration_ms", "episode", "gate_id", "hook_cue", "invalid_result_count", "invalid_votes",
       "margin_after", "margin_before", "no_vote", "no_votes", "outcome", "payload_bytes", "phase",
       "preference_after", "preference_before", "recolored", "replayed", "result", "role", "round",
-      "sample_size", "semantic_kind", "state", "status", "success_count", "target_count", "targets", "timed_out", "view_nonempty",
+      "sample_size", "semantic_kind", "state", "status", "success_count", "target_count", "targets", "timed_out", "tool_error_count", "view_nonempty",
       "turn_limit", "turns_used", "unseen_open", "votes_a", "votes_b"
     ]);
     const INTENT_DENIAL_CODES = Object.freeze([
@@ -671,8 +671,10 @@
       optionalInteger(facts.active_claims, 0, 64, label + ".active_claims");
       optionalInteger(facts.artifact_count, 0, 64, label + ".artifact_count");
       optionalInteger(facts.attempt_count, 0, 256, label + ".attempt_count");
+      optionalInteger(facts.batched_unattributed_count, 0, 256, label + ".batched_unattributed_count");
       optionalInteger(facts.count, 1, 256, label + ".count");
       optionalInteger(facts.invalid_votes, 0, 128, label + ".invalid_votes");
+      optionalInteger(facts.invalid_result_count, 0, 256, label + ".invalid_result_count");
       optionalInteger(facts.margin_after, -1024, 1024, label + ".margin_after");
       optionalInteger(facts.margin_before, -1024, 1024, label + ".margin_before");
       optionalInteger(facts.no_votes, 0, 64, label + ".no_votes");
@@ -681,6 +683,7 @@
       optionalInteger(facts.sample_size, 0, 64, label + ".sample_size");
       optionalInteger(facts.success_count, 0, 256, label + ".success_count");
       optionalInteger(facts.target_count, 0, 16, label + ".target_count");
+      optionalInteger(facts.tool_error_count, 0, 256, label + ".tool_error_count");
       optionalInteger(facts.turn_limit, 1, 256, label + ".turn_limit");
       optionalInteger(facts.turns_used, 0, 256, label + ".turns_used");
       optionalInteger(facts.unseen_open, 0, 64, label + ".unseen_open");
@@ -688,8 +691,13 @@
       optionalInteger(facts.votes_b, 0, 64, label + ".votes_b");
       optionalInteger(facts.byte_size, 0, 16777216, label + ".byte_size");
       optionalInteger(facts.duration_ms, 0, 3600000, label + ".duration_ms");
-      if ((facts.attempt_count === undefined) !== (facts.success_count === undefined) ||
-          (facts.attempt_count !== undefined && facts.success_count > facts.attempt_count)) {
+      const operationCounts = [facts.attempt_count, facts.success_count,
+        facts.tool_error_count, facts.invalid_result_count, facts.batched_unattributed_count];
+      const presentOperationCounts = operationCounts.filter(value => value !== undefined);
+      if (presentOperationCounts.length !== 0 &&
+          (presentOperationCounts.length !== operationCounts.length ||
+           facts.success_count + facts.tool_error_count + facts.invalid_result_count +
+             facts.batched_unattributed_count !== facts.attempt_count)) {
         fail(label, "has inconsistent operation counts");
       }
       if (facts.targets !== undefined) {
@@ -743,7 +751,8 @@
       });
       switch (record.kind) {
         case "runtime.domain.operation":
-          required(record.facts, ["action", "attempt_count", "success_count"], label + ".facts");
+          required(record.facts, ["action", "attempt_count", "batched_unattributed_count",
+            "invalid_result_count", "success_count", "tool_error_count"], label + ".facts");
           if (record.causes.length !== 0 || record.facts.attempt_count < 1 ||
               !["read", "probe", "mutation"].includes(record.facts.action)) {
             fail(label, "does not describe a non-causal bounded domain operation observation");
@@ -993,7 +1002,10 @@
           const details = [];
           if (fact.facts.action) details.push(fact.facts.action);
           if (fact.facts.attempt_count !== undefined) {
-            details.push("requested " + fact.facts.attempt_count + " · closed responses " + fact.facts.success_count);
+            details.push("requested " + fact.facts.attempt_count + " · success " +
+              fact.facts.success_count + " · tool error " + fact.facts.tool_error_count +
+              " · invalid result " + fact.facts.invalid_result_count + " · batched " +
+              fact.facts.batched_unattributed_count);
           }
           if (fact.facts.code) details.push(fact.facts.code);
           if (fact.facts.count !== undefined) details.push("count " + fact.facts.count);

@@ -98,9 +98,18 @@ var kindEvidenceRules = map[string]kindEvidenceRule{
 func validDomainOperationEvidence(fact Fact) bool {
 	return len(fact.Causes) == 0 &&
 		slices.Contains([]string{"read", "probe", "mutation"}, fact.Fields.Action) &&
-		fact.Fields.AttemptCount != nil && fact.Fields.SuccessCount != nil &&
-		*fact.Fields.AttemptCount > 0 && *fact.Fields.SuccessCount >= 0 &&
-		*fact.Fields.SuccessCount <= *fact.Fields.AttemptCount
+		hasAllOperationCounts(fact.Fields) && *fact.Fields.AttemptCount > 0 &&
+		operationCountSum(fact.Fields) == *fact.Fields.AttemptCount
+}
+
+func hasAllOperationCounts(fields FactFields) bool {
+	return fields.AttemptCount != nil && fields.SuccessCount != nil &&
+		fields.ToolErrorCount != nil && fields.InvalidCount != nil && fields.BatchedCount != nil
+}
+
+func operationCountSum(fields FactFields) int {
+	return *fields.SuccessCount + *fields.ToolErrorCount + *fields.InvalidCount +
+		*fields.BatchedCount
 }
 
 func validIntentDenialEvidence(fact Fact) bool {
@@ -242,7 +251,10 @@ func validateFactFields(fields FactFields, sequence int) error {
 	}{
 		{"active_claims", fields.ActiveClaims, 0, 64},
 		{"alpha", fields.Alpha, 1, 64}, {"artifact_count", fields.ArtifactCount, 0, 64},
-		{"attempt_count", fields.AttemptCount, 0, 256}, {"count", fields.Count, 1, 256},
+		{"attempt_count", fields.AttemptCount, 0, 256},
+		{"batched_unattributed_count", fields.BatchedCount, 0, 256},
+		{"count", fields.Count, 1, 256},
+		{"invalid_result_count", fields.InvalidCount, 0, 256},
 		{"invalid_votes", fields.InvalidVotes, 0, 128},
 		{"margin_after", fields.MarginAfter, -1024, 1024},
 		{"margin_before", fields.MarginBefore, -1024, 1024},
@@ -250,6 +262,7 @@ func validateFactFields(fields FactFields, sequence int) error {
 		{"payload_bytes", fields.PayloadBytes, 0, 32 << 10},
 		{"sample_size", fields.SampleSize, 0, 64}, {"votes_a", fields.VotesA, 0, 64},
 		{"success_count", fields.SuccessCount, 0, 256},
+		{"tool_error_count", fields.ToolErrorCount, 0, 256},
 		{"votes_b", fields.VotesB, 0, 64}, {"target_count", fields.TargetCount, 0, 16},
 		{"turn_limit", fields.TurnLimit, 1, 256}, {"turns_used", fields.TurnsUsed, 0, 256},
 		{"unseen_open", fields.UnseenOpen, 0, 64},
@@ -259,8 +272,16 @@ func validateFactFields(fields FactFields, sequence int) error {
 			return fmt.Errorf("trace writer: fact %d has out-of-bound %s", sequence, value.name)
 		}
 	}
-	if (fields.AttemptCount == nil) != (fields.SuccessCount == nil) ||
-		(fields.AttemptCount != nil && *fields.SuccessCount > *fields.AttemptCount) {
+	operationCounts := []*int{fields.AttemptCount, fields.SuccessCount, fields.ToolErrorCount,
+		fields.InvalidCount, fields.BatchedCount}
+	present := 0
+	for _, value := range operationCounts {
+		if value != nil {
+			present++
+		}
+	}
+	if present != 0 && (present != len(operationCounts) ||
+		operationCountSum(fields) != *fields.AttemptCount) {
 		return fmt.Errorf("trace writer: fact %d has inconsistent operation counts", sequence)
 	}
 	if !validInt64(fields.ByteSize, 0, 16<<20) {
