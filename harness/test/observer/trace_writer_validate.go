@@ -10,7 +10,7 @@ import (
 
 const (
 	traceSchema   = "mnemon.test.trace"
-	traceVersion  = 1
+	traceVersion  = 2
 	maxTraceLine  = 16 << 10
 	maxTraceFacts = 100000
 )
@@ -88,6 +88,7 @@ var kindEvidenceRules = map[string]kindEvidenceRule{
 	"r7.handling.resolved":     {"terminal Handling evidence", validResolvedHandlingEvidence},
 	"test.attention.wave":      {"attention wave evidence", validAttentionSnapshotEvidence},
 	"test.attention.exhausted": {"attention exhaustion evidence", validAttentionSnapshotEvidence},
+	"test.attention.occupied":  {"occupied attention boundary evidence", validOccupiedAttentionEvidence},
 	"r8.selection.seeded":      {"seed preference evidence", validSelectionSeedEvidence},
 	"r8.round.frozen":          {"frozen round evidence", validFrozenRoundEvidence},
 	"r8.vote.observed":         {"vote evidence", validVoteEvidence},
@@ -143,11 +144,19 @@ func validResolvedHandlingEvidence(fact Fact) bool {
 }
 
 func validAttentionSnapshotEvidence(fact Fact) bool {
+	return validAttentionFields(fact) && *fact.Fields.OccupiedClaims == 0
+}
+
+func validOccupiedAttentionEvidence(fact Fact) bool {
+	return validAttentionFields(fact)
+}
+
+func validAttentionFields(fact Fact) bool {
 	return len(fact.Causes) == 0 && fact.Fields.Episode != "" && fact.Fields.Role != "" &&
 		fact.Fields.Round != nil && *fact.Fields.Round > 0 &&
-		fact.Fields.UnseenOpen != nil && fact.Fields.ActiveClaims != nil &&
+		fact.Fields.OpenUnclaimed != nil && fact.Fields.OccupiedClaims != nil &&
 		fact.Fields.TurnLimit != nil && fact.Fields.TurnsUsed != nil &&
-		*fact.Fields.ActiveClaims == 0 && *fact.Fields.TurnLimit > 0 &&
+		*fact.Fields.TurnLimit > 0 &&
 		*fact.Fields.TurnsUsed >= 0 && *fact.Fields.TurnsUsed <= *fact.Fields.TurnLimit
 }
 
@@ -249,7 +258,6 @@ func validateFactFields(fields FactFields, sequence int) error {
 		minimum int
 		maximum int
 	}{
-		{"active_claims", fields.ActiveClaims, 0, 64},
 		{"alpha", fields.Alpha, 1, 64}, {"artifact_count", fields.ArtifactCount, 0, 64},
 		{"attempt_count", fields.AttemptCount, 0, 256},
 		{"batched_unattributed_count", fields.BatchedCount, 0, 256},
@@ -258,14 +266,16 @@ func validateFactFields(fields FactFields, sequence int) error {
 		{"invalid_votes", fields.InvalidVotes, 0, 128},
 		{"margin_after", fields.MarginAfter, -1024, 1024},
 		{"margin_before", fields.MarginBefore, -1024, 1024},
-		{"no_votes", fields.NoVotes, 0, 64}, {"round", fields.Round, 0, 1024},
+		{"no_votes", fields.NoVotes, 0, 64},
+		{"occupied_claims", fields.OccupiedClaims, 0, 64},
+		{"open_unclaimed", fields.OpenUnclaimed, 0, 64},
+		{"round", fields.Round, 0, 1024},
 		{"payload_bytes", fields.PayloadBytes, 0, 32 << 10},
 		{"sample_size", fields.SampleSize, 0, 64}, {"votes_a", fields.VotesA, 0, 64},
 		{"success_count", fields.SuccessCount, 0, 256},
 		{"tool_error_count", fields.ToolErrorCount, 0, 256},
 		{"votes_b", fields.VotesB, 0, 64}, {"target_count", fields.TargetCount, 0, 16},
 		{"turn_limit", fields.TurnLimit, 1, 256}, {"turns_used", fields.TurnsUsed, 0, 256},
-		{"unseen_open", fields.UnseenOpen, 0, 64},
 	}
 	for _, value := range integers {
 		if value.value != nil && (*value.value < value.minimum || *value.value > value.maximum) {

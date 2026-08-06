@@ -93,7 +93,6 @@ type References struct {
 // Pointer scalars distinguish an observed zero or false value from absence.
 type FactFields struct {
 	Action           string   `json:"action,omitempty"`
-	ActiveClaims     *int     `json:"active_claims,omitempty"`
 	Alpha            *int     `json:"alpha,omitempty"`
 	ArtifactCount    *int     `json:"artifact_count,omitempty"`
 	AttemptCount     *int     `json:"attempt_count,omitempty"`
@@ -114,6 +113,8 @@ type FactFields struct {
 	MarginBefore     *int     `json:"margin_before,omitempty"`
 	NoVote           *bool    `json:"no_vote,omitempty"`
 	NoVotes          *int     `json:"no_votes,omitempty"`
+	OccupiedClaims   *int     `json:"occupied_claims,omitempty"`
+	OpenUnclaimed    *int     `json:"open_unclaimed,omitempty"`
 	Outcome          string   `json:"outcome,omitempty"`
 	PayloadBytes     *int     `json:"payload_bytes,omitempty"`
 	Phase            string   `json:"phase,omitempty"`
@@ -135,7 +136,6 @@ type FactFields struct {
 	TimedOut         *bool    `json:"timed_out,omitempty"`
 	TurnLimit        *int     `json:"turn_limit,omitempty"`
 	TurnsUsed        *int     `json:"turns_used,omitempty"`
-	UnseenOpen       *int     `json:"unseen_open,omitempty"`
 	ViewNonempty     *bool    `json:"view_nonempty,omitempty"`
 	VotesA           *int     `json:"votes_a,omitempty"`
 	VotesB           *int     `json:"votes_b,omitempty"`

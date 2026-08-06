@@ -90,7 +90,6 @@ type refsWire struct {
 
 type factsWire struct {
 	Action           string   `json:"action,omitempty"`
-	ActiveClaims     *int     `json:"active_claims,omitempty"`
 	Alpha            *int     `json:"alpha,omitempty"`
 	ArtifactCount    *int     `json:"artifact_count,omitempty"`
 	AttemptCount     *int     `json:"attempt_count,omitempty"`
@@ -111,6 +110,8 @@ type factsWire struct {
 	MarginBefore     *int     `json:"margin_before,omitempty"`
 	NoVote           *bool    `json:"no_vote,omitempty"`
 	NoVotes          *int     `json:"no_votes,omitempty"`
+	OccupiedClaims   *int     `json:"occupied_claims,omitempty"`
+	OpenUnclaimed    *int     `json:"open_unclaimed,omitempty"`
 	Outcome          string   `json:"outcome,omitempty"`
 	PayloadBytes     *int     `json:"payload_bytes,omitempty"`
 	Phase            string   `json:"phase,omitempty"`
@@ -132,7 +133,6 @@ type factsWire struct {
 	TimedOut         *bool    `json:"timed_out,omitempty"`
 	TurnLimit        *int     `json:"turn_limit,omitempty"`
 	TurnsUsed        *int     `json:"turns_used,omitempty"`
-	UnseenOpen       *int     `json:"unseen_open,omitempty"`
 	ViewNonempty     *bool    `json:"view_nonempty,omitempty"`
 	VotesA           *int     `json:"votes_a,omitempty"`
 	VotesB           *int     `json:"votes_b,omitempty"`
@@ -282,8 +282,8 @@ func TestObserverFixturesAreStrictRedactedRenderInputs(t *testing.T) {
 
 func TestTraceDecoderRejectsDangerousOrUnknownFields(t *testing.T) {
 	for _, field := range dangerousKeys {
-		raw := []byte(fmt.Sprintf(`{"schema":"%s","version":1,"record":"fact","%s":"secret"}`,
-			traceSchema, field))
+		raw := []byte(fmt.Sprintf(`{"schema":"%s","version":%d,"record":"fact","%s":"secret"}`,
+			traceSchema, traceVersion, field))
 		var value factRecord
 		if err := decodeStrict(raw, &value); err == nil {
 			t.Fatalf("strict fact decoder accepted forbidden/unknown field %q", field)
@@ -497,7 +497,6 @@ func validateClosedFacts(t *testing.T, sequence int, facts factsWire) {
 	checkEnum("state", facts.State, []string{"open", "active", "pending", "settled", "expired", "retracted", "terminal"})
 	checkEnum("status", facts.Status, []string{"pass", "fail", "incomplete", "unknown", "not_applicable"})
 	validateOptionalInt(t, sequence, "alpha", facts.Alpha, 1, 64)
-	validateOptionalInt(t, sequence, "active_claims", facts.ActiveClaims, 0, 64)
 	validateOptionalInt(t, sequence, "artifact_count", facts.ArtifactCount, 0, 64)
 	validateOptionalInt(t, sequence, "attempt_count", facts.AttemptCount, 0, 256)
 	validateOptionalInt(t, sequence, "batched_unattributed_count", facts.BatchedCount, 0, 256)
@@ -507,6 +506,8 @@ func validateClosedFacts(t *testing.T, sequence int, facts factsWire) {
 	validateOptionalInt(t, sequence, "margin_after", facts.MarginAfter, -1024, 1024)
 	validateOptionalInt(t, sequence, "margin_before", facts.MarginBefore, -1024, 1024)
 	validateOptionalInt(t, sequence, "no_votes", facts.NoVotes, 0, 64)
+	validateOptionalInt(t, sequence, "occupied_claims", facts.OccupiedClaims, 0, 64)
+	validateOptionalInt(t, sequence, "open_unclaimed", facts.OpenUnclaimed, 0, 64)
 	validateOptionalInt(t, sequence, "payload_bytes", facts.PayloadBytes, 0, 32<<10)
 	validateOptionalInt(t, sequence, "round", facts.Round, 0, 1024)
 	validateOptionalInt(t, sequence, "sample_size", facts.SampleSize, 0, 64)
@@ -515,7 +516,6 @@ func validateClosedFacts(t *testing.T, sequence int, facts factsWire) {
 	validateOptionalInt(t, sequence, "tool_error_count", facts.ToolErrorCount, 0, 256)
 	validateOptionalInt(t, sequence, "turn_limit", facts.TurnLimit, 1, 256)
 	validateOptionalInt(t, sequence, "turns_used", facts.TurnsUsed, 0, 256)
-	validateOptionalInt(t, sequence, "unseen_open", facts.UnseenOpen, 0, 64)
 	validateOptionalInt(t, sequence, "votes_a", facts.VotesA, 0, 64)
 	validateOptionalInt(t, sequence, "votes_b", facts.VotesB, 0, 64)
 	validateOptionalInt64(t, sequence, "byte_size", facts.ByteSize, 0, 16<<20)

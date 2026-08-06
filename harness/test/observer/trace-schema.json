@@ -18,11 +18,6 @@
             "other"
           ]
         },
-        "active_claims": {
-          "maximum": 64,
-          "minimum": 0,
-          "type": "integer"
-        },
         "alpha": {
           "maximum": 64,
           "minimum": 1,
@@ -112,6 +107,16 @@
           "type": "boolean"
         },
         "no_votes": {
+          "maximum": 64,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "occupied_claims": {
+          "maximum": 64,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "open_unclaimed": {
           "maximum": 64,
           "minimum": 0,
           "type": "integer"
@@ -230,11 +235,6 @@
         },
         "turns_used": {
           "maximum": 256,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "unseen_open": {
-          "maximum": 64,
           "minimum": 0,
           "type": "integer"
         },
@@ -423,7 +423,7 @@
           "$ref": "#/$defs/timestamp"
         },
         "version": {
-          "const": 1
+          "const": 2
         }
       },
       "required": [
@@ -497,6 +497,7 @@
             "r8.observation.produced",
             "test.attention.wave",
             "test.attention.exhausted",
+            "test.attention.occupied",
             "test.gate.checked"
           ]
         },
@@ -530,7 +531,7 @@
           "$ref": "#/$defs/token"
         },
         "version": {
-          "const": 1
+          "const": 2
         }
       },
       "required": [
@@ -783,6 +784,7 @@
                   "enum": [
                     "test.attention.wave",
                     "test.attention.exhausted",
+                    "test.attention.occupied",
                     "test.gate.checked"
                   ]
                 },
@@ -1105,12 +1107,17 @@
                     "maxItems": 0
                   },
                   "facts": {
+                    "properties": {
+                      "occupied_claims": {
+                        "const": 0
+                      }
+                    },
                     "required": [
                       "episode",
                       "role",
                       "round",
-                      "unseen_open",
-                      "active_claims",
+                      "open_unclaimed",
+                      "occupied_claims",
                       "turn_limit",
                       "turns_used"
                     ]
@@ -1135,12 +1142,47 @@
                     "maxItems": 0
                   },
                   "facts": {
+                    "properties": {
+                      "occupied_claims": {
+                        "const": 0
+                      }
+                    },
                     "required": [
                       "episode",
                       "role",
                       "round",
-                      "unseen_open",
-                      "active_claims",
+                      "open_unclaimed",
+                      "occupied_claims",
+                      "turn_limit",
+                      "turns_used"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "test.attention.occupied"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "causes": {
+                    "maxItems": 0
+                  },
+                  "facts": {
+                    "required": [
+                      "episode",
+                      "role",
+                      "round",
+                      "open_unclaimed",
+                      "occupied_claims",
                       "turn_limit",
                       "turns_used"
                     ]
@@ -1187,7 +1229,7 @@
           "$ref": "#/$defs/digest"
         },
         "version": {
-          "const": 1
+          "const": 2
         }
       },
       "required": [

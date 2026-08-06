@@ -21,10 +21,10 @@ type failureReport struct {
 		Code       string `json:"code"`
 		ObservedAt string `json:"observed_at"`
 	} `json:"failure"`
-	World                      []failureWorldSnapshot    `json:"world"`
-	FirstAttention             *firstAttentionSettlement `json:"first_attention"`
-	Turns                      []turnSummary             `json:"turns"`
-	RawProviderStreamsRetained bool                      `json:"raw_provider_streams_retained"`
+	World                      []failureWorldSnapshot   `json:"world"`
+	OpenAttention              *openAttentionSettlement `json:"open_attention"`
+	Turns                      []turnSummary            `json:"turns"`
+	RawProviderStreamsRetained bool                     `json:"raw_provider_streams_retained"`
 }
 
 type failureWorldSnapshot struct {
@@ -48,7 +48,7 @@ func loadFailureReport(path string) (failureReport, error) {
 }
 
 func validateFailureReport(report failureReport) error {
-	if report.Schema != "mnemon.r7.domain-ops.failure-report" || report.Version != 4 ||
+	if report.Schema != "mnemon.r7.domain-ops.failure-report" || report.Version != 5 ||
 		report.Status != "failed" || report.RawProviderStreamsRetained ||
 		report.Model == "" || report.Failure.Code == "" {
 		return errors.New("sanitized failure report has invalid identity or status")
@@ -80,7 +80,7 @@ func validateFailureReport(report failureReport) error {
 	if err := validateFailureWorld(report.World); err != nil {
 		return err
 	}
-	return validateFailedFirstAttention(report.Failure.Code, report.FirstAttention, report.Turns)
+	return validateFailedOpenAttention(report.Failure.Code, report.OpenAttention, report.Turns)
 }
 
 func validateFailureWorld(values []failureWorldSnapshot) error {
@@ -105,7 +105,7 @@ func validateFailureWorld(values []failureWorldSnapshot) error {
 }
 
 func validateCompletedTurnSubset(turns []turnSummary) error {
-	if len(turns) > 2*(1+8*len(domainRoles))+len(domainRoles) {
+	if len(turns) > 2*(1+8*len(domainRoles))+len(domainRoles)+2*openAttentionTurnLimit {
 		return errors.New("sanitized failure report contains too many completed turns")
 	}
 	seen := make(map[string]struct{}, len(turns))
@@ -164,7 +164,7 @@ func writeFailureTrace(destination io.Writer, report failureReport,
 	if _, err := appendDeliveryFacts(writer, nodes, eventFacts); err != nil {
 		return err
 	}
-	attentionFacts, err := appendFailedAttentionFacts(writer, report.FirstAttention, observedAt)
+	attentionFacts, err := appendFailedAttentionFacts(writer, report.OpenAttention, observedAt)
 	if err != nil {
 		return err
 	}

@@ -366,7 +366,7 @@
       <div class="loader-row">
         <div class="loader-copy">
           <strong>Drop one or more sanitized JSONL traces</strong>
-          <span>mnemon.test.trace v1 · metadata-only · multiple runs supported</span>
+          <span>mnemon.test.trace v2 · metadata-only · multiple runs supported</span>
         </div>
         <div>
           <label class="file-button" for="traceFiles">Load trace files</label>
@@ -462,7 +462,7 @@
       canvasHeight: 1000
     });
     const TRACE_SCHEMA = "mnemon.test.trace";
-    const TRACE_VERSION = 1;
+    const TRACE_VERSION = 2;
     const TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
     const DIGEST = /^sha256:[0-9a-f]{64}$/;
     const TRACE_ID = /^trace:[A-Za-z0-9][A-Za-z0-9._:-]{0,121}$/;
@@ -471,12 +471,12 @@
     const FACT_KEYS = Object.freeze(["schema", "version", "record", "seq", "id", "captured_at", "source", "agent", "turn", "kind", "truth", "causes", "refs", "facts"]);
     const RESULT_KEYS = Object.freeze(["schema", "version", "record", "status", "finished_at", "record_count", "trace_digest", "gates"]);
     const FACT_FIELDS = Object.freeze([
-      "action", "active_claims", "alpha", "artifact_count", "attempt_count", "authenticated", "batched_unattributed_count", "bypassed_hook", "byte_size",
+      "action", "alpha", "artifact_count", "attempt_count", "authenticated", "batched_unattributed_count", "bypassed_hook", "byte_size",
       "code", "consequence", "count", "duration_ms", "episode", "gate_id", "hook_cue", "invalid_result_count", "invalid_votes",
-      "margin_after", "margin_before", "no_vote", "no_votes", "outcome", "payload_bytes", "phase",
+      "margin_after", "margin_before", "no_vote", "no_votes", "occupied_claims", "open_unclaimed", "outcome", "payload_bytes", "phase",
       "preference_after", "preference_before", "recolored", "replayed", "result", "role", "round",
       "sample_size", "semantic_kind", "state", "status", "success_count", "target_count", "targets", "timed_out", "tool_error_count", "view_nonempty",
-      "turn_limit", "turns_used", "unseen_open", "votes_a", "votes_b"
+      "turn_limit", "turns_used", "votes_a", "votes_b"
     ]);
     const INTENT_DENIAL_CODES = Object.freeze([
       "invalid_argument", "content_required", "content_too_large", "artifact_invalid",
@@ -519,6 +519,7 @@
       "r8.observation.produced|r8_selector|local_preference",
       "test.attention.wave|oracle|assertion",
       "test.attention.exhausted|oracle|assertion",
+      "test.attention.occupied|oracle|assertion",
       "test.gate.checked|oracle|assertion"
     ]);
     const FACT_CLASSIFICATIONS = new Map(FACT_CLASSIFICATION_ROWS.map(row => {
@@ -668,7 +669,6 @@
       if (facts.state !== undefined) requireEnum(facts.state, ["open", "active", "pending", "settled", "expired", "retracted", "terminal"], label + ".state");
       if (facts.status !== undefined) requireEnum(facts.status, ["pass", "fail", "incomplete", "unknown", "not_applicable"], label + ".status");
       optionalInteger(facts.alpha, 1, 64, label + ".alpha");
-      optionalInteger(facts.active_claims, 0, 64, label + ".active_claims");
       optionalInteger(facts.artifact_count, 0, 64, label + ".artifact_count");
       optionalInteger(facts.attempt_count, 0, 256, label + ".attempt_count");
       optionalInteger(facts.batched_unattributed_count, 0, 256, label + ".batched_unattributed_count");
@@ -678,6 +678,8 @@
       optionalInteger(facts.margin_after, -1024, 1024, label + ".margin_after");
       optionalInteger(facts.margin_before, -1024, 1024, label + ".margin_before");
       optionalInteger(facts.no_votes, 0, 64, label + ".no_votes");
+      optionalInteger(facts.occupied_claims, 0, 64, label + ".occupied_claims");
+      optionalInteger(facts.open_unclaimed, 0, 64, label + ".open_unclaimed");
       optionalInteger(facts.payload_bytes, 0, 32768, label + ".payload_bytes");
       optionalInteger(facts.round, 0, 1024, label + ".round");
       optionalInteger(facts.sample_size, 0, 64, label + ".sample_size");
@@ -686,7 +688,6 @@
       optionalInteger(facts.tool_error_count, 0, 256, label + ".tool_error_count");
       optionalInteger(facts.turn_limit, 1, 256, label + ".turn_limit");
       optionalInteger(facts.turns_used, 0, 256, label + ".turns_used");
-      optionalInteger(facts.unseen_open, 0, 64, label + ".unseen_open");
       optionalInteger(facts.votes_a, 0, 64, label + ".votes_a");
       optionalInteger(facts.votes_b, 0, 64, label + ".votes_b");
       optionalInteger(facts.byte_size, 0, 16777216, label + ".byte_size");
@@ -778,9 +779,11 @@
           break;
         case "test.attention.wave":
         case "test.attention.exhausted":
-          required(record.facts, ["episode", "role", "round", "unseen_open", "active_claims", "turn_limit", "turns_used"], label + ".facts");
+        case "test.attention.occupied":
+          required(record.facts, ["episode", "role", "round", "open_unclaimed", "occupied_claims", "turn_limit", "turns_used"], label + ".facts");
           if (record.causes.length !== 0 || record.facts.round < 1 ||
-              record.facts.active_claims !== 0 || record.facts.turns_used > record.facts.turn_limit) {
+              record.facts.turns_used > record.facts.turn_limit ||
+              (record.kind !== "test.attention.occupied" && record.facts.occupied_claims !== 0)) {
             fail(label, "does not describe a bounded non-causal attention snapshot");
           }
           break;
@@ -1009,9 +1012,9 @@
           }
           if (fact.facts.code) details.push(fact.facts.code);
           if (fact.facts.count !== undefined) details.push("count " + fact.facts.count);
-          if (fact.facts.unseen_open !== undefined) {
+          if (fact.facts.open_unclaimed !== undefined) {
             details.push(fact.facts.episode + " · " + fact.facts.role + " · wave " + fact.facts.round +
-              " · unseen " + fact.facts.unseen_open + " · active " + fact.facts.active_claims +
+              " · open/unclaimed " + fact.facts.open_unclaimed + " · occupied " + fact.facts.occupied_claims +
               " · turns " + fact.facts.turns_used + "/" + fact.facts.turn_limit);
           }
           if (fact.facts.semantic_kind) details.push(fact.facts.semantic_kind);

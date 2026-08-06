@@ -623,7 +623,7 @@ func readRequiredFile(t *testing.T, path string) []byte {
 
 func validReport() liveReport {
 	var report liveReport
-	report.Schema, report.Version, report.Status = "mnemon.r7.domain-ops.live-report", 4, "passed"
+	report.Schema, report.Version, report.Status = "mnemon.r7.domain-ops.live-report", 5, "passed"
 	report.Model, report.Rounds = "deepseek-v4-flash", 1
 	report.Run = runReport{ID: "domain-ops-test", StartedAt: "2026-08-04T01:00:00Z",
 		FinishedAt: "2026-08-04T01:01:00Z", CandidateDigest: agency.Sum([]byte("candidate")).String()}
@@ -663,12 +663,12 @@ func validReport() liveReport {
 		report.Protocol.DeliveryQuiescence = append(report.Protocol.DeliveryQuiescence, barrier)
 	}
 	for episode := 1; episode <= 2; episode++ {
-		settlement := firstAttentionSettlement{Episode: fmt.Sprintf("episode-%d", episode),
-			Status: "settled", TurnLimit: firstAttentionTurnLimit}
+		settlement := openAttentionSettlement{Episode: fmt.Sprintf("episode-%d", episode),
+			Status: "settled", TurnLimit: openAttentionTurnLimit}
 		for _, role := range domainRoles {
-			settlement.Final = append(settlement.Final, firstAttentionNode{Role: role})
+			settlement.Final = append(settlement.Final, openAttentionNode{Role: role})
 		}
-		report.Protocol.FirstAttention = append(report.Protocol.FirstAttention, settlement)
+		report.Protocol.OpenAttention = append(report.Protocol.OpenAttention, settlement)
 	}
 	for episode := 1; episode <= 2; episode++ {
 		report.Turns = append(report.Turns, turnSummary{Role: "lead",
@@ -725,7 +725,7 @@ func populateValidEvolution(report *liveReport) {
 func validFailureReport() failureReport {
 	var report failureReport
 	report.Schema, report.Version, report.Status =
-		"mnemon.r7.domain-ops.failure-report", 4, "failed"
+		"mnemon.r7.domain-ops.failure-report", 5, "failed"
 	report.Model = "deepseek-v4-flash"
 	report.Run = runReport{ID: "domain-ops-failed", StartedAt: "2026-08-04T01:00:00Z",
 		FinishedAt:      "2026-08-04T01:01:00Z",

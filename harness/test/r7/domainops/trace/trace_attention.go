@@ -7,7 +7,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/test/observer"
 )
 
-func appendFailedAttentionFacts(writer *observer.Writer, value *firstAttentionSettlement,
+func appendFailedAttentionFacts(writer *observer.Writer, value *openAttentionSettlement,
 	capturedAt time.Time,
 ) ([]string, error) {
 	if value == nil {
@@ -20,29 +20,33 @@ func appendFailedAttentionFacts(writer *observer.Writer, value *firstAttentionSe
 			return nil, err
 		}
 		for _, node := range wave.Nodes {
-			if node.UnseenOpen > 0 {
+			if node.OpenUnclaimed > 0 {
 				used++
 			}
 		}
 	}
+	finalKind := "test.attention.exhausted"
+	if value.Status == "claim_occupied" {
+		finalKind = "test.attention.occupied"
+	}
 	return appendAttentionSnapshot(writer, value, len(value.Waves)+1, value.TurnsUsed,
-		"test.attention.exhausted", value.Final, capturedAt)
+		finalKind, value.Final, capturedAt)
 }
 
-func appendAttentionSnapshot(writer *observer.Writer, value *firstAttentionSettlement,
-	wave, used int, kind string, nodes []firstAttentionNode, capturedAt time.Time,
+func appendAttentionSnapshot(writer *observer.Writer, value *openAttentionSettlement,
+	wave, used int, kind string, nodes []openAttentionNode, capturedAt time.Time,
 ) ([]string, error) {
 	facts := make([]string, 0, len(nodes))
 	for _, node := range nodes {
 		factID := hashedFactID("attention", value.Episode, strconv.Itoa(wave), node.Role, kind)
 		fields := observer.FactFields{
-			Episode:      value.Episode,
-			Role:         node.Role,
-			Round:        intPointer(wave),
-			UnseenOpen:   intPointer(node.UnseenOpen),
-			ActiveClaims: intPointer(node.ActiveClaims),
-			TurnLimit:    intPointer(value.TurnLimit),
-			TurnsUsed:    intPointer(used),
+			Episode:        value.Episode,
+			Role:           node.Role,
+			Round:          intPointer(wave),
+			OpenUnclaimed:  intPointer(node.OpenUnclaimed),
+			OccupiedClaims: intPointer(node.OccupiedClaims),
+			TurnLimit:      intPointer(value.TurnLimit),
+			TurnsUsed:      intPointer(used),
 		}
 		if _, err := writer.Append(observer.Fact{ID: factID, CapturedAt: capturedAt,
 			Source: observer.Source{Class: observer.SourceOracle, Node: "runner"},

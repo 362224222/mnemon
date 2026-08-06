@@ -1,11 +1,28 @@
 package observer
 
 import (
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 )
+
+func TestTraceVersionMatchesSchemaAndBrowser(t *testing.T) {
+	root := decodeJSONObject(t, readFile(t, "trace-schema.json"), "schema root")
+	for _, record := range []string{"run", "fact", "result"} {
+		variant := schemaRecordVariant(t, arrayField(t, root, "oneOf"), record)
+		version, ok := objectField(t, variant, "properties")["version"].(map[string]any)
+		if !ok || version["const"] != float64(traceVersion) {
+			t.Fatalf("%s schema version = %#v, want %d", record, version["const"], traceVersion)
+		}
+	}
+	html := string(readFile(t, "index.html"))
+	want := fmt.Sprintf("const TRACE_VERSION = %d;", traceVersion)
+	if !strings.Contains(html, want) {
+		t.Fatalf("browser trace version does not contain %q", want)
+	}
+}
 
 func TestObserverKeepsScenarioSemanticsInTraceData(t *testing.T) {
 	html := string(readFile(t, "index.html"))
@@ -77,8 +94,9 @@ func TestTraceSchemaRequiresMinimumDisplayEvidence(t *testing.T) {
 		"runtime.intent.denied":    {"facts.action", "facts.code", "facts.count"},
 		"r7.event.accepted":        {"facts.consequence", "facts.semantic_kind", "refs.event", "refs.event_digest"},
 		"r7.handling.resolved":     {"facts.outcome", "facts.state", "refs.handling"},
-		"test.attention.wave":      {"facts.active_claims", "facts.episode", "facts.role", "facts.round", "facts.turn_limit", "facts.turns_used", "facts.unseen_open"},
-		"test.attention.exhausted": {"facts.active_claims", "facts.episode", "facts.role", "facts.round", "facts.turn_limit", "facts.turns_used", "facts.unseen_open"},
+		"test.attention.wave":      {"facts.episode", "facts.occupied_claims", "facts.open_unclaimed", "facts.role", "facts.round", "facts.turn_limit", "facts.turns_used"},
+		"test.attention.exhausted": {"facts.episode", "facts.occupied_claims", "facts.open_unclaimed", "facts.role", "facts.round", "facts.turn_limit", "facts.turns_used"},
+		"test.attention.occupied":  {"facts.episode", "facts.occupied_claims", "facts.open_unclaimed", "facts.role", "facts.round", "facts.turn_limit", "facts.turns_used"},
 		"r8.selection.seeded":      {"facts.phase", "facts.preference_after"},
 		"r8.round.frozen":          {"facts.alpha", "facts.margin_before", "facts.preference_before", "facts.round", "facts.sample_size"},
 		"r8.vote.observed":         {"facts.authenticated", "facts.round", "facts.votes_a", "facts.votes_b"},

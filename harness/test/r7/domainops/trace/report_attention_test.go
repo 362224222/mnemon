@@ -10,30 +10,30 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
-func TestValidateReportBindsFirstAttentionTurnsAndBarrier(t *testing.T) {
+func TestValidateReportBindsOpenAttentionTurnsAndBarrier(t *testing.T) {
 	report := validReport()
-	settlement := &report.Protocol.FirstAttention[0]
-	wave := firstAttentionWave{Wave: 1}
+	settlement := &report.Protocol.OpenAttention[0]
+	wave := openAttentionWave{Wave: 1}
 	for _, role := range domainRoles {
-		node := firstAttentionNode{Role: role}
+		node := openAttentionNode{Role: role}
 		if role == "data" {
-			node.UnseenOpen = 2
+			node.OpenUnclaimed = 2
 		}
 		wave.Nodes = append(wave.Nodes, node)
 	}
-	settlement.Waves = []firstAttentionWave{wave}
+	settlement.Waves = []openAttentionWave{wave}
 	settlement.TurnsUsed = 1
 	report.Turns = append(report.Turns, turnSummary{Role: "data",
-		Turn:       "episode-1-attention-debt-1-data",
+		Turn:       "episode-1-open-attention-1-data",
 		CapturedAt: "2026-08-04T01:00:51Z", HookCues: 1, AgentEnd: true})
-	barrier := deliveryQuiescenceSummary{Phase: "episode-1-attention-debt-1",
+	barrier := deliveryQuiescenceSummary{Phase: "episode-1-open-attention-1",
 		Status: "quiescent", Attempts: 1}
 	for _, role := range domainRoles {
 		barrier.Nodes = append(barrier.Nodes, deliveryNodeOccupancySummary{Role: role})
 	}
 	report.Protocol.DeliveryQuiescence = append(report.Protocol.DeliveryQuiescence, barrier)
 	if err := validateReport(report); err != nil {
-		t.Fatalf("validateReport() rejected first-attention evidence: %v", err)
+		t.Fatalf("validateReport() rejected open-attention evidence: %v", err)
 	}
 
 	report.Turns = report.Turns[:len(report.Turns)-1]
@@ -41,9 +41,9 @@ func TestValidateReportBindsFirstAttentionTurnsAndBarrier(t *testing.T) {
 		t.Fatal("validateReport() accepted an attention wave without its target turn")
 	}
 	report = validReport()
-	report.Protocol.FirstAttention[0].Final[0].UnseenOpen = 1
+	report.Protocol.OpenAttention[0].Final[0].OpenUnclaimed = 1
 	if err := validateReport(report); err == nil {
-		t.Fatal("validateReport() accepted unpaid final attention debt")
+		t.Fatal("validateReport() accepted an open-unclaimed final responsibility")
 	}
 }
 
@@ -58,13 +58,14 @@ func TestFailureReportAndTraceRetainBoundedAttentionExhaustion(t *testing.T) {
 	if err := writeFailureTrace(&output, report, scenario, nil); err != nil {
 		t.Fatalf("writeFailureTrace() error = %v", err)
 	}
-	waveFacts, exhaustedFacts, gateEvidence := inspectAttentionTrace(t, output.String())
-	if waveFacts != 15 || exhaustedFacts != len(domainRoles) || gateEvidence != 1+len(domainRoles) {
-		t.Fatalf("attention trace facts = waves %d exhausted %d gate evidence %d",
-			waveFacts, exhaustedFacts, gateEvidence)
+	waveFacts, exhaustedFacts, boundaryFacts, gateEvidence := inspectAttentionTrace(t, output.String())
+	if waveFacts != 15 || exhaustedFacts != len(domainRoles) || boundaryFacts != 0 ||
+		gateEvidence != 1+len(domainRoles) {
+		t.Fatalf("attention trace facts = waves %d exhausted %d boundary %d gate evidence %d",
+			waveFacts, exhaustedFacts, boundaryFacts, gateEvidence)
 	}
 
-	report.FirstAttention = nil
+	report.OpenAttention = nil
 	if err := validateFailureReport(report); err == nil {
 		t.Fatal("validateFailureReport() accepted budget exhaustion without a final snapshot")
 	}
@@ -75,40 +76,75 @@ func TestFailureReportAndTraceRetainBoundedAttentionExhaustion(t *testing.T) {
 	}
 }
 
+func TestFailureReportAndTraceRetainOccupiedClaimBoundary(t *testing.T) {
+	report := validFailureReport()
+	report.Failure.Code = "scenario.episode-1.attention-claim-occupied"
+	settlement := &openAttentionSettlement{Episode: "episode-1", Status: "claim_occupied",
+		TurnLimit: openAttentionTurnLimit}
+	for _, role := range domainRoles {
+		node := openAttentionNode{Role: role}
+		if role == "data" {
+			node.OccupiedClaims = 1
+		}
+		settlement.Final = append(settlement.Final, node)
+	}
+	report.OpenAttention = settlement
+	if err := validateFailureReport(report); err != nil {
+		t.Fatalf("validateFailureReport() rejected occupied boundary: %v", err)
+	}
+
+	var output bytes.Buffer
+	scenario := scenarioEvidence{Digest: agency.Sum([]byte("attention scenario")).String()}
+	if err := writeFailureTrace(&output, report, scenario, nil); err != nil {
+		t.Fatalf("writeFailureTrace() error = %v", err)
+	}
+	waveFacts, exhaustedFacts, boundaryFacts, gateEvidence := inspectAttentionTrace(t, output.String())
+	if waveFacts != 0 || exhaustedFacts != 0 || boundaryFacts != len(domainRoles) ||
+		gateEvidence != 1+len(domainRoles) {
+		t.Fatalf("attention trace facts = waves %d exhausted %d boundary %d gate evidence %d",
+			waveFacts, exhaustedFacts, boundaryFacts, gateEvidence)
+	}
+
+	report.OpenAttention.Final[0].OccupiedClaims = 0
+	if err := validateFailureReport(report); err == nil {
+		t.Fatal("validateFailureReport() accepted a boundary without occupied claims")
+	}
+}
+
 func attentionExhaustionFailureReport() failureReport {
 	report := validFailureReport()
 	report.Failure.Code = "scenario.episode-1.attention-budget-exhausted"
-	settlement := &firstAttentionSettlement{Episode: "episode-1",
-		Status: "budget_exhausted", TurnLimit: firstAttentionTurnLimit, TurnsUsed: 15}
+	settlement := &openAttentionSettlement{Episode: "episode-1",
+		Status: "budget_exhausted", TurnLimit: openAttentionTurnLimit, TurnsUsed: 15}
 	for wave := 1; wave <= 3; wave++ {
 		settlement.Waves = append(settlement.Waves, attentionWave(wave))
 		for _, role := range domainRoles {
 			report.Turns = append(report.Turns, turnSummary{Role: role,
-				Turn:       "episode-1-attention-debt-" + strconv.Itoa(wave) + "-" + role,
+				Turn:       "episode-1-open-attention-" + strconv.Itoa(wave) + "-" + role,
 				CapturedAt: "2026-08-04T01:00:30Z", HookCues: 1, AgentEnd: true})
 		}
 	}
-	settlement.Final = finalAttentionDebt()
-	report.FirstAttention = settlement
+	settlement.Final = finalOpenUnclaimedSnapshot()
+	report.OpenAttention = settlement
 	return report
 }
 
-func attentionWave(wave int) firstAttentionWave {
-	value := firstAttentionWave{Wave: wave}
+func attentionWave(wave int) openAttentionWave {
+	value := openAttentionWave{Wave: wave}
 	for _, role := range domainRoles {
-		value.Nodes = append(value.Nodes, firstAttentionNode{Role: role, UnseenOpen: 1})
+		value.Nodes = append(value.Nodes, openAttentionNode{Role: role, OpenUnclaimed: 1})
 	}
 	return value
 }
 
-func finalAttentionDebt() []firstAttentionNode {
-	nodes := make([]firstAttentionNode, 0, len(domainRoles))
+func finalOpenUnclaimedSnapshot() []openAttentionNode {
+	nodes := make([]openAttentionNode, 0, len(domainRoles))
 	for _, role := range domainRoles {
-		unseen := 0
+		unclaimed := 0
 		if role == "lead" || role == "payment" {
-			unseen = 1
+			unclaimed = 1
 		}
-		nodes = append(nodes, firstAttentionNode{Role: role, UnseenOpen: unseen})
+		nodes = append(nodes, openAttentionNode{Role: role, OpenUnclaimed: unclaimed})
 	}
 	return nodes
 }
@@ -117,12 +153,12 @@ type attentionTraceRecord struct {
 	Record string `json:"record"`
 	Kind   string `json:"kind"`
 	Facts  struct {
-		Episode      string `json:"episode"`
-		Role         string `json:"role"`
-		UnseenOpen   *int   `json:"unseen_open"`
-		ActiveClaims *int   `json:"active_claims"`
-		TurnLimit    *int   `json:"turn_limit"`
-		TurnsUsed    *int   `json:"turns_used"`
+		Episode        string `json:"episode"`
+		Role           string `json:"role"`
+		OpenUnclaimed  *int   `json:"open_unclaimed"`
+		OccupiedClaims *int   `json:"occupied_claims"`
+		TurnLimit      *int   `json:"turn_limit"`
+		TurnsUsed      *int   `json:"turns_used"`
 	} `json:"facts"`
 	Gates []struct {
 		ID       string   `json:"id"`
@@ -130,38 +166,43 @@ type attentionTraceRecord struct {
 	} `json:"gates"`
 }
 
-func inspectAttentionTrace(t *testing.T, output string) (int, int, int) {
+func inspectAttentionTrace(t *testing.T, output string) (int, int, int, int) {
 	t.Helper()
-	waveFacts, exhaustedFacts, gateEvidence := 0, 0, 0
+	waveFacts, exhaustedFacts, boundaryFacts, gateEvidence := 0, 0, 0, 0
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
 		var record attentionTraceRecord
 		if err := json.Unmarshal([]byte(line), &record); err != nil {
 			t.Fatal(err)
 		}
-		wave, exhausted := classifyAttentionTraceFact(t, record)
+		wave, exhausted, boundary := classifyAttentionTraceFact(t, record)
 		waveFacts += wave
 		exhaustedFacts += exhausted
+		boundaryFacts += boundary
 		for _, gate := range record.Gates {
 			if gate.ID == "scenario.run" {
 				gateEvidence = len(gate.Evidence)
 			}
 		}
 	}
-	return waveFacts, exhaustedFacts, gateEvidence
+	return waveFacts, exhaustedFacts, boundaryFacts, gateEvidence
 }
 
-func classifyAttentionTraceFact(t *testing.T, record attentionTraceRecord) (int, int) {
+func classifyAttentionTraceFact(t *testing.T, record attentionTraceRecord) (int, int, int) {
 	t.Helper()
-	if record.Kind != "test.attention.wave" && record.Kind != "test.attention.exhausted" {
-		return 0, 0
+	if record.Kind != "test.attention.wave" && record.Kind != "test.attention.exhausted" &&
+		record.Kind != "test.attention.occupied" {
+		return 0, 0, 0
 	}
 	if record.Facts.Episode != "episode-1" || record.Facts.Role == "" ||
-		record.Facts.UnseenOpen == nil || record.Facts.ActiveClaims == nil ||
+		record.Facts.OpenUnclaimed == nil || record.Facts.OccupiedClaims == nil ||
 		record.Facts.TurnLimit == nil || record.Facts.TurnsUsed == nil {
 		t.Fatal("attention Fact omitted closed numeric evidence")
 	}
 	if record.Kind == "test.attention.wave" {
-		return 1, 0
+		return 1, 0, 0
 	}
-	return 0, 1
+	if record.Kind == "test.attention.exhausted" {
+		return 0, 1, 0
+	}
+	return 0, 0, 1
 }

@@ -153,6 +153,7 @@ func TestTraceWriterRejectsKindsWithoutMinimumDisplayEvidence(t *testing.T) {
 		{"preference observation", requiredEvidenceFact("trace:observation", "r8.observation.produced")},
 		{"attention wave", requiredEvidenceFact("trace:attention-wave", "test.attention.wave")},
 		{"attention exhaustion", requiredEvidenceFact("trace:attention-exhausted", "test.attention.exhausted")},
+		{"attention occupied", requiredEvidenceFact("trace:attention-occupied", "test.attention.occupied")},
 	}
 	tests[0].fact.Fields.SemanticKind = ""
 	tests[1].fact.Fields.Outcome = ""
@@ -161,8 +162,9 @@ func TestTraceWriterRejectsKindsWithoutMinimumDisplayEvidence(t *testing.T) {
 	tests[4].fact.Fields.Authenticated = nil
 	tests[5].fact.Fields.Recolored = nil
 	tests[6].fact.Fields.Result = ""
-	tests[7].fact.Fields.UnseenOpen = nil
+	tests[7].fact.Fields.OpenUnclaimed = nil
 	tests[8].fact.Fields.TurnLimit = nil
+	tests[9].fact.Fields.OccupiedClaims = nil
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -183,6 +185,7 @@ func TestKindEvidenceRulesMatchClosedDisplayContract(t *testing.T) {
 		"r7.event.accepted", "r7.handling.resolved", "r8.selection.seeded",
 		"r8.round.frozen", "r8.vote.observed", "r8.round.settled",
 		"r8.observation.produced", "test.attention.wave", "test.attention.exhausted",
+		"test.attention.occupied",
 	}
 	if len(kindEvidenceRules) != len(expected) {
 		t.Fatalf("kind evidence rules = %d, want %d", len(kindEvidenceRules), len(expected))
@@ -277,8 +280,8 @@ func requiredEvidenceFact(id, kind string) Fact {
 		Phase: "observed", Result: "threshold_reached", Round: &integer, SampleSize: &integer,
 		Alpha: &integer, VotesA: &zero, VotesB: &integer, MarginBefore: &zero,
 		MarginAfter: &integer, Authenticated: &boolean, Recolored: &boolean,
-		Episode: "episode-1", Role: "lead", ActiveClaims: &zero,
-		UnseenOpen: &integer, TurnLimit: &integer, TurnsUsed: &zero}
+		Episode: "episode-1", Role: "lead", OccupiedClaims: &zero,
+		OpenUnclaimed: &integer, TurnLimit: &integer, TurnsUsed: &zero}
 	return fact
 }
 

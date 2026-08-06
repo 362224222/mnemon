@@ -28,7 +28,7 @@ rounds=${DOMAIN_OPS_ROUNDS:-3}
 persisted_evidence_max_bytes=$((8 * 1024 * 1024))
 persisted_evidence_max_blocks=$((persisted_evidence_max_bytes / 1024))
 peer_quiescence_seconds=30
-first_attention_turn_limit=16
+open_attention_turn_limit=16
 report_path=${DOMAIN_OPS_REPORT:-$repository_root/.testdata/r7-domain-ops-live/last-report.json}
 trace_path=${DOMAIN_OPS_TRACE:-$repository_root/.testdata/r7-domain-ops-live/last.trace}
 failure_report_path=${DOMAIN_OPS_FAILURE_REPORT:-$repository_root/.testdata/r7-domain-ops-live/last-failure.json}
@@ -1021,82 +1021,93 @@ EOF
   printf '%s\n' "$total"
 }
 
-snapshot_first_attention_debt() {
-  local episode=$1 wave=$2 snapshot role database values unseen active
-  local nodes="$runtime_root/first-attention/$episode-wave-$wave-nodes.jsonl"
-  local output="$runtime_root/first-attention/$episode-wave-$wave.json"
-  snapshot="$runtime_root/first-attention/snapshot-$episode-$wave"
+read_open_attention_counts() {
+  local database=$1
+  sqlite3 -readonly -batch -cmd '.timeout 5000' \
+    -cmd 'PRAGMA query_only=ON;' "$database" '
+      SELECT
+        (SELECT COUNT(*) FROM handlings
+          WHERE state = '\''open'\'' AND claim_attachment_id IS NULL),
+        (SELECT COUNT(*) FROM handlings
+          WHERE state = '\''open'\'' AND claim_attachment_id IS NOT NULL);'
+}
+
+snapshot_open_attention() {
+  local episode=$1 wave=$2 snapshot role database values unclaimed occupied
+  local nodes="$runtime_root/open-attention/$episode-wave-$wave-nodes.jsonl"
+  local output="$runtime_root/open-attention/$episode-wave-$wave.json"
+  snapshot="$runtime_root/open-attention/snapshot-$episode-$wave"
   : >"$nodes"
   capture_authority_snapshot "$snapshot" || return 1
 
   for role in $roles; do
     database="$snapshot/$role/agency.db"
-    values=$(sqlite3 -readonly -batch -cmd '.timeout 5000' \
-      -cmd 'PRAGMA query_only=ON;' "$database" '
-        SELECT
-          (SELECT COUNT(*) FROM handlings
-            WHERE state = '\''open'\'' AND claim_fence = 0
-              AND claim_attachment_id IS NULL),
-          (SELECT COUNT(*) FROM handlings
-            WHERE state = '\''open'\'' AND claim_attachment_id IS NOT NULL);') || {
+    values=$(read_open_attention_counts "$database") || {
       rm -rf -- "$snapshot"
       return 1
     }
-    IFS='|' read -r unseen active <<EOF
+    IFS='|' read -r unclaimed occupied <<EOF
 $values
 EOF
-    case "$unseen" in ''|*[!0-9]*) rm -rf -- "$snapshot"; return 1 ;; esac
-    case "$active" in ''|*[!0-9]*) rm -rf -- "$snapshot"; return 1 ;; esac
-    jq -cn --arg role "$role" --argjson unseen "$unseen" --argjson active "$active" \
-      '{role:$role,unseen_open:$unseen,active_claims:$active}' >>"$nodes"
+    case "$unclaimed" in ''|*[!0-9]*) rm -rf -- "$snapshot"; return 1 ;; esac
+    case "$occupied" in ''|*[!0-9]*) rm -rf -- "$snapshot"; return 1 ;; esac
+    jq -cn --arg role "$role" --argjson unclaimed "$unclaimed" \
+      --argjson occupied "$occupied" \
+      '{role:$role,open_unclaimed:$unclaimed,occupied_claims:$occupied}' >>"$nodes"
   done
   rm -rf -- "$snapshot"
   jq -s '.' "$nodes" >"$output"
   printf '%s\n' "$output"
 }
 
-run_first_attention_wave() {
+run_open_attention_wave() {
   local episode=$1 wave=$2 snapshot=$3 role pid failed=0
   local wave_pids=()
   while IFS= read -r role; do
     run_turn "$role" "$neutral_attention" \
-      "$episode-attention-debt-$wave-$role" &
+      "$episode-open-attention-$wave-$role" &
     pid=$!
     wave_pids+=("$pid")
     turn_pids+=("$pid")
-  done < <(jq -r '.[] | select(.unseen_open > 0) | .role' "$snapshot")
+  done < <(jq -r '.[] | select(.open_unclaimed > 0) | .role' "$snapshot")
   for pid in "${wave_pids[@]}"; do
     if ! wait "$pid"; then failed=1; fi
   done
   if test "$failed" != 0; then
-    fail "$episode first-attention wave $wave did not finish cleanly"
+    fail "$episode open-attention wave $wave did not finish cleanly"
     return 1
   fi
   turn_pids=()
-  wait_for_peer_delivery_quiescence "$episode-attention-debt-$wave"
+  wait_for_peer_delivery_quiescence "$episode-open-attention-$wave"
 }
 
-settle_first_attention_debt() {
-  local episode=$1 wave=1 used=0 snapshot unseen active targets
-  local directory="$runtime_root/first-attention"
+settle_open_attention() {
+  local episode=$1 wave=1 used=0 snapshot unclaimed occupied targets
+  local directory="$runtime_root/open-attention"
   local waves="$directory/$episode-waves.jsonl"
   local settlement="$directory/$episode-settlement.json"
   mkdir -p "$directory"
   : >"$waves"
   while :; do
-    snapshot=$(snapshot_first_attention_debt "$episode" "$wave") || {
-      fail "$episode could not inspect protocol-neutral first-attention debt"
+    snapshot=$(snapshot_open_attention "$episode" "$wave") || {
+      fail "$episode could not inspect protocol-neutral open attention"
       return 1
     }
-    active=$(jq '[.[].active_claims] | add' "$snapshot")
-    if test "$active" -ne 0; then
-      failure_stage="scenario.$episode.attention-boundary-open"
-      fail "$episode first-attention snapshot found $active live claims"
+    occupied=$(jq '[.[].occupied_claims] | add' "$snapshot")
+    if test "$occupied" -ne 0; then
+      jq -n --arg episode "$episode" --argjson limit "$open_attention_turn_limit" \
+        --argjson used "$used" --argjson waves "$(jq -s '.' "$waves")" \
+        --argjson final "$(cat "$snapshot")" '
+          {episode:$episode,status:"claim_occupied",turn_limit:$limit,
+           turns_used:$used,waves:$waves,final_nodes:$final}
+        ' >"$directory/$episode-claim-occupied.json"
+      failure_stage="scenario.$episode.attention-claim-occupied"
+      fail "$episode open-attention snapshot found $occupied occupied claims"
       return 1
     fi
-    unseen=$(jq '[.[].unseen_open] | add' "$snapshot")
-    if test "$unseen" -eq 0; then
-      jq -n --arg episode "$episode" --argjson limit "$first_attention_turn_limit" \
+    unclaimed=$(jq '[.[].open_unclaimed] | add' "$snapshot")
+    if test "$unclaimed" -eq 0; then
+      jq -n --arg episode "$episode" --argjson limit "$open_attention_turn_limit" \
         --argjson used "$used" --argjson waves "$(jq -s '.' "$waves")" \
         --argjson final "$(cat "$snapshot")" '
           {episode:$episode,status:"settled",turn_limit:$limit,turns_used:$used,
@@ -1104,21 +1115,21 @@ settle_first_attention_debt() {
         ' >"$settlement"
       return 0
     fi
-    targets=$(jq '[.[] | select(.unseen_open > 0)] | length' "$snapshot")
-    if test $((used + targets)) -gt "$first_attention_turn_limit"; then
-      jq -n --arg episode "$episode" --argjson limit "$first_attention_turn_limit" \
+    targets=$(jq '[.[] | select(.open_unclaimed > 0)] | length' "$snapshot")
+    if test $((used + targets)) -gt "$open_attention_turn_limit"; then
+      jq -n --arg episode "$episode" --argjson limit "$open_attention_turn_limit" \
         --argjson used "$used" --argjson waves "$(jq -s '.' "$waves")" \
         --argjson final "$(cat "$snapshot")" '
           {episode:$episode,status:"budget_exhausted",turn_limit:$limit,
            turns_used:$used,waves:$waves,final_nodes:$final}
         ' >"$directory/$episode-budget-exhausted.json"
       failure_stage="scenario.$episode.attention-budget-exhausted"
-      fail "$episode first-attention debt exceeded the ${first_attention_turn_limit}-turn bound"
+      fail "$episode open attention exceeded the ${open_attention_turn_limit}-turn bound"
       return 1
     fi
     jq -cn --argjson wave "$wave" --argjson nodes "$(cat "$snapshot")" \
       '{wave:$wave,nodes:$nodes}' >>"$waves"
-    run_first_attention_wave "$episode" "$wave" "$snapshot" || return 1
+    run_open_attention_wave "$episode" "$wave" "$snapshot" || return 1
     used=$((used + targets))
     wave=$((wave + 1))
   done
@@ -1629,7 +1640,7 @@ write_report() {
     --argjson episodes "$episodes" \
     --argjson turns "$(jq -s 'sort_by(.turn)' "$runtime_root/sanitized"/*.json)" \
     --argjson delivery_quiescence "$(jq -s '.' "$runtime_root/peer-quiescence.jsonl")" \
-    --argjson first_attention "$(jq -s '.' "$runtime_root/first-attention"/*-settlement.json)" \
+    --argjson open_attention "$(jq -s '.' "$runtime_root/open-attention"/*-settlement.json)" \
     --argjson peer_effects "$(jq -s '.' "$runtime_root/peer-effects.jsonl")" \
     --argjson evolution_boundary "$(cat "$runtime_root/evolution-boundary.json")" \
     --argjson evolution_effects "$(jq -s '.' "$runtime_root/evolution-effects.jsonl")" \
@@ -1637,7 +1648,7 @@ write_report() {
     --argjson peer_effect_total "$total" '
       {
         schema:$schema,
-        version:4,
+        version:5,
         status:"passed",
         model:$model,
         rounds:$rounds,
@@ -1647,7 +1658,7 @@ write_report() {
         world:{episodes:$episodes},
         protocol:{accepted_peer_effects:$peer_effect_total,by_receiver:$peer_effects,
           delivery_quiescence:$delivery_quiescence,
-          first_attention_settlement:$first_attention,
+          open_attention_settlement:$open_attention,
           evolution:{boundary:$evolution_boundary,effects:$evolution_effects,
             accepted_reference_uses:$evolution_total}},
         turns:$turns,
@@ -1687,7 +1698,8 @@ publish_evidence() {
 }
 
 finalize_failure_evidence() {
-  local code=$1 observed_at completed_turns='[]' first_attention='null' attention_files=()
+  local code=$1 observed_at completed_turns='[]' open_attention='null' candidate
+  local attention_files=()
   test "$authority_started" = 1 || return 0
   test -n "$runtime_root" && test -d "$runtime_root" || return 0
   test -s "$runtime_root/candidate-binaries.sha256" || return 0
@@ -1697,10 +1709,14 @@ finalize_failure_evidence() {
   if compgen -G "$runtime_root/sanitized/*.json" >/dev/null; then
     completed_turns=$(jq -s 'sort_by(.turn)' "$runtime_root/sanitized"/*.json) || return 0
   fi
-  if compgen -G "$runtime_root/first-attention/*-budget-exhausted.json" >/dev/null; then
-    attention_files=("$runtime_root"/first-attention/*-budget-exhausted.json)
+  for candidate in "$runtime_root"/open-attention/*-budget-exhausted.json \
+      "$runtime_root"/open-attention/*-claim-occupied.json; do
+    test -f "$candidate" || continue
+    attention_files+=("$candidate")
+  done
+  if test "${#attention_files[@]}" -gt 0; then
     test "${#attention_files[@]}" -eq 1 || return 0
-    first_attention=$(cat "${attention_files[0]}") || return 0
+    open_attention=$(cat "${attention_files[0]}") || return 0
   fi
   collect_failure_world "$runtime_root/failure-world.json" || return 0
   jq -n \
@@ -1712,19 +1728,19 @@ finalize_failure_evidence() {
     --arg candidate_digest "$agent_image_id" \
     --arg code "$code" \
     --arg observed_at "$observed_at" \
-    --argjson first_attention "$first_attention" \
+    --argjson open_attention "$open_attention" \
     --argjson world "$(cat "$runtime_root/failure-world.json")" \
     --argjson turns "$completed_turns" '
       {
         schema:$schema,
-        version:4,
+        version:5,
         status:"failed",
         model:$model,
         run:{id:$run_id,started_at:$started_at,finished_at:$finished_at,
           candidate_digest:$candidate_digest},
         failure:{code:$code,observed_at:$observed_at},
         world:$world,
-        first_attention:$first_attention,
+        open_attention:$open_attention,
         turns:$turns,
         raw_provider_streams_retained:false
       }
@@ -1777,8 +1793,8 @@ main() {
   prepare_agents
   failure_stage=scenario.episode-1-agent-turns
   run_agents episode-1
-  failure_stage=scenario.episode-1-first-attention
-  settle_first_attention_debt episode-1
+  failure_stage=scenario.episode-1-open-attention
+  settle_open_attention episode-1
   failure_stage=scenario.episode-1-recovery
   assert_recovery episode-1 "$first_incident_prefix" "$first_evaluation_prefix" \
     "$first_stability_prefix"
@@ -1798,8 +1814,8 @@ main() {
   seed_incident episode-2 "$second_incident_prefix" west
   failure_stage=scenario.episode-2-agent-turns
   run_agents episode-2
-  failure_stage=scenario.episode-2-first-attention
-  settle_first_attention_debt episode-2
+  failure_stage=scenario.episode-2-open-attention
+  settle_open_attention episode-2
   failure_stage=scenario.episode-2-recovery
   assert_recovery episode-2 "$second_incident_prefix" "$second_evaluation_prefix" \
     "$second_stability_prefix"

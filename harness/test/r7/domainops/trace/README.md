@@ -95,12 +95,16 @@ inside a turn boundary. The runner enforces one exclusive turn window per node;
 without that exclusivity this is temporal attribution rather than a private
 operation-to-turn binding and would not be sufficient.
 
-The passed runner report is `mnemon.r7.domain-ops.live-report` version 4. It
+The passed runner report is `mnemon.r7.domain-ops.live-report` version 5. It
 contains two ordered service-world episodes and a bounded authority boundary
-between them. Before either business oracle, its first-attention settlement
-records only protocol-derived `open && claim_fence == 0` counts, the bounded
-neutral turns given to those Principals, and a final zero-debt snapshot. It
-never records Event kinds, payloads, or expected remediation. A runner-attested
+between them. Before either business oracle, its open-attention settlement
+records only protocol-derived `state = 'open' AND claim_attachment_id IS NULL`
+and `state = 'open' AND claim_attachment_id IS NOT NULL` counts, the bounded
+neutral turns given to unclaimed Principals, and a final zero-open snapshot. A
+previously claimed but still-open Handling remains eligible after occupancy is
+released. Any occupied claim fails closed and is preserved in separate failure
+evidence. The settlement never records Event kinds, payloads, or expected
+remediation. A runner-attested
 sequence captured after the external recovery
 oracle starts the consolidation interval; the adapter independently verifies
 that every reported boundary head was accepted after that sequence, exists in
@@ -108,7 +112,7 @@ the stopped Reference lineage, and is no newer than the end boundary. Every
 reported later use must be an exact causation or supersede/retract edge from a
 post-boundary accepted Event. It does not inspect Artifact bytes, semantic kinds, or remediation
 choices. Earlier passed-report versions are intentionally not accepted as two-episode
-evidence; failed reports retain their independent version-4 shape below.
+evidence; failed reports use the same version-5 wire below.
 
 ## Failed-run input
 
@@ -118,7 +122,7 @@ five stores, then write a sanitized input with this closed shape:
 ```json
 {
   "schema": "mnemon.r7.domain-ops.failure-report",
-  "version": 4,
+  "version": 5,
   "status": "failed",
   "model": "bounded-model-token",
   "run": {
@@ -132,7 +136,7 @@ five stores, then write a sanitized input with this closed shape:
     "observed_at": "canonical UTC RFC3339Nano"
   },
   "world": [],
-  "first_attention": null,
+  "open_attention": null,
   "turns": [],
   "raw_provider_streams_retained": false
 }
@@ -143,13 +147,16 @@ the passed report. Partial text, tool input/output, prompts, and provider errors
 do not belong in this file. Invoke the adapter with `--failure-report` instead
 of `--report` and the same three evidence paths.
 
-An `attention-budget-exhausted` failure replaces `first_attention: null` with
-the already captured waves and the skipped final snapshot. That object carries
-only closed episode/status tokens plus per-node `unseen_open` and
-`active_claims` counts, the turn limit, turns used, and wave numbers. The trace
-projects these as `test.attention.wave` and `test.attention.exhausted` assertion
-Facts; it does not retain Event kinds, payloads, paths, commands, or a proposed
-remediation. The failed `scenario.run` gate cites the final snapshot Facts.
+An `attention-budget-exhausted` failure replaces `open_attention: null` with
+the already captured waves and the skipped final snapshot. An
+`attention-claim-occupied` failure does the same with a `claim_occupied`
+snapshot before any further turn is scheduled. These objects carry only closed
+episode/status tokens plus per-node `open_unclaimed` and `occupied_claims`
+counts, the turn limit, turns used, and wave numbers. The trace projects these
+as `test.attention.wave`, `test.attention.exhausted`, and the distinct
+`test.attention.occupied` assertion Facts; it does not retain Event kinds,
+payloads, paths, commands, or a proposed remediation. The failed
+`scenario.run` gate cites the final snapshot Facts.
 
 When an external incident snapshot already exists, `world` retains at most one
 five-count aggregate for each episode: charges, active and voided charges,

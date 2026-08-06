@@ -195,22 +195,72 @@ assert_exclusive_turn_window() {
 assert_exclusive_turn_window
 
 write_attention_snapshot() {
-  local output=$1 data_unseen=$2 platform_unseen=$3 active=${4:-0} role unseen
+  local output=$1 data_unclaimed=$2 platform_unclaimed=$3 occupied_role=${4:-}
+  local occupied_value=${5:-0} role unclaimed occupied
   : >"$output.jsonl"
   for role in $roles; do
-    unseen=0
-    test "$role" != data || unseen=$data_unseen
-    test "$role" != platform || unseen=$platform_unseen
-    jq -cn --arg role "$role" --argjson unseen "$unseen" --argjson active "$active" \
-      '{role:$role,unseen_open:$unseen,active_claims:$active}' >>"$output.jsonl"
+    unclaimed=0
+    occupied=0
+    test "$role" != data || unclaimed=$data_unclaimed
+    test "$role" != platform || unclaimed=$platform_unclaimed
+    test "$role" != "$occupied_role" || occupied=$occupied_value
+    jq -cn --arg role "$role" --argjson unclaimed "$unclaimed" \
+      --argjson occupied "$occupied" \
+      '{role:$role,open_unclaimed:$unclaimed,occupied_claims:$occupied}' >>"$output.jsonl"
   done
   jq -s '.' "$output.jsonl" >"$output"
 }
 
-assert_first_attention_boundary() {
-  local snapshot counter wave
+assert_open_attention_boundary() {
+  local snapshot counter counts unclaimed occupied query_source wave_source settlement_source
   runtime_root="$scratch/attention-runtime"
   mkdir -p "$runtime_root/turns"
+
+  sqlite3 "$runtime_root/attention.db" '
+    CREATE TABLE handlings(state TEXT NOT NULL, claim_fence INTEGER NOT NULL,
+      claim_attachment_id TEXT);
+    INSERT INTO handlings VALUES('\''open'\'',0,NULL);
+    INSERT INTO handlings VALUES('\''open'\'',7,NULL);
+    INSERT INTO handlings VALUES('\''open'\'',3,'\''attachment:occupied'\'');
+    INSERT INTO handlings VALUES('\''terminal'\'',9,NULL);'
+  counts=$(read_open_attention_counts "$runtime_root/attention.db")
+  IFS='|' read -r unclaimed occupied <<EOF
+$counts
+EOF
+  test "$unclaimed" = 2 && test "$occupied" = 1 || {
+    printf 'runtime oracle: open attention omitted a previously claimed open Handling\n' >&2
+    exit 1
+  }
+  query_source=$(declare -f read_open_attention_counts)
+  printf '%s\n' "$query_source" | grep -F -- \
+    "state = '\\''open'\\'' AND claim_attachment_id IS NULL" >/dev/null || {
+    printf 'runtime oracle: open attention does not derive open-unclaimed work from authority occupancy\n' >&2
+    exit 1
+  }
+  if printf '%s\n' "$query_source" | grep -Ei -- \
+      'claim_fence|semantic|kind|payload|artifact|canonical_json|domainctl' >/dev/null; then
+    printf 'runtime oracle: open attention inspects non-occupancy semantics\n' >&2
+    exit 1
+  fi
+  wave_source=$(declare -f run_open_attention_wave)
+  printf '%s\n' "$wave_source" | grep -F -- '.open_unclaimed > 0' >/dev/null || {
+    printf 'runtime oracle: open attention wave does not use the open-unclaimed projection\n' >&2
+    exit 1
+  }
+  if printf '%s\n' "$wave_source" | grep -Ei -- \
+      'semantic|kind|payload|artifact|canonical_json|domainctl|gateway|ledger|payment' \
+      >/dev/null; then
+    printf 'runtime oracle: open attention wave inspects scenario semantics\n' >&2
+    exit 1
+  fi
+  settlement_source=$(declare -f settle_open_attention)
+  if printf '%s\n' "$settlement_source" | grep -Ei -- \
+      'claim_fence|semantic|kind|payload|artifact|canonical_json|domainctl|gateway|ledger|payment' \
+      >/dev/null; then
+    printf 'runtime oracle: open attention settlement inspects scenario semantics\n' >&2
+    exit 1
+  fi
+
   snapshot="$runtime_root/targeting.json"
   write_attention_snapshot "$snapshot" 2 1
 
@@ -222,18 +272,18 @@ assert_first_attention_boundary() {
   wait_for_peer_delivery_quiescence() {
     printf '%s\n' "$1" >>"$runtime_root/barriers"
   }
-  run_first_attention_wave episode-test 1 "$snapshot"
-  test -f "$runtime_root/turns/episode-test-attention-debt-1-data"
-  test -f "$runtime_root/turns/episode-test-attention-debt-1-platform"
+  run_open_attention_wave episode-test 1 "$snapshot"
+  test -f "$runtime_root/turns/episode-test-open-attention-1-data"
+  test -f "$runtime_root/turns/episode-test-open-attention-1-platform"
   test "$(find "$runtime_root/turns" -type f | wc -l | tr -d '[:space:]')" = 2
-  test "$(cat "$runtime_root/barriers")" = episode-test-attention-debt-1
+  test "$(cat "$runtime_root/barriers")" = episode-test-open-attention-1
 
   rm -rf -- "$runtime_root/turns"
   mkdir -p "$runtime_root/turns"
   : >"$runtime_root/barriers"
   counter="$runtime_root/snapshot-counter"
   printf '0\n' >"$counter"
-  snapshot_first_attention_debt() {
+  snapshot_open_attention() {
     local episode=$1 requested_wave=$2 index output
     index=$(cat "$counter")
     index=$((index + 1))
@@ -241,56 +291,68 @@ assert_first_attention_boundary() {
     output="$runtime_root/generated-$episode-$requested_wave.json"
     case "$index" in
       1) write_attention_snapshot "$output" 1 0 ;;
-      2) write_attention_snapshot "$output" 0 1 ;;
+      2) write_attention_snapshot "$output" 1 1 ;;
       *) write_attention_snapshot "$output" 0 0 ;;
     esac
     printf '%s\n' "$output"
   }
-  first_attention_turn_limit=16
-  settle_first_attention_debt episode-test
+  open_attention_turn_limit=16
+  settle_open_attention episode-test
   jq -e '
     .episode == "episode-test" and .status == "settled" and
-    .turn_limit == 16 and .turns_used == 2 and
+    .turn_limit == 16 and .turns_used == 3 and
     [.waves[].wave] == [1,2] and
-    all(.final_nodes[]; .unseen_open == 0 and .active_claims == 0)
-  ' "$runtime_root/first-attention/episode-test-settlement.json" >/dev/null
-  test -f "$runtime_root/turns/episode-test-attention-debt-1-data"
-  test -f "$runtime_root/turns/episode-test-attention-debt-2-platform"
+    all(.final_nodes[]; .open_unclaimed == 0 and .occupied_claims == 0)
+  ' "$runtime_root/open-attention/episode-test-settlement.json" >/dev/null
+  test -f "$runtime_root/turns/episode-test-open-attention-1-data"
+  test -f "$runtime_root/turns/episode-test-open-attention-2-data"
+  test -f "$runtime_root/turns/episode-test-open-attention-2-platform"
 
   printf '0\n' >"$counter"
-  first_attention_turn_limit=1
-  snapshot_first_attention_debt() {
+  open_attention_turn_limit=1
+  snapshot_open_attention() {
     local output="$runtime_root/exhausted-$2.json"
     write_attention_snapshot "$output" 1 1
     printf '%s\n' "$output"
   }
-  if settle_first_attention_debt episode-budget >/dev/null 2>&1; then
-    printf 'runtime oracle: unbounded first-attention debt was accepted\n' >&2
+  if settle_open_attention episode-budget >/dev/null 2>&1; then
+    printf 'runtime oracle: unbounded open attention was accepted\n' >&2
     exit 1
   fi
   test "$failure_stage" = scenario.episode-budget.attention-budget-exhausted
   jq -e '
     .episode == "episode-budget" and .status == "budget_exhausted" and
     .turn_limit == 1 and .turns_used == 0 and (.waves | length) == 0 and
-    ([.final_nodes[] | select(.unseen_open > 0)] | length) == 2 and
-    all(.final_nodes[]; .active_claims == 0)
-  ' "$runtime_root/first-attention/episode-budget-budget-exhausted.json" >/dev/null
+    ([.final_nodes[] | select(.open_unclaimed > 0)] | length) == 2 and
+    all(.final_nodes[]; .occupied_claims == 0)
+  ' "$runtime_root/open-attention/episode-budget-budget-exhausted.json" >/dev/null
 
-  first_attention_turn_limit=16
-  snapshot_first_attention_debt() {
+  rm -rf -- "$runtime_root/turns"
+  mkdir -p "$runtime_root/turns"
+  : >"$runtime_root/barriers"
+  open_attention_turn_limit=16
+  snapshot_open_attention() {
     local output="$runtime_root/occupied-$2.json"
-    write_attention_snapshot "$output" 0 0 1
+    write_attention_snapshot "$output" 0 0 data 1
     printf '%s\n' "$output"
   }
-  if settle_first_attention_debt episode-occupied >/dev/null 2>&1; then
-    printf 'runtime oracle: a live claim was hidden by attention settlement\n' >&2
+  if settle_open_attention episode-occupied >/dev/null 2>&1; then
+    printf 'runtime oracle: an occupied claim was hidden by attention settlement\n' >&2
     exit 1
   fi
-  test "$failure_stage" = scenario.episode-occupied.attention-boundary-open
+  test "$failure_stage" = scenario.episode-occupied.attention-claim-occupied
+  jq -e '
+    .episode == "episode-occupied" and .status == "claim_occupied" and
+    .turn_limit == 16 and .turns_used == 0 and (.waves | length) == 0 and
+    ([.final_nodes[] | select(.occupied_claims > 0)] | map(.role)) == ["data"] and
+    all(.final_nodes[]; .open_unclaimed == 0)
+  ' "$runtime_root/open-attention/episode-occupied-claim-occupied.json" >/dev/null
+  test "$(find "$runtime_root/turns" -type f | wc -l | tr -d '[:space:]')" = 0
+  test ! -s "$runtime_root/barriers"
   runtime_root=
 }
 
-(assert_first_attention_boundary)
+(assert_open_attention_boundary)
 
 stream_mode=valid
 pi_process() {

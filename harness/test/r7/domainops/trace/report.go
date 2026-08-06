@@ -35,7 +35,7 @@ type liveReport struct {
 		AcceptedPeerEffects int                         `json:"accepted_peer_effects"`
 		ByReceiver          []peerEffectSummary         `json:"by_receiver"`
 		DeliveryQuiescence  []deliveryQuiescenceSummary `json:"delivery_quiescence"`
-		FirstAttention      []firstAttentionSettlement  `json:"first_attention_settlement"`
+		OpenAttention       []openAttentionSettlement   `json:"open_attention_settlement"`
 		Evolution           evolutionSummary            `json:"evolution"`
 	} `json:"protocol"`
 	Turns                      []turnSummary `json:"turns"`
@@ -184,7 +184,7 @@ func loadReport(path string) (liveReport, error) {
 }
 
 func validateReport(report liveReport) error {
-	if report.Schema != "mnemon.r7.domain-ops.live-report" || report.Version != 4 ||
+	if report.Schema != "mnemon.r7.domain-ops.live-report" || report.Version != 5 ||
 		report.Status != "passed" || report.Model == "" || report.Rounds < 1 || report.Rounds > 8 ||
 		report.RawProviderStreamsRetained || !report.Isolation.Passed ||
 		!report.Isolation.FreshRuntimeBetweenEpisodes {
@@ -217,21 +217,21 @@ func validateReport(report liveReport) error {
 	return validateTurns(report.Rounds, report.Turns, attention.Turns)
 }
 
-func validateReportProtocol(report liveReport) (firstAttentionValidation, error) {
+func validateReportProtocol(report liveReport) (openAttentionValidation, error) {
 	if err := validateProtocolSummary(report.Protocol.AcceptedPeerEffects,
 		report.Protocol.ByReceiver); err != nil {
-		return firstAttentionValidation{}, err
+		return openAttentionValidation{}, err
 	}
-	attention, err := validateFirstAttention(report.Protocol.FirstAttention)
+	attention, err := validateOpenAttention(report.Protocol.OpenAttention)
 	if err != nil {
-		return firstAttentionValidation{}, err
+		return openAttentionValidation{}, err
 	}
 	if err := validateDeliveryQuiescence(report.Rounds,
 		report.Protocol.DeliveryQuiescence, attention.Barriers); err != nil {
-		return firstAttentionValidation{}, err
+		return openAttentionValidation{}, err
 	}
 	if err := validateEvolutionSummary(report.Protocol.Evolution); err != nil {
-		return firstAttentionValidation{}, err
+		return openAttentionValidation{}, err
 	}
 	return attention, nil
 }
