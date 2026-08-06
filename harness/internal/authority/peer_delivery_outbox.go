@@ -95,6 +95,7 @@ func insertPeerDeliveriesTx(ctx context.Context, tx *sql.Tx, event agency.Event,
 			return errors.New("admit Intent: outbound peer route changed after validation")
 		}
 		correlation, _ := event.Correlation()
+		inReplyToDelivery, _ := event.InReplyToDelivery()
 		delivery, err := agency.NewPeerDelivery(route.RouteID(), agency.PeerDeliverySpec{
 			OriginEvent:       event.Ref(),
 			OriginSequence:    event.OriginSequence(),
@@ -104,6 +105,7 @@ func insertPeerDeliveriesTx(ctx context.Context, tx *sql.Tx, event agency.Event,
 			OriginTargetCount: uint8(len(event.Targets())),
 			OriginCausation:   event.Causation(),
 			OriginCorrelation: correlation,
+			InReplyToDelivery: inReplyToDelivery,
 			TargetAlias:       route.RemoteTargetAlias(),
 			Kind:              event.Kind(),
 			Payload:           event.Payload(),
@@ -170,6 +172,9 @@ func outboundReplyBinding(event agency.Event,
 
 func isExactTerminalReplyEvent(event agency.Event) bool {
 	if len(event.Targets()) != 1 || event.Targets()[0].Destination() != agency.TargetDestinationRemote {
+		return false
+	}
+	if _, present := event.InReplyToDelivery(); !present {
 		return false
 	}
 	switch event.Consequence() {

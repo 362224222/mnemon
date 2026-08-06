@@ -395,7 +395,7 @@ func TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult(t *test
 	requestDelivery := fixture.admitOrigin(t)
 	fixture.admitReceiver(t, requestDelivery)
 	frozenOperation, frozen := freezeOriginFocusView(t, &fixture)
-	if got := decodeFocusView(t, frozen); len(got.RelatedOpen) != 0 || got.Outstanding.OpenTotal != 1 {
+	if got := decodeFocusView(t, frozen); len(got.Related) != 0 || got.Outstanding.OpenTotal != 1 {
 		t.Fatalf("frozen origin View = %#v", got)
 	}
 	admitCorrelatedPeerResponse(t, &fixture, requestDelivery)
@@ -405,7 +405,7 @@ func TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := decodeFocusView(t, replayed); len(got.RelatedOpen) != 0 ||
+	if got := decodeFocusView(t, replayed); len(got.Related) != 0 ||
 		got.Outstanding.OpenTotal != 1 {
 		t.Fatalf("frozen Current absorbed a later Event: %#v", got)
 	}
@@ -415,11 +415,11 @@ func TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult(t *test
 	if public.Current == nil || public.Current.Semantic.Payload != "consider the bounded request" {
 		t.Fatalf("oldest anchor was not retained as Current: %#v", public.Current)
 	}
-	if len(public.RelatedOpen) != 1 ||
-		public.RelatedOpen[0].Semantic.Kind != "review.response" ||
-		public.RelatedOpen[0].Semantic.Payload != "the bounded request was reviewed" ||
-		public.RelatedOpen[0].Facts.Relation != "correlation" {
-		t.Fatalf("correlated response projection = %#v", public.RelatedOpen)
+	if len(public.Related) != 1 ||
+		public.Related[0].Semantic.Kind != "review.response" ||
+		public.Related[0].Semantic.Payload != "the bounded request was reviewed" ||
+		public.Related[0].Facts.Relation != "correlation" {
+		t.Fatalf("correlated response projection = %#v", public.Related)
 	}
 	if public.Outstanding.OpenTotal != 2 || public.Outstanding.RelatedTotal != 1 ||
 		public.Outstanding.RelatedProjected != 1 || public.Outstanding.Truncated {
@@ -428,7 +428,7 @@ func TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult(t *test
 
 	illegal := mustIntent(t, agency.IntentSpec{Kind: mustLabel(t, "review.illegal"),
 		Consequence:     agency.ConsequenceAdvanceHandling,
-		SubjectHandling: mustHandle(t, public.RelatedOpen[0].Facts.Event)})
+		SubjectHandling: mustHandle(t, public.Related[0].Facts.Event)})
 	if _, err := fresh.Bind(illegal, mustOperation(t, "operation:focus-illegal"), nil); !errors.Is(err, agency.ErrInvariant) {
 		t.Fatalf("related Event became writable subject: %v", err)
 	}
@@ -569,11 +569,11 @@ func TestCurrentKeepsEscapedCurrentAndOmitsRelatedBeyondEncodedBudget(t *testing
 	if public.Current == nil || public.Current.Semantic.Payload != payload {
 		t.Fatalf("escaped Current was not readable: %#v", public.Current)
 	}
-	if len(public.RelatedOpen) != 0 || public.Outstanding.OpenTotal != 2 ||
+	if len(public.Related) != 0 || public.Outstanding.OpenTotal != 2 ||
 		public.Outstanding.RelatedTotal != 1 || public.Outstanding.RelatedProjected != 0 ||
 		!public.Outstanding.Truncated {
 		t.Fatalf("escaped focus projection = related %d outstanding %#v",
-			len(public.RelatedOpen), public.Outstanding)
+			len(public.Related), public.Outstanding)
 	}
 	if len(fresh.AgentView().CanonicalJSON()) > agency.MaxAgentViewCanonicalBytes {
 		t.Fatalf("escaped Current View exceeds canonical bound: %d",
@@ -696,16 +696,17 @@ type focusViewWire struct {
 			Payload string `json:"payload"`
 		} `json:"semantic"`
 	} `json:"current"`
-	RelatedOpen []struct {
+	Related []struct {
 		Facts struct {
 			Event    string `json:"event"`
 			Relation string `json:"relation"`
+			Outcome  string `json:"outcome"`
 		} `json:"facts"`
 		Semantic struct {
 			Kind    string `json:"kind"`
 			Payload string `json:"payload"`
 		} `json:"semantic"`
-	} `json:"related_open"`
+	} `json:"related"`
 	Outstanding struct {
 		OpenTotal        int  `json:"open_total"`
 		RelatedTotal     int  `json:"related_total"`

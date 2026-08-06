@@ -674,7 +674,7 @@ func referencePublishIntent(t *testing.T, artifactHandle string) []byte {
 }
 
 func subjectViewForTest() []byte {
-	return []byte(`{"schema":"mnemon.agent.view","version":5,` +
+	return []byte(`{"schema":"mnemon.agent.view","version":6,` +
 		`"view":"view:test","current":{"facts":{"handle":"r7:subject:test","reply_to":"r7:subject:test","reply_required":false},` +
 		`"semantic":{"kind":"review.request","payload":"review"}},` +
 		`"outstanding":{"open_total":1,"related_total":0,"related_projected":0,"truncated":false},` +

@@ -307,9 +307,10 @@ func TestAgentViewMaximumReferenceAndPayloadShapeRemainsReadable(t *testing.T) {
 	}
 	authority := mustView(t, MachineViewSpec{
 		Attachment: attachment, ReplyTo: current, ReplyTarget: replyTarget,
-		Consequences: []Consequence{ConsequenceAdvanceHandling},
-		Subjects:     []SubjectBinding{mustSubject(t, current, "handling:private", "event:head", "head", 1)},
-		References:   references, Artifacts: artifacts, Targets: targets,
+		ReplyDelivery: mustDeliveryID(t, "delivery:maximum-view"),
+		Consequences:  []Consequence{ConsequenceAdvanceHandling},
+		Subjects:      []SubjectBinding{mustSubject(t, current, "handling:private", "event:head", "head", 1)},
+		References:    references, Artifacts: artifacts, Targets: targets,
 		Provenance: []ProvenanceOffer{mustProvenance(t, current, "event:head", "head"),
 			mustProvenance(t, relatedEvent, "event:related", "related")},
 	})

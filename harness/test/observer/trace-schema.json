@@ -178,7 +178,7 @@
           "type": "integer"
         },
         "related_total": {
-          "maximum": 64,
+          "maximum": 128,
           "minimum": 0,
           "type": "integer"
         },

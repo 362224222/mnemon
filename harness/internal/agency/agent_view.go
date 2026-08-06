@@ -4,11 +4,12 @@ import "sort"
 
 const (
 	AgentViewSchema              = "mnemon.agent.view"
-	AgentViewVersion             = 5
+	AgentViewVersion             = 6
 	MaxAgentViewCanonicalBytes   = 16 << 10
 	MaxAgentViewReferences       = 8
 	MaxAgentViewCurrentArtifacts = MaxArtifactInputs
-	MaxAgentViewRelatedOpen      = 1
+	MaxAgentViewRelated          = 1
+	MaxAgentViewRelatedTotal     = 128
 	// Current plus projected related semantics never exceed one accepted
 	// Event payload. This keeps related evidence from making an otherwise
 	// readable responsibility exceed the canonical View budget.
@@ -110,7 +111,7 @@ func NewAgentView(spec AgentViewSpec) (AgentView, error) {
 		Version:        AgentViewVersion,
 		View:           spec.Handle.String(),
 		Current:        current,
-		RelatedOpen:    related,
+		Related:        related,
 		Outstanding:    projectOutstanding(spec.Outstanding),
 		References:     references,
 		Targets:        projectTargetAliases(spec.Authority.targets),
@@ -150,7 +151,7 @@ func projectCurrent(spec *AgentViewCurrentSpec, authority ViewAuthority) (*agent
 	artifacts := make(map[string]struct{})
 	if spec == nil {
 		if len(authority.subjects) != 0 || !authority.replyTo.IsZero() ||
-			!authority.replyTarget.IsZero() {
+			!authority.replyTarget.IsZero() || !authority.replyDelivery.IsZero() {
 			return nil, nil, invariant("Agent View current", "sealed subject must be projected")
 		}
 		return nil, artifacts, nil

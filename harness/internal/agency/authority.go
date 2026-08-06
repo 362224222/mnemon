@@ -41,25 +41,28 @@ func (a Attachment) ExpiresAt() time.Time        { return a.expiresAt }
 // SubjectBinding freezes the current machine-owned Handling authority behind
 // one opaque View handle.
 type SubjectBinding struct {
-	handle     OpaqueHandle
-	handlingID HandlingID
-	head       EventRef
-	fence      uint64
+	handle              OpaqueHandle
+	handlingID          HandlingID
+	head                EventRef
+	fence               uint64
+	observationRevision uint64
 }
 
 func NewSubjectBinding(handle OpaqueHandle, handlingID HandlingID, head EventRef,
-	fence uint64,
+	fence, observationRevision uint64,
 ) (SubjectBinding, error) {
 	if handle.IsZero() || handlingID.IsZero() || head.IsZero() || fence == 0 {
 		return SubjectBinding{}, invalid("subject binding", "handle, Handling, head, and positive fence are required")
 	}
-	return SubjectBinding{handle: handle, handlingID: handlingID, head: head, fence: fence}, nil
+	return SubjectBinding{handle: handle, handlingID: handlingID, head: head, fence: fence,
+		observationRevision: observationRevision}, nil
 }
 
-func (b SubjectBinding) Handle() OpaqueHandle   { return b.handle }
-func (b SubjectBinding) HandlingID() HandlingID { return b.handlingID }
-func (b SubjectBinding) Head() EventRef         { return b.head }
-func (b SubjectBinding) Fence() uint64          { return b.fence }
+func (b SubjectBinding) Handle() OpaqueHandle        { return b.handle }
+func (b SubjectBinding) HandlingID() HandlingID      { return b.handlingID }
+func (b SubjectBinding) Head() EventRef              { return b.head }
+func (b SubjectBinding) Fence() uint64               { return b.fence }
+func (b SubjectBinding) ObservationRevision() uint64 { return b.observationRevision }
 
 // ReferenceExpectation freezes either the absence of a first-publish key or
 // one exact locally accepted lineage head.

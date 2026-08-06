@@ -119,6 +119,7 @@ WHERE reply_anchor_handling_id IS NOT NULL;
 CREATE TABLE peer_inbox (
     delivery_id TEXT PRIMARY KEY,
     route_id TEXT NOT NULL REFERENCES peer_routes(route_id),
+    in_reply_to_delivery_id TEXT,
     envelope_digest TEXT NOT NULL,
     delivery_json BLOB NOT NULL,
     delivery_signature BLOB NOT NULL CHECK (length(delivery_signature) = 64),
@@ -142,6 +143,13 @@ ON peer_inbox(state, expires_at, received_at);
 
 CREATE UNIQUE INDEX peer_inbox_local_event
 ON peer_inbox(local_event_id)
+WHERE local_event_id IS NOT NULL;
+
+-- Several signed candidates may cite one outbound request, but only one may
+-- become its locally accepted observation. Rejected and merely staged rows do
+-- not consume this authority slot because they have no local Event.
+CREATE UNIQUE INDEX peer_inbox_accepted_reply
+ON peer_inbox(in_reply_to_delivery_id)
 WHERE local_event_id IS NOT NULL;
 
 CREATE TABLE event_artifacts (
@@ -249,4 +257,4 @@ CREATE TABLE reference_outcome_projection (
 ) STRICT;
 
 PRAGMA application_id = 1296978487;
-PRAGMA user_version = 10;
+PRAGMA user_version = 11;

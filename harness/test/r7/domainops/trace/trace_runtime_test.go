@@ -55,8 +55,8 @@ func projectTestRuntime(t *testing.T) string {
 			Mutation: domainOperationSummary{Attempts: 1, ToolErrors: 1},
 		},
 		DelegateCalls: 1, CurrentReads: 1, View: &agentViewSummary{
-			HasCurrent: true, ReplyRequired: boolPointer(true), OpenTotal: 3,
-			RelatedTotal: 2, RelatedProjected: 1, Truncated: true,
+			HasCurrent: true, ReplyRequired: boolPointer(true), OpenTotal: 1,
+			RelatedTotal: 65, RelatedProjected: 1, Truncated: true,
 		}, SubmitAttempts: 2, IntentSubmits: 1,
 		SubmitDenials: 1, SubmitControlDenials: []controlDenial{{
 			Code: "authentication_failed", Count: 1,
@@ -73,8 +73,8 @@ func TestRuntimeProjectionIncludesAgentViewStructure(t *testing.T) {
 	view, found := findProjectedRuntimeFact(facts, "runtime.view.received", "current")
 	if !found || view.Facts.HasCurrent == nil || !*view.Facts.HasCurrent ||
 		view.Facts.ReplyRequired == nil || !*view.Facts.ReplyRequired ||
-		view.Facts.OpenTotal == nil || *view.Facts.OpenTotal != 3 ||
-		view.Facts.RelatedTotal == nil || *view.Facts.RelatedTotal != 2 ||
+		view.Facts.OpenTotal == nil || *view.Facts.OpenTotal != 1 ||
+		view.Facts.RelatedTotal == nil || *view.Facts.RelatedTotal != 65 ||
 		view.Facts.RelatedProjected == nil || *view.Facts.RelatedProjected != 1 ||
 		view.Facts.Truncated == nil || !*view.Facts.Truncated {
 		t.Fatalf("Agent View structural projection = %+v", view.Facts)

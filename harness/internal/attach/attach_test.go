@@ -94,10 +94,10 @@ func assertGuideTerminalSurface(t *testing.T, guide string) {
 		"`current.facts.reply_required` is machine-owned",
 		"When true and current asks for evidence, action, or a decision, return one correlated terminal disposition",
 		"including declined or unresolved; never close silently",
-		"When false, no response is owed to the authenticated sender: do not echo receipt",
-		"New remote work remains allowed under ordinary anchor rules",
-		"A report, duplicate/stale input, Receipt, or correlated response closes locally if no work remains; never acknowledge it",
-		"If evidence is missing but a View target can obtain it, advance and ask that target rather than claim completion",
+		"When false, no response is owed; do not echo receipt",
+		"New remote work follows ordinary anchor rules",
+		"Reports, duplicates, Receipts, and terminal replies may justify resolving current locally; never acknowledge them",
+		"If evidence is missing but a View target can obtain it, advance and ask rather than claim completion",
 		"References stay local; publish/supersede never sends them to peers",
 	} {
 		if !strings.Contains(normalized, required) {
@@ -190,7 +190,7 @@ func guideTerminalView(t *testing.T, intent agency.AgentIntent) agency.ViewAutho
 	if err != nil {
 		t.Fatal(err)
 	}
-	subject, err := agency.NewSubjectBinding(intent.SubjectHandling(), handlingID, head, 1)
+	subject, err := agency.NewSubjectBinding(intent.SubjectHandling(), handlingID, head, 1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,10 +215,15 @@ func guideTerminalView(t *testing.T, intent agency.AgentIntent) agency.ViewAutho
 	if err != nil {
 		t.Fatal(err)
 	}
+	replyDigest := agency.Sum([]byte("guide request Delivery")).String()
+	replyDelivery, err := agency.ParseDeliveryID("delivery:" + strings.TrimPrefix(replyDigest, "sha256:"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	view, err := agency.NewViewAuthority(agency.MachineViewSpec{
 		Attachment: attachment, Consequences: []agency.Consequence{intent.Consequence()},
 		Subjects: []agency.SubjectBinding{subject}, Targets: []agency.ResolvedTarget{resolved},
-		ReplyTo: intent.CorrelationHandle(), ReplyTarget: targets[0],
+		ReplyTo: intent.CorrelationHandle(), ReplyTarget: targets[0], ReplyDelivery: replyDelivery,
 		Provenance: []agency.ProvenanceOffer{replyOffer},
 	})
 	if err != nil {

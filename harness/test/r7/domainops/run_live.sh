@@ -533,8 +533,14 @@ sanitize_turn() {
     def valid_view_related:
       exact_object(["facts", "semantic"]; []) and
       (.semantic | valid_view_semantic) and
-      (.facts | exact_object(["event", "relation"]; ["artifacts"])) and
-      (.facts.event | bounded_string(192)) and .facts.relation == "correlation" and
+      (.facts | exact_object(["event", "relation"]; ["artifacts", "outcome"])) and
+      (.facts.event | bounded_string(192)) and
+      (if .facts.relation == "correlation" then
+        (.facts | has("outcome") | not)
+       elif .facts.relation == "terminal_reply" then
+        (.facts.outcome == "completed" or .facts.outcome == "declined" or
+          .facts.outcome == "unresolved")
+       else false end) and
       ((.facts.artifacts // []) | type == "array" and length <= 8 and
         all(.[]; valid_view_artifact));
     def valid_view_reference:
@@ -558,24 +564,24 @@ sanitize_turn() {
       (if has("successors") then (.successors | bounded_string(192)) else true end);
     def valid_agent_view:
       exact_object(["allowed_intents", "outstanding", "schema", "version", "view"];
-        ["current", "provenance_handles", "references", "related_open", "targets"]) and
-      .schema == "mnemon.agent.view" and .version == 5 and
+        ["current", "provenance_handles", "references", "related", "targets"]) and
+      .schema == "mnemon.agent.view" and .version == 6 and
       (.view | bounded_string(192)) and
       (.outstanding |
         exact_object(["open_total", "related_projected", "related_total", "truncated"];
           []) and
         all([.open_total, .related_projected, .related_total][];
           type == "number" and floor == . and . >= 0) and
-        .open_total <= 64 and .related_total <= .open_total and
+        .open_total <= 64 and .related_total <= 128 and
         .related_projected <= 1 and .related_projected <= .related_total and
         (.truncated | type == "boolean") and
         .truncated == (.related_projected < .related_total)) and
       (if has("current") then
         (.current | valid_view_current) and .outstanding.open_total > 0
        else true end) and
-      ((.related_open // []) | type == "array" and length <= 1 and
+      ((.related // []) | type == "array" and length <= 1 and
         all(.[]; valid_view_related)) and
-      .outstanding.related_projected == ((.related_open // []) | length) and
+      .outstanding.related_projected == ((.related // []) | length) and
       ((.references // []) | type == "array" and length <= 8 and
         all(.[]; valid_view_reference)) and
       ((.targets // []) | type == "array" and length <= 64 and

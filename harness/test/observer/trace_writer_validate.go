@@ -103,7 +103,7 @@ func validRuntimeViewEvidence(fact Fact) bool {
 		fields.HasCurrent == nil || fields.OpenTotal == nil || fields.RelatedTotal == nil ||
 		fields.RelatedProjected == nil || fields.Truncated == nil ||
 		*fields.OpenTotal < 0 || *fields.OpenTotal > 64 ||
-		*fields.RelatedTotal < 0 || *fields.RelatedTotal > *fields.OpenTotal ||
+		*fields.RelatedTotal < 0 || *fields.RelatedTotal > 128 ||
 		*fields.RelatedProjected < 0 || *fields.RelatedProjected > 1 ||
 		*fields.RelatedProjected > *fields.RelatedTotal ||
 		*fields.Truncated != (*fields.RelatedProjected < *fields.RelatedTotal) ||
@@ -289,7 +289,7 @@ func validateFactFields(fields FactFields, sequence int) error {
 		{"open_unclaimed", fields.OpenUnclaimed, 0, 64},
 		{"round", fields.Round, 0, 1024},
 		{"related_projected", fields.RelatedProjected, 0, 1},
-		{"related_total", fields.RelatedTotal, 0, 64},
+		{"related_total", fields.RelatedTotal, 0, 128},
 		{"payload_bytes", fields.PayloadBytes, 0, 32 << 10},
 		{"sample_size", fields.SampleSize, 0, 64}, {"votes_a", fields.VotesA, 0, 64},
 		{"success_count", fields.SuccessCount, 0, 256},

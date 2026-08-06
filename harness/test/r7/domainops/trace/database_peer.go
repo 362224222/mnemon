@@ -13,6 +13,7 @@ import (
 type outboxRow struct {
 	ID, RouteID, OriginID, EnvelopeDigest, State, CreatedAt string
 	Canonical                                               []byte
+	ReplyAnchor, ExpectedRootID, ExpectedRootDigest         sql.NullString
 	SettledAt, ReceiptDigest                                sql.NullString
 	ReceiptJSON                                             []byte
 }
@@ -20,6 +21,7 @@ type outboxRow struct {
 type inboxRow struct {
 	ID, RouteID, EnvelopeDigest, State, ReceivedAt string
 	Canonical                                      []byte
+	InReplyToDelivery                              sql.NullString
 	SettledAt, LocalEventID, ReceiptDigest         sql.NullString
 	ReceiptJSON                                    []byte
 }
@@ -42,7 +44,8 @@ func loadOutbox(ctx context.Context, db *sql.DB, role string,
 	events map[string]eventEvidence,
 ) ([]deliveryEvidence, error) {
 	rows, err := db.QueryContext(ctx, `SELECT delivery_id, route_id, origin_event_id,
-		envelope_digest, delivery_json, state, created_at, settled_at,
+		reply_anchor_handling_id, expected_reply_root_event_id,
+		expected_reply_root_event_digest, envelope_digest, delivery_json, state, created_at, settled_at,
 		receipt_digest, receipt_json FROM peer_outbox ORDER BY created_at, delivery_id`)
 	if err != nil {
 		return nil, err
@@ -51,7 +54,8 @@ func loadOutbox(ctx context.Context, db *sql.DB, role string,
 	var result []deliveryEvidence
 	for rows.Next() {
 		var row outboxRow
-		if err := rows.Scan(&row.ID, &row.RouteID, &row.OriginID, &row.EnvelopeDigest,
+		if err := rows.Scan(&row.ID, &row.RouteID, &row.OriginID, &row.ReplyAnchor,
+			&row.ExpectedRootID, &row.ExpectedRootDigest, &row.EnvelopeDigest,
 			&row.Canonical, &row.State, &row.CreatedAt, &row.SettledAt,
 			&row.ReceiptDigest, &row.ReceiptJSON); err != nil {
 			return nil, err
@@ -81,8 +85,26 @@ func parseOutboxRow(role string, row outboxRow,
 	if err != nil {
 		return deliveryEvidence{}, err
 	}
-	value := deliveryEvidence{Node: role, Direction: "outbox", ID: row.ID, State: row.State,
-		CapturedAt: capturedAt, OriginEventID: origin.ID, OriginEventDigest: origin.Digest}
+	value, err := newDeliveryEvidence(role, "outbox", row.RouteID, row.State, capturedAt, delivery)
+	if err != nil {
+		return deliveryEvidence{}, fmt.Errorf("%s outbox Delivery evidence: %w", role, err)
+	}
+	if row.ReplyAnchor.Valid != row.ExpectedRootID.Valid ||
+		row.ReplyAnchor.Valid != row.ExpectedRootDigest.Valid {
+		return deliveryEvidence{}, fmt.Errorf("%s outbox Delivery has a partial reply binding", role)
+	}
+	if row.ReplyAnchor.Valid {
+		if _, err := agency.NewHandlingID(row.ReplyAnchor.String); err != nil {
+			return deliveryEvidence{}, fmt.Errorf("%s outbox Delivery has an invalid reply anchor", role)
+		}
+		if err := validateEventRef(eventRefWire{ID: row.ExpectedRootID.String,
+			Digest: row.ExpectedRootDigest.String}); err != nil {
+			return deliveryEvidence{}, fmt.Errorf("%s outbox Delivery has an invalid expected reply root", role)
+		}
+		value.ReplyAnchorHandlingID = row.ReplyAnchor.String
+		value.ExpectedReplyRootID = row.ExpectedRootID.String
+		value.ExpectedReplyRootDigest = row.ExpectedRootDigest.String
+	}
 	switch row.State {
 	case "settled":
 		value, err = bindPeerReceipt(value, delivery, row.SettledAt,
@@ -99,7 +121,7 @@ func parseOutboxRow(role string, row outboxRow,
 func loadInbox(ctx context.Context, db *sql.DB, role string,
 	events map[string]eventEvidence,
 ) ([]deliveryEvidence, int, error) {
-	rows, err := db.QueryContext(ctx, `SELECT delivery_id, route_id, envelope_digest,
+	rows, err := db.QueryContext(ctx, `SELECT delivery_id, route_id, in_reply_to_delivery_id, envelope_digest,
 		delivery_json, state, received_at, settled_at, local_event_id,
 		receipt_digest, receipt_json FROM peer_inbox ORDER BY received_at, delivery_id`)
 	if err != nil {
@@ -110,7 +132,8 @@ func loadInbox(ctx context.Context, db *sql.DB, role string,
 	accepted := 0
 	for rows.Next() {
 		var row inboxRow
-		if err := rows.Scan(&row.ID, &row.RouteID, &row.EnvelopeDigest, &row.Canonical,
+		if err := rows.Scan(&row.ID, &row.RouteID, &row.InReplyToDelivery,
+			&row.EnvelopeDigest, &row.Canonical,
 			&row.State, &row.ReceivedAt, &row.SettledAt, &row.LocalEventID,
 			&row.ReceiptDigest, &row.ReceiptJSON); err != nil {
 			return nil, 0, err
@@ -134,14 +157,18 @@ func parseInboxRow(role string, row inboxRow,
 	if err != nil {
 		return deliveryEvidence{}, false, fmt.Errorf("%s inbox Delivery: %w", role, err)
 	}
+	if !storedInboxReplyMatches(delivery, row.InReplyToDelivery) {
+		return deliveryEvidence{}, false,
+			fmt.Errorf("%s inbox Delivery reply binding differs from signed envelope", role)
+	}
 	capturedAt, err := parseStoredTime("inbox received_at", row.ReceivedAt)
 	if err != nil {
 		return deliveryEvidence{}, false, err
 	}
-	origin := delivery.OriginEvent()
-	value := deliveryEvidence{Node: role, Direction: "inbox", ID: row.ID, State: row.State,
-		CapturedAt: capturedAt, OriginEventID: origin.ID().String(),
-		OriginEventDigest: origin.Digest().String()}
+	value, err := newDeliveryEvidence(role, "inbox", row.RouteID, row.State, capturedAt, delivery)
+	if err != nil {
+		return deliveryEvidence{}, false, fmt.Errorf("%s inbox Delivery evidence: %w", role, err)
+	}
 	if row.State == "expired" {
 		value.CapturedAt, err = parseNullableStoredTime("inbox settled_at", row.SettledAt)
 		return value, false, err
@@ -154,6 +181,45 @@ func parseInboxRow(role string, row inboxRow,
 		return deliveryEvidence{}, false, fmt.Errorf("%s inbox settled Delivery: %w", role, err)
 	}
 	return validateInboxLocalEvent(role, row.LocalEventID, value, events)
+}
+
+func storedInboxReplyMatches(delivery agency.PeerDelivery, stored sql.NullString) bool {
+	inReplyTo, present := delivery.InReplyToDelivery()
+	return stored.Valid == present && (!present || stored.String == inReplyTo.String())
+}
+
+func newDeliveryEvidence(role, direction, routeID, state string, capturedAt time.Time,
+	delivery agency.PeerDelivery,
+) (deliveryEvidence, error) {
+	origin := delivery.OriginEvent()
+	value := deliveryEvidence{
+		Node: role, Direction: direction, ID: delivery.ID().String(), RouteID: routeID,
+		State: state, CapturedAt: capturedAt, EnvelopeDigest: delivery.EnvelopeDigest().String(),
+		OriginEventID: origin.ID().String(), OriginEventDigest: origin.Digest().String(),
+		OriginSequence: delivery.OriginSequence(), OriginAcceptedAt: delivery.OriginAcceptedAt(),
+		OriginSource:      delivery.OriginSource().String(),
+		OriginConsequence: delivery.OriginConsequence().String(),
+		OriginTargetCount: delivery.OriginTargetCount(), OriginCausalDepth: delivery.CausalDepth(),
+		OriginSemanticKind: delivery.Kind().String(), OriginPayloadBytes: len([]byte(delivery.Payload().String())),
+	}
+	for _, artifact := range delivery.Artifacts() {
+		value.OriginArtifacts = append(value.OriginArtifacts, artifact.String())
+	}
+	for _, causal := range delivery.OriginCausation() {
+		value.OriginCausation = append(value.OriginCausation,
+			eventRefWire{ID: causal.ID().String(), Digest: causal.Digest().String()})
+	}
+	if correlation, present := delivery.OriginCorrelation(); present {
+		value.OriginCorrelation = &eventRefWire{ID: correlation.ID().String(),
+			Digest: correlation.Digest().String()}
+	}
+	if inReplyTo, present := delivery.InReplyToDelivery(); present {
+		value.InReplyToDeliveryID = inReplyTo.String()
+	}
+	if _, err := agency.NewRouteID(routeID); err != nil {
+		return deliveryEvidence{}, err
+	}
+	return value, nil
 }
 
 func validateInboxLocalEvent(role string, localEventID sql.NullString, value deliveryEvidence,

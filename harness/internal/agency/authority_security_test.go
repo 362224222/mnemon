@@ -404,7 +404,8 @@ func TestExactCorrelatedTerminalReplyMayCloseResponderAnchor(t *testing.T) {
 		return mustView(t, MachineViewSpec{Attachment: attachment,
 			Consequences: []Consequence{consequence}, Subjects: []SubjectBinding{subject},
 			Targets: []ResolvedTarget{exact, other}, ReplyTo: replyHandle, ReplyTarget: exactRef,
-			Provenance: []ProvenanceOffer{replyOffer, otherOffer, sameEventOffer}})
+			ReplyDelivery: mustDeliveryID(t, "delivery:exact-request"),
+			Provenance:    []ProvenanceOffer{replyOffer, otherOffer, sameEventOffer}})
 	}
 
 	for _, consequence := range []Consequence{

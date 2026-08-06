@@ -205,7 +205,7 @@ func intentFromWire(wire intentWire) (AgentIntent, error) {
 }
 
 func parseConsequence(value string) (Consequence, error) {
-	for consequence := ConsequenceCreateHandlings; consequence <= ConsequenceRetractReference; consequence++ {
+	for consequence := ConsequenceCreateHandlings; consequence <= ConsequenceObserveUnresolved; consequence++ {
 		if consequence.String() == value {
 			return consequence, nil
 		}

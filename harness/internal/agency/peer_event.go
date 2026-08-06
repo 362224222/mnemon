@@ -29,15 +29,21 @@ func NewPeerEvent(verified VerifiedPeerDelivery, stamp EventStamp) (Event, error
 	if err != nil {
 		return Event{}, err
 	}
-	requestedTarget, err := AliasTarget(delivery.TargetAlias())
-	if err != nil {
-		return Event{}, err
-	}
-	target, err := ResolveLocalTarget(requestedTarget, verified.target)
-	if err != nil {
-		return Event{}, err
+	consequence := verified.Consequence()
+	var targets []ResolvedTarget
+	if verified.SuccessorCount() == 1 {
+		requestedTarget, err := AliasTarget(delivery.TargetAlias())
+		if err != nil {
+			return Event{}, err
+		}
+		target, err := ResolveLocalTarget(requestedTarget, verified.target)
+		if err != nil {
+			return Event{}, err
+		}
+		targets = []ResolvedTarget{target}
 	}
 	correlation, _ := delivery.OriginCorrelation()
+	inReplyToDelivery, _ := verified.InReplyToDelivery()
 	event := Event{
 		id:             stamp.ID,
 		acceptedAt:     acceptedAt,
@@ -48,15 +54,16 @@ func NewPeerEvent(verified VerifiedPeerDelivery, stamp EventStamp) (Event, error
 		requestDigest:  delivery.EnvelopeDigest(),
 		kind:           delivery.Kind(),
 		payload:        delivery.Payload(),
-		consequence:    ConsequenceCreateHandlings,
-		targets:        []ResolvedTarget{target},
+		consequence:    consequence,
+		targets:        targets,
 		artifacts:      artifacts,
 		// The local Event records only the immediate cross-node edge. The
 		// signed Delivery remains the authoritative container for the full
 		// remote ancestry, keeping the local Agent View bounded without
 		// discarding provenance.
-		causation:   []EventRef{delivery.OriginEvent()},
-		correlation: correlation,
+		causation:         []EventRef{delivery.OriginEvent()},
+		correlation:       correlation,
+		inReplyToDelivery: inReplyToDelivery,
 	}
 	canonical, digest, err := canonicalJSON(event.wire())
 	if err != nil {

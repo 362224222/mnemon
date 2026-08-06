@@ -7,7 +7,7 @@ type agentViewWire struct {
 	Version        int                        `json:"version"`
 	View           string                     `json:"view"`
 	Current        *agentViewCurrentWire      `json:"current,omitempty"`
-	RelatedOpen    []agentViewRelatedWire     `json:"related_open,omitempty"`
+	Related        []agentViewRelatedWire     `json:"related,omitempty"`
 	Outstanding    agentViewOutstandingWire   `json:"outstanding"`
 	References     []agentViewReferenceWire   `json:"references,omitempty"`
 	Targets        []string                   `json:"targets,omitempty"`

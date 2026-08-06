@@ -200,7 +200,7 @@ func TestEventSeparatesMachineSemanticAndEvidence(t *testing.T) {
 			t.Fatalf("Event lacks %q section: %s", section, event.CanonicalJSON())
 		}
 	}
-	if !bytes.Contains(event.CanonicalJSON(), []byte(`"schema_version":2`)) ||
+	if !bytes.Contains(event.CanonicalJSON(), []byte(`"schema_version":3`)) ||
 		!bytes.Contains(event.CanonicalJSON(), []byte(`"causal_depth":3`)) {
 		t.Fatalf("Event does not explicitly version canonical causal depth: %s", event.CanonicalJSON())
 	}

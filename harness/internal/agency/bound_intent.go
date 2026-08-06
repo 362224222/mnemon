@@ -25,6 +25,7 @@ type BoundIntent struct {
 	artifacts         []Digest
 	causation         []EventRef
 	correlation       EventRef
+	inReplyToDelivery DeliveryID
 	canonical         []byte
 	digest            Digest
 }
@@ -65,6 +66,11 @@ func BindIntent(spec BoundIntentSpec) (BoundIntent, error) {
 		spec.View, spec.Intent.correlationHandle, correlation); err != nil {
 		return BoundIntent{}, err
 	}
+	var inReplyToDelivery DeliveryID
+	if isTerminalConsequence(spec.Intent.consequence) &&
+		exactCorrelatedReply(targets, spec.View, spec.Intent.correlationHandle, correlation) {
+		inReplyToDelivery = spec.View.replyDelivery
+	}
 
 	result := BoundIntent{
 		intent:            spec.Intent,
@@ -78,6 +84,7 @@ func BindIntent(spec BoundIntentSpec) (BoundIntent, error) {
 		artifacts:         artifacts,
 		causation:         causation,
 		correlation:       correlation,
+		inReplyToDelivery: inReplyToDelivery,
 	}
 	_, digest, err := canonicalJSON(result.requestWire())
 	if err != nil {
@@ -187,6 +194,7 @@ func exactCorrelatedReply(targets []ResolvedTarget, view ViewAuthority,
 	correlationHandle OpaqueHandle, correlation EventRef,
 ) bool {
 	if len(targets) != 1 || view.replyTo.IsZero() || view.replyTarget.IsZero() ||
+		view.replyDelivery.IsZero() ||
 		correlationHandle != view.replyTo || correlation.IsZero() ||
 		targets[0].destination != TargetDestinationRemote ||
 		targets[0].requested != view.replyTarget {
@@ -244,6 +252,9 @@ func (intent BoundIntent) Causation() []EventRef {
 }
 func (intent BoundIntent) Correlation() (EventRef, bool) {
 	return intent.correlation, !intent.correlation.IsZero()
+}
+func (intent BoundIntent) InReplyToDelivery() (DeliveryID, bool) {
+	return intent.inReplyToDelivery, !intent.inReplyToDelivery.IsZero()
 }
 func (intent BoundIntent) CanonicalJSON() []byte { return copyBytes(intent.canonical) }
 func (intent BoundIntent) RequestDigest() Digest { return intent.digest }

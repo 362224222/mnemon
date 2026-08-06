@@ -59,7 +59,7 @@ func TestRuntimeObservationEvidenceIsClosed(t *testing.T) {
 
 func TestRuntimeViewEvidenceRequiresConsistentStructuralMetadata(t *testing.T) {
 	hasCurrent, replyRequired, truncated := true, true, true
-	openTotal, relatedTotal, relatedProjected := 3, 2, 1
+	openTotal, relatedTotal, relatedProjected := 1, 65, 1
 	view := Fact{Kind: "runtime.view.received", Fields: FactFields{
 		Action: "current", HasCurrent: &hasCurrent, ReplyRequired: &replyRequired,
 		OpenTotal: &openTotal, RelatedTotal: &relatedTotal,

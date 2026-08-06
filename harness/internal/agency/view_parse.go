@@ -57,6 +57,11 @@ func machineViewSpecFromWire(wire machineViewWire, attachment Attachment) (Machi
 	if spec.ReplyTarget, err = parseViewReplyTarget(wire.ReplyTarget); err != nil {
 		return MachineViewSpec{}, err
 	}
+	if wire.ReplyDelivery != "" {
+		if spec.ReplyDelivery, err = ParseDeliveryID(wire.ReplyDelivery); err != nil {
+			return MachineViewSpec{}, err
+		}
+	}
 	if spec.Artifacts, err = parseViewArtifacts(wire.Artifacts); err != nil {
 		return MachineViewSpec{}, err
 	}
@@ -107,7 +112,8 @@ func parseViewSubjects(wires []viewSubjectWire) ([]SubjectBinding, error) {
 		if err != nil {
 			return nil, err
 		}
-		binding, err := NewSubjectBinding(handle, handlingID, head, wire.Binding.Fence)
+		binding, err := NewSubjectBinding(handle, handlingID, head, wire.Binding.Fence,
+			wire.Binding.ObservationRevision)
 		if err != nil {
 			return nil, err
 		}

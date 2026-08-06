@@ -20,7 +20,7 @@ func ParseAgentViewCanonicalJSON(data []byte, authority ViewAuthority) (AgentVie
 	if err != nil {
 		return AgentView{}, err
 	}
-	related, outstanding, err := agentViewRelatedSpecsFromWire(wire.RelatedOpen,
+	related, outstanding, err := agentViewRelatedSpecsFromWire(wire.Related,
 		wire.Outstanding, authority)
 	if err != nil {
 		return AgentView{}, err
@@ -50,45 +50,94 @@ func agentViewRelatedSpecsFromWire(wires []agentViewRelatedWire,
 ) ([]AgentViewRelatedSpec, AgentViewOutstanding, error) {
 	result := make([]AgentViewRelatedSpec, 0, len(wires))
 	for _, wire := range wires {
-		event, err := NewOpaqueHandle(wire.Facts.Event)
+		spec, err := agentViewRelatedSpecFromWire(wire, authority)
 		if err != nil {
 			return nil, AgentViewOutstanding{}, err
 		}
-		if _, offered := authority.provenance[event.String()]; !offered {
-			return nil, AgentViewOutstanding{}, invariant("Agent View related Event",
-				"does not match a sealed provenance offer")
-		}
-		var relation AgentViewRelation
-		switch wire.Facts.Relation {
-		case "correlation":
-			relation = AgentViewRelationCorrelation
-		default:
-			return nil, AgentViewOutstanding{}, invalid("Agent View related relation",
-				"must be correlation")
-		}
-		kind, err := NewSemanticLabel(wire.Semantic.Kind)
-		if err != nil {
-			return nil, AgentViewOutstanding{}, err
-		}
-		payload, err := NewSemanticPayload(wire.Semantic.Payload)
-		if err != nil {
-			return nil, AgentViewOutstanding{}, err
-		}
-		artifacts := make([]OpaqueHandle, 0, len(wire.Facts.Artifacts))
-		for _, artifactWire := range wire.Facts.Artifacts {
-			handle, err := validatePublicArtifact(artifactWire, authority)
-			if err != nil {
-				return nil, AgentViewOutstanding{}, err
-			}
-			artifacts = append(artifacts, handle)
-		}
-		result = append(result, AgentViewRelatedSpec{Event: event, Relation: relation,
-			Kind: kind, Payload: payload, Artifacts: artifacts})
+		result = append(result, spec)
 	}
 	outstanding := AgentViewOutstanding{OpenTotal: outstandingWire.OpenTotal,
 		RelatedTotal:     outstandingWire.RelatedTotal,
 		RelatedProjected: outstandingWire.RelatedProjected, Truncated: outstandingWire.Truncated}
 	return result, outstanding, nil
+}
+
+func agentViewRelatedSpecFromWire(wire agentViewRelatedWire,
+	authority ViewAuthority,
+) (AgentViewRelatedSpec, error) {
+	event, err := NewOpaqueHandle(wire.Facts.Event)
+	if err != nil {
+		return AgentViewRelatedSpec{}, err
+	}
+	if _, offered := authority.provenance[event.String()]; !offered {
+		return AgentViewRelatedSpec{}, invariant("Agent View related Event",
+			"does not match a sealed provenance offer")
+	}
+	relation, outcome, err := parseAgentViewRelatedRelation(wire.Facts)
+	if err != nil {
+		return AgentViewRelatedSpec{}, err
+	}
+	kind, err := NewSemanticLabel(wire.Semantic.Kind)
+	if err != nil {
+		return AgentViewRelatedSpec{}, err
+	}
+	payload, err := NewSemanticPayload(wire.Semantic.Payload)
+	if err != nil {
+		return AgentViewRelatedSpec{}, err
+	}
+	artifacts, err := parseAgentViewRelatedArtifacts(wire.Facts.Artifacts, authority)
+	if err != nil {
+		return AgentViewRelatedSpec{}, err
+	}
+	return AgentViewRelatedSpec{Event: event, Relation: relation, Outcome: outcome,
+		Kind: kind, Payload: payload, Artifacts: artifacts}, nil
+}
+
+func parseAgentViewRelatedRelation(facts agentViewRelatedFactsWire) (
+	AgentViewRelation, AgentViewTerminalOutcome, error,
+) {
+	switch facts.Relation {
+	case "correlation":
+		if facts.Outcome != "" {
+			return AgentViewRelationInvalid, AgentViewTerminalOutcomeInvalid,
+				invalid("Agent View related outcome", "must be absent for correlation")
+		}
+		return AgentViewRelationCorrelation, AgentViewTerminalOutcomeInvalid, nil
+	case "terminal_reply":
+		outcome, err := parseAgentViewTerminalOutcome(facts.Outcome)
+		return AgentViewRelationTerminalReply, outcome, err
+	default:
+		return AgentViewRelationInvalid, AgentViewTerminalOutcomeInvalid,
+			invalid("Agent View related relation", "must be correlation or terminal_reply")
+	}
+}
+
+func parseAgentViewTerminalOutcome(value string) (AgentViewTerminalOutcome, error) {
+	switch value {
+	case "completed":
+		return AgentViewTerminalOutcomeCompleted, nil
+	case "declined":
+		return AgentViewTerminalOutcomeDeclined, nil
+	case "unresolved":
+		return AgentViewTerminalOutcomeUnresolved, nil
+	default:
+		return AgentViewTerminalOutcomeInvalid, invalid("Agent View related outcome",
+			"must be completed, declined, or unresolved for terminal_reply")
+	}
+}
+
+func parseAgentViewRelatedArtifacts(wires []agentViewArtifactWire,
+	authority ViewAuthority,
+) ([]OpaqueHandle, error) {
+	artifacts := make([]OpaqueHandle, 0, len(wires))
+	for _, wire := range wires {
+		handle, err := validatePublicArtifact(wire, authority)
+		if err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, handle)
+	}
+	return artifacts, nil
 }
 
 func agentViewCurrentSpecFromWire(wire *agentViewCurrentWire, authority ViewAuthority) (*AgentViewCurrentSpec, error) {

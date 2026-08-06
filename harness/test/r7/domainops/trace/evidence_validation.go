@@ -141,24 +141,6 @@ func optionalEventRef(id, digest string) *eventRefWire {
 	return &eventRefWire{ID: id, Digest: digest}
 }
 
-func validateGlobalDeliveries(nodes []nodeEvidence, global map[string]eventEvidence) error {
-	for _, node := range nodes {
-		for _, delivery := range node.Deliveries {
-			origin, exists := global[delivery.OriginEventID]
-			if !exists || origin.Digest != delivery.OriginEventDigest {
-				return errors.New("peer Delivery has no exact collected origin Event")
-			}
-			if delivery.LocalEventID != "" {
-				local, exists := global[delivery.LocalEventID]
-				if !exists || local.Digest != delivery.LocalEventDigest {
-					return errors.New("peer Receipt local Event differs from collected Event")
-				}
-			}
-		}
-	}
-	return nil
-}
-
 func validatePeerEffectSummary(proof evidence) error {
 	peerByRole := make(map[string]int, len(proof.Nodes))
 	for _, node := range proof.Nodes {

@@ -52,63 +52,6 @@ func TestTerminalReplyFollowsBoundSubjectAdvanceAnchor(t *testing.T) {
 	assertHandlingOpenByID(t, fixture.origin, anchor)
 }
 
-func TestImportedIntegrationExplicitAdvanceCreatesReplyAnchor(t *testing.T) {
-	fixture := newPeerRoundTripFixture(t)
-	request := fixture.admitOrigin(t)
-	fixture.admitReceiver(t, request)
-	firstReply := admitTerminalDeclineFromCurrent(t, fixture.receiver)
-	if result := stageAndAdmitPeerDelivery(t, &fixture, firstReply); result.State() != PeerAdmissionStateAccepted {
-		t.Fatalf("first terminal reply state = %v, want accepted", result.State())
-	}
-	closeCurrentLocally(t, fixture.origin, "operation:close-original-request-anchor")
-
-	next := newFocusFederatedPeer(t, fixture.origin, fixture.originPrivate, 5, "integration-next")
-	view := fixture.origin.current(t)
-	public := requireReplyContext(t, view, "", "")
-	remote, err := agency.AliasTarget(next.originRoute.PublicAlias)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intent := mustIntent(t, agency.IntentSpec{
-		Kind:            mustLabel(t, "opaque.followup"),
-		Payload:         mustPayload(t, "seek independent follow-up after integrating the reply"),
-		Consequence:     agency.ConsequenceAdvanceHandling,
-		SubjectHandling: mustHandle(t, public.Current.Facts.Handle),
-		Successors:      []agency.TargetRef{remote},
-	})
-	bound, err := view.Bind(intent, mustOperation(t, "operation:advance-imported-integration"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	subject, present := bound.Subject()
-	if !present {
-		t.Fatal("explicit integration advance has no bound subject")
-	}
-	result, err := fixture.origin.store.Admit(fixture.origin.ctx, fixture.origin.proof, bound)
-	if err != nil {
-		t.Fatal(err)
-	}
-	requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
-
-	outbound := requirePendingDeliveryForRoute(t, fixture.origin, next.originRoute.RouteID)
-	assertPeerReplyBinding(t, fixture.origin, outbound.ID(), subject.HandlingID().String(),
-		outbound.OriginEvent())
-	stageAndAdmitArtifactFreeDelivery(t, next.receiver, next.receiverRoute.RemotePeerID,
-		fixture.originPrivate, outbound)
-	reply := admitTerminalDeclineFromCurrent(t, next.receiver)
-	signature := ed25519.Sign(next.receiverPrivate, reply.SigningMessage())
-	staged, err := fixture.origin.store.StagePeerDelivery(fixture.origin.ctx,
-		next.originRoute.RemotePeerID, reply.CanonicalJSON(), signature)
-	if err != nil || staged.State() != PeerAdmissionStateStaged {
-		t.Fatalf("stage follow-up reply = %#v, %v", staged, err)
-	}
-	accepted, err := fixture.origin.store.AdmitPeerDelivery(fixture.origin.ctx, reply.ID())
-	if err != nil || accepted.State() != PeerAdmissionStateAccepted {
-		t.Fatalf("admit follow-up reply = %#v, %v", accepted, err)
-	}
-	assertHandlingOpenByID(t, fixture.origin, subject.HandlingID().String())
-}
-
 func admitRemoteAdvance(t *testing.T, fixture *authorityFixture,
 	remoteAlias agency.OpaqueHandle, operationValue string,
 ) agency.PeerDelivery {
@@ -173,7 +116,7 @@ func admitTerminalDeclineFromCurrent(t *testing.T,
 
 func stageAndAdmitArtifactFreeDelivery(t *testing.T, receiver *authorityFixture,
 	remotePeer agency.OpaqueHandle, signer ed25519.PrivateKey, delivery agency.PeerDelivery,
-) {
+) agency.PeerAdmissionReceipt {
 	t.Helper()
 	signature := ed25519.Sign(signer, delivery.SigningMessage())
 	staged, err := receiver.store.StagePeerDelivery(receiver.ctx, remotePeer,
@@ -185,6 +128,11 @@ func stageAndAdmitArtifactFreeDelivery(t *testing.T, receiver *authorityFixture,
 	if err != nil || accepted.State() != PeerAdmissionStateAccepted {
 		t.Fatalf("admit Artifact-free delivery = %#v, %v", accepted, err)
 	}
+	receipt, present := accepted.Receipt()
+	if !present {
+		t.Fatal("accepted Artifact-free delivery has no Receipt")
+	}
+	return receipt
 }
 
 func requirePendingDeliveryForRoute(t *testing.T, fixture *authorityFixture,

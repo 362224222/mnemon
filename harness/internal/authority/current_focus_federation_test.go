@@ -122,9 +122,9 @@ func requireFederatedFocusView(t *testing.T, view focusViewWire,
 		t.Fatalf("Current payload %q was selected twice before all candidates", payload)
 	}
 	wantPayloads[payload] = true
-	if len(view.RelatedOpen) != agency.MaxAgentViewRelatedOpen ||
-		view.RelatedOpen[0].Facts.Relation != "correlation" {
-		t.Fatalf("bounded related projection = %#v", view.RelatedOpen)
+	if len(view.Related) != agency.MaxAgentViewRelated ||
+		view.Related[0].Facts.Relation != "correlation" {
+		t.Fatalf("bounded related projection = %#v", view.Related)
 	}
 	wantRelated := peerCount
 	if payload != "consider independent observations" {
@@ -134,7 +134,7 @@ func requireFederatedFocusView(t *testing.T, view focusViewWire,
 	}
 	if view.Outstanding.OpenTotal != len(wantPayloads) ||
 		view.Outstanding.RelatedTotal != wantRelated ||
-		view.Outstanding.RelatedProjected != agency.MaxAgentViewRelatedOpen ||
+		view.Outstanding.RelatedProjected != agency.MaxAgentViewRelated ||
 		!view.Outstanding.Truncated {
 		t.Fatalf("bounded outstanding projection = %#v", view.Outstanding)
 	}

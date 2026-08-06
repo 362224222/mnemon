@@ -53,6 +53,7 @@ type PeerDeliverySpec struct {
 	OriginTargetCount uint8
 	OriginCausation   []EventRef
 	OriginCorrelation EventRef
+	InReplyToDelivery DeliveryID
 	TargetAlias       OpaqueHandle
 	Kind              SemanticLabel
 	Payload           SemanticPayload
@@ -74,6 +75,7 @@ type PeerDelivery struct {
 	originTargetCount uint8
 	originCausation   []EventRef
 	originCorrelation EventRef
+	inReplyToDelivery DeliveryID
 	targetAlias       OpaqueHandle
 	kind              SemanticLabel
 	payload           SemanticPayload
@@ -125,7 +127,8 @@ func NewPeerDelivery(enrolledRoute RouteID, spec PeerDeliverySpec) (PeerDelivery
 		originAcceptedAt: originAcceptedAt, originSource: spec.OriginSource,
 		originConsequence: spec.OriginConsequence, originTargetCount: spec.OriginTargetCount,
 		originCausation: causation, originCorrelation: spec.OriginCorrelation,
-		targetAlias: spec.TargetAlias, kind: spec.Kind, payload: spec.Payload,
+		inReplyToDelivery: spec.InReplyToDelivery,
+		targetAlias:       spec.TargetAlias, kind: spec.Kind, payload: spec.Payload,
 		artifacts: artifacts, causalDepth: spec.CausalDepth, expiresAt: expiresAt,
 	}
 	canonical, _, err := canonicalJSON(delivery.wire())
@@ -142,11 +145,20 @@ func NewPeerDelivery(enrolledRoute RouteID, spec PeerDeliverySpec) (PeerDelivery
 
 func validatePeerDeliveryRequiredShape(spec PeerDeliverySpec) error {
 	if spec.OriginEvent.IsZero() || spec.OriginSequence == 0 || spec.OriginSource.IsZero() ||
-		!spec.OriginConsequence.Valid() || spec.OriginTargetCount == 0 ||
+		!spec.OriginConsequence.agentDeclarable() || spec.OriginTargetCount == 0 ||
 		int(spec.OriginTargetCount) > MaxSuccessors || spec.TargetAlias.IsZero() ||
 		spec.Kind.IsZero() || spec.CausalDepth == 0 {
 		return invalid("PeerDelivery",
 			"complete origin effect, target, semantic kind, and positive depth are required")
+	}
+	soleTargetTerminal := isTerminalConsequence(spec.OriginConsequence) && spec.OriginTargetCount == 1
+	if soleTargetTerminal && (spec.OriginCorrelation.IsZero() || spec.InReplyToDelivery.IsZero()) {
+		return invariant("PeerDelivery terminal reply",
+			"single-target terminal origin requires correlation and in-reply-to Delivery")
+	}
+	if !soleTargetTerminal && !spec.InReplyToDelivery.IsZero() {
+		return invariant("PeerDelivery terminal reply",
+			"in-reply-to Delivery is forbidden outside a single-target terminal origin")
 	}
 	return nil
 }
@@ -229,6 +241,9 @@ func (delivery PeerDelivery) OriginCausation() []EventRef {
 func (delivery PeerDelivery) OriginCorrelation() (EventRef, bool) {
 	return delivery.originCorrelation, !delivery.originCorrelation.IsZero()
 }
+func (delivery PeerDelivery) InReplyToDelivery() (DeliveryID, bool) {
+	return delivery.inReplyToDelivery, !delivery.inReplyToDelivery.IsZero()
+}
 func (delivery PeerDelivery) TargetAlias() OpaqueHandle { return delivery.targetAlias }
 func (delivery PeerDelivery) Kind() SemanticLabel       { return delivery.kind }
 func (delivery PeerDelivery) Payload() SemanticPayload  { return delivery.payload }
@@ -252,7 +267,7 @@ func (delivery PeerDelivery) SigningMessage() []byte {
 // authority; peer admission must still match the exact correlation to an open
 // local responsibility for the resolved target Principal.
 func (delivery PeerDelivery) RequiresTerminalReplyMatch() bool {
-	return isTerminalConsequence(delivery.originConsequence) && delivery.originTargetCount == 1
+	return !delivery.inReplyToDelivery.IsZero()
 }
 
 func (delivery PeerDelivery) clone() PeerDelivery {
@@ -278,15 +293,16 @@ type peerDeliveryIDWire struct {
 }
 
 type peerDeliveryWire struct {
-	SchemaVersion int                    `json:"schema_version"`
-	DeliveryID    string                 `json:"delivery_id"`
-	Origin        peerDeliveryOriginWire `json:"origin"`
-	TargetAlias   string                 `json:"target_alias"`
-	Kind          string                 `json:"kind"`
-	Payload       string                 `json:"payload"`
-	Artifacts     []string               `json:"artifacts,omitempty"`
-	CausalDepth   uint16                 `json:"causal_depth"`
-	ExpiresAt     string                 `json:"expires_at"`
+	SchemaVersion     int                    `json:"schema_version"`
+	DeliveryID        string                 `json:"delivery_id"`
+	Origin            peerDeliveryOriginWire `json:"origin"`
+	TargetAlias       string                 `json:"target_alias"`
+	Kind              string                 `json:"kind"`
+	Payload           string                 `json:"payload"`
+	Artifacts         []string               `json:"artifacts,omitempty"`
+	InReplyToDelivery string                 `json:"in_reply_to_delivery_id,omitempty"`
+	CausalDepth       uint16                 `json:"causal_depth"`
+	ExpiresAt         string                 `json:"expires_at"`
 }
 
 type peerDeliveryOriginWire struct {
@@ -302,7 +318,7 @@ type peerDeliveryOriginWire struct {
 
 func (delivery PeerDelivery) wire() peerDeliveryWire {
 	wire := peerDeliveryWire{
-		SchemaVersion: 2, DeliveryID: delivery.id.String(), TargetAlias: delivery.targetAlias.String(),
+		SchemaVersion: 3, DeliveryID: delivery.id.String(), TargetAlias: delivery.targetAlias.String(),
 		Kind: delivery.kind.String(), Payload: delivery.payload.String(), CausalDepth: delivery.causalDepth,
 		ExpiresAt: delivery.expiresAt.Format(time.RFC3339Nano),
 		Origin: peerDeliveryOriginWire{
@@ -310,6 +326,9 @@ func (delivery PeerDelivery) wire() peerDeliveryWire {
 			AcceptedAt: delivery.originAcceptedAt.Format(time.RFC3339Nano), Source: delivery.originSource.String(),
 			Consequence: delivery.originConsequence.String(), TargetCount: delivery.originTargetCount,
 		},
+	}
+	if !delivery.inReplyToDelivery.IsZero() {
+		wire.InReplyToDelivery = delivery.inReplyToDelivery.String()
 	}
 	for _, event := range delivery.originCausation {
 		wire.Origin.Causation = append(wire.Origin.Causation, event.canonical().(eventRefWire))

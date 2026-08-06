@@ -1,22 +1,21 @@
 package agency
 
-import "sort"
-
-const viewAuthorityVersion = 4
+const viewAuthorityVersion = 5
 
 // MachineViewSpec is the complete machine-owned authority behind one bounded
 // Agent View. Its typed offers prevent an opaque handle from being repurposed
 // across authority classes.
 type MachineViewSpec struct {
-	Attachment   Attachment
-	Consequences []Consequence
-	Subjects     []SubjectBinding
-	References   []ReferenceExpectation
-	Targets      []ResolvedTarget
-	ReplyTo      OpaqueHandle
-	ReplyTarget  TargetRef
-	Artifacts    []ViewArtifactOffer
-	Provenance   []ProvenanceOffer
+	Attachment    Attachment
+	Consequences  []Consequence
+	Subjects      []SubjectBinding
+	References    []ReferenceExpectation
+	Targets       []ResolvedTarget
+	ReplyTo       OpaqueHandle
+	ReplyTarget   TargetRef
+	ReplyDelivery DeliveryID
+	Artifacts     []ViewArtifactOffer
+	Provenance    []ProvenanceOffer
 }
 
 // ViewAuthority seals an exact Attachment and the read-set projected at that
@@ -24,17 +23,18 @@ type MachineViewSpec struct {
 // envelope while binding the stable Principal, initiation authority, and all
 // typed offers.
 type ViewAuthority struct {
-	attachment   Attachment
-	consequences map[Consequence]struct{}
-	subjects     map[string]SubjectBinding
-	references   map[string]ReferenceExpectation
-	targets      map[string]ResolvedTarget
-	replyTo      OpaqueHandle
-	replyTarget  TargetRef
-	artifacts    map[string]ViewArtifactOffer
-	provenance   map[string]EventRef
-	canonical    []byte
-	digest       Digest
+	attachment    Attachment
+	consequences  map[Consequence]struct{}
+	subjects      map[string]SubjectBinding
+	references    map[string]ReferenceExpectation
+	targets       map[string]ResolvedTarget
+	replyTo       OpaqueHandle
+	replyTarget   TargetRef
+	replyDelivery DeliveryID
+	artifacts     map[string]ViewArtifactOffer
+	provenance    map[string]EventRef
+	canonical     []byte
+	digest        Digest
 }
 
 func NewViewAuthority(spec MachineViewSpec) (ViewAuthority, error) {
@@ -117,21 +117,21 @@ func (view *ViewAuthority) load(spec MachineViewSpec) error {
 	if err := loadProvenance(view.provenance, spec.Provenance); err != nil {
 		return err
 	}
-	if err := loadReplyContext(&view.replyTo, &view.replyTarget, spec.ReplyTo,
-		spec.ReplyTarget, view.subjects, view.targets, view.provenance); err != nil {
+	if err := loadReplyContext(&view.replyTo, &view.replyTarget, &view.replyDelivery, spec.ReplyTo,
+		spec.ReplyTarget, spec.ReplyDelivery, view.subjects, view.targets, view.provenance); err != nil {
 		return err
 	}
 	return nil
 }
 
-func loadReplyContext(replyTo *OpaqueHandle, replyTarget *TargetRef,
-	requestedReplyTo OpaqueHandle, requestedTarget TargetRef,
+func loadReplyContext(replyTo *OpaqueHandle, replyTarget *TargetRef, replyDelivery *DeliveryID,
+	requestedReplyTo OpaqueHandle, requestedTarget TargetRef, requestedDelivery DeliveryID,
 	subjects map[string]SubjectBinding, targets map[string]ResolvedTarget,
 	provenance map[string]EventRef,
 ) error {
 	if requestedReplyTo.IsZero() {
-		if !requestedTarget.IsZero() {
-			return invalid("View reply context", "target requires a reply-to offer")
+		if !requestedTarget.IsZero() || !requestedDelivery.IsZero() {
+			return invalid("View reply context", "target and Delivery require a reply-to offer")
 		}
 		return nil
 	}
@@ -143,7 +143,13 @@ func loadReplyContext(replyTo *OpaqueHandle, replyTarget *TargetRef,
 	}
 	*replyTo = requestedReplyTo
 	if requestedTarget.IsZero() {
+		if !requestedDelivery.IsZero() {
+			return invalid("View reply context", "Delivery requires a remote reply target")
+		}
 		return nil
+	}
+	if requestedDelivery.IsZero() {
+		return invalid("View reply context", "remote reply target requires an exact Delivery")
 	}
 	if requestedTarget.IsSelf() {
 		return invalid("View reply target", "must be a remote alias")
@@ -153,13 +159,14 @@ func loadReplyContext(replyTo *OpaqueHandle, replyTarget *TargetRef,
 		return invariant("View reply target", "must be one exact offered remote target")
 	}
 	*replyTarget = requestedTarget
+	*replyDelivery = requestedDelivery
 	return nil
 }
 
 func loadConsequences(destination map[Consequence]struct{}, offers []Consequence) error {
 	for _, consequence := range offers {
-		if !consequence.Valid() {
-			return invalid("View authority", "contains an invalid consequence")
+		if !consequence.agentDeclarable() {
+			return invalid("View authority", "contains a non-Agent-declarable consequence")
 		}
 		if _, exists := destination[consequence]; exists {
 			return invalid("View authority", "contains a duplicate consequence")
@@ -283,110 +290,4 @@ func (view ViewAuthority) ResolveOfferedArtifact(handle OpaqueHandle) (Digest, e
 func (view ViewAuthority) offers(consequence Consequence) bool {
 	_, exists := view.consequences[consequence]
 	return exists
-}
-
-type machineViewWire struct {
-	SchemaVersion   int                       `json:"schema_version"`
-	SourcePrincipal string                    `json:"source_principal"`
-	MayInitiate     bool                      `json:"may_initiate"`
-	Consequences    []string                  `json:"consequences,omitempty"`
-	Subjects        []viewSubjectWire         `json:"subjects,omitempty"`
-	References      []viewReferenceWire       `json:"references,omitempty"`
-	Targets         []viewTargetWire          `json:"targets,omitempty"`
-	ReplyTo         string                    `json:"reply_to,omitempty"`
-	ReplyTarget     *targetWire               `json:"reply_target,omitempty"`
-	Artifacts       []viewArtifactOfferWire   `json:"artifacts,omitempty"`
-	Provenance      []viewProvenanceOfferWire `json:"provenance,omitempty"`
-}
-
-type viewSubjectWire struct {
-	Handle  string             `json:"handle"`
-	Binding subjectBindingWire `json:"binding"`
-}
-
-type viewReferenceWire struct {
-	Handle           string                    `json:"handle"`
-	Head             referenceExpectationWire  `json:"head"`
-	TerminalOutcomes *viewTerminalOutcomesWire `json:"terminal_outcomes,omitempty"`
-}
-
-type viewTerminalOutcomesWire struct {
-	Completed  int64 `json:"completed,omitempty"`
-	Declined   int64 `json:"declined,omitempty"`
-	Unresolved int64 `json:"unresolved,omitempty"`
-}
-
-type viewTargetWire struct {
-	Requested targetWire         `json:"requested"`
-	Resolved  resolvedTargetWire `json:"resolved"`
-}
-
-type viewArtifactOfferWire struct {
-	Handle string `json:"handle"`
-	Digest string `json:"digest"`
-}
-
-type viewProvenanceOfferWire struct {
-	Handle string       `json:"handle"`
-	Event  eventRefWire `json:"event"`
-}
-
-func (view ViewAuthority) wire() machineViewWire {
-	wire := machineViewWire{SchemaVersion: viewAuthorityVersion,
-		SourcePrincipal: view.attachment.principal.String(),
-		MayInitiate:     view.attachment.mayInitiate}
-	for consequence := range view.consequences {
-		wire.Consequences = append(wire.Consequences, consequence.String())
-	}
-	for handle, subject := range view.subjects {
-		wire.Subjects = append(wire.Subjects, viewSubjectWire{Handle: handle,
-			Binding: subjectBindingWire{HandlingID: subject.handlingID.String(),
-				Head: subject.head.canonical().(eventRefWire), Fence: subject.fence}})
-	}
-	for handle, reference := range view.references {
-		head := reference.head.canonical().(eventRefWire)
-		projected := viewReferenceWire{Handle: handle,
-			Head: referenceExpectationWire{Key: reference.key.String(), Head: &head}}
-		if reference.outcomes != (AgentViewTerminalOutcomes{}) {
-			projected.TerminalOutcomes = &viewTerminalOutcomesWire{
-				Completed: reference.outcomes.Completed, Declined: reference.outcomes.Declined,
-				Unresolved: reference.outcomes.Unresolved}
-		}
-		wire.References = append(wire.References, projected)
-	}
-	for _, target := range view.targets {
-		wire.Targets = append(wire.Targets, viewTargetWire{
-			Requested: targetWire{Self: target.requested.self, Alias: target.requested.alias.String()},
-			Resolved:  target.resolvedWire(),
-		})
-	}
-	if !view.replyTo.IsZero() {
-		wire.ReplyTo = view.replyTo.String()
-	}
-	if !view.replyTarget.IsZero() {
-		wire.ReplyTarget = &targetWire{Alias: view.replyTarget.Alias().String()}
-	}
-	for handle, artifact := range view.artifacts {
-		wire.Artifacts = append(wire.Artifacts, viewArtifactOfferWire{Handle: handle, Digest: artifact.digest.String()})
-	}
-	for handle, event := range view.provenance {
-		wire.Provenance = append(wire.Provenance, viewProvenanceOfferWire{
-			Handle: handle, Event: event.canonical().(eventRefWire)})
-	}
-	sort.Strings(wire.Consequences)
-	sort.Slice(wire.Subjects, func(i, j int) bool { return wire.Subjects[i].Handle < wire.Subjects[j].Handle })
-	sort.Slice(wire.References, func(i, j int) bool { return wire.References[i].Handle < wire.References[j].Handle })
-	sort.Slice(wire.Targets, func(i, j int) bool {
-		return targetWireKey(wire.Targets[i].Requested) < targetWireKey(wire.Targets[j].Requested)
-	})
-	sort.Slice(wire.Artifacts, func(i, j int) bool { return wire.Artifacts[i].Handle < wire.Artifacts[j].Handle })
-	sort.Slice(wire.Provenance, func(i, j int) bool { return wire.Provenance[i].Handle < wire.Provenance[j].Handle })
-	return wire
-}
-
-func targetWireKey(target targetWire) string {
-	if target.Self {
-		return "self"
-	}
-	return "alias:" + target.Alias
 }

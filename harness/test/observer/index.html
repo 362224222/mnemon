@@ -684,7 +684,7 @@
       optionalInteger(facts.payload_bytes, 0, 32768, label + ".payload_bytes");
       optionalInteger(facts.round, 0, 1024, label + ".round");
       optionalInteger(facts.related_projected, 0, 1, label + ".related_projected");
-      optionalInteger(facts.related_total, 0, 64, label + ".related_total");
+      optionalInteger(facts.related_total, 0, 128, label + ".related_total");
       optionalInteger(facts.sample_size, 0, 64, label + ".sample_size");
       optionalInteger(facts.success_count, 0, 256, label + ".success_count");
       optionalInteger(facts.target_count, 0, 16, label + ".target_count");
@@ -758,7 +758,6 @@
           required(record.facts, ["action", "has_current", "open_total", "related_projected",
             "related_total", "truncated"], label + ".facts");
           if (record.facts.action !== "current" ||
-              record.facts.related_total > record.facts.open_total ||
               record.facts.related_projected > record.facts.related_total ||
               record.facts.truncated !==
                 (record.facts.related_projected < record.facts.related_total) ||

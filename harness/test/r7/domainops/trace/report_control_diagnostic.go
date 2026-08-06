@@ -91,8 +91,8 @@ func validViewSummary(view *agentViewSummary, reads int) bool {
 		return view == nil
 	}
 	if view == nil || view.OpenTotal < 0 || view.OpenTotal > authority.MaxOpenHandlingsPerPrincipal ||
-		view.RelatedTotal < 0 || view.RelatedTotal > view.OpenTotal ||
-		view.RelatedProjected < 0 || view.RelatedProjected > agency.MaxAgentViewRelatedOpen ||
+		view.RelatedTotal < 0 || view.RelatedTotal > agency.MaxAgentViewRelatedTotal ||
+		view.RelatedProjected < 0 || view.RelatedProjected > agency.MaxAgentViewRelated ||
 		view.RelatedProjected > view.RelatedTotal ||
 		view.Truncated != (view.RelatedProjected < view.RelatedTotal) ||
 		view.HasCurrent != (view.ReplyRequired != nil) {

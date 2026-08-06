@@ -259,7 +259,7 @@ func parseTerminalOutcomeReferences(item terminalOutcomeEvent) ([]agency.EventRe
 	if err := json.Unmarshal(item.canonical, &wire); err != nil {
 		return nil, fmt.Errorf("rebuild reference outcome projection: parse Event: %w", err)
 	}
-	if wire.SchemaVersion != 2 || wire.Machine.ID != item.eventID.String() ||
+	if wire.SchemaVersion != 3 || wire.Machine.ID != item.eventID.String() ||
 		wire.Machine.Consequence != outcomeConsequence(item.outcome) {
 		return nil, errors.New("rebuild reference outcome projection: terminal Event mismatch")
 	}

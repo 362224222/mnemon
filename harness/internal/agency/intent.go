@@ -5,8 +5,9 @@ import (
 	"sort"
 )
 
-// Consequence is the complete closed set of Agent-declarable R7 effects.
-// Semantic kind labels do not extend this set.
+// Consequence is the complete closed set of durable R7 effects. Semantic kind
+// labels do not extend this set. Observation consequences are machine-only:
+// they record an admitted peer reply without creating another Handling.
 type Consequence uint8
 
 const (
@@ -19,6 +20,9 @@ const (
 	ConsequencePublishReference
 	ConsequenceSupersedeReference
 	ConsequenceRetractReference
+	ConsequenceObserveCompleted
+	ConsequenceObserveDeclined
+	ConsequenceObserveUnresolved
 )
 
 func (c Consequence) String() string {
@@ -39,13 +43,27 @@ func (c Consequence) String() string {
 		return "reference.supersede"
 	case ConsequenceRetractReference:
 		return "reference.retract"
+	case ConsequenceObserveCompleted:
+		return "observation.completed"
+	case ConsequenceObserveDeclined:
+		return "observation.declined"
+	case ConsequenceObserveUnresolved:
+		return "observation.unresolved"
 	default:
 		return ""
 	}
 }
 
 func (c Consequence) Valid() bool {
+	return c >= ConsequenceCreateHandlings && c <= ConsequenceObserveUnresolved
+}
+
+func (c Consequence) agentDeclarable() bool {
 	return c >= ConsequenceCreateHandlings && c <= ConsequenceRetractReference
+}
+
+func (c Consequence) observation() bool {
+	return c >= ConsequenceObserveCompleted && c <= ConsequenceObserveUnresolved
 }
 
 func (c Consequence) subjectBound() bool {
@@ -151,8 +169,8 @@ func NewAgentIntent(spec IntentSpec) (AgentIntent, error) {
 	if spec.Kind.IsZero() {
 		return AgentIntent{}, invalid("Intent kind", "must not be zero")
 	}
-	if !spec.Consequence.Valid() {
-		return AgentIntent{}, invalid("Intent consequence", "must be a closed consequence")
+	if !spec.Consequence.agentDeclarable() {
+		return AgentIntent{}, invalid("Intent consequence", "must be an Agent-declarable consequence")
 	}
 	if err := validateIntentShape(spec); err != nil {
 		return AgentIntent{}, err

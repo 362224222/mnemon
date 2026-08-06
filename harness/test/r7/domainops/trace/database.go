@@ -17,7 +17,7 @@ import (
 
 const (
 	authorityApplicationID = 0x4d4e5237
-	authoritySchemaVersion = 10
+	authoritySchemaVersion = 11
 )
 
 type evidence struct {
@@ -73,16 +73,33 @@ type referenceEvidence struct {
 }
 
 type deliveryEvidence struct {
-	Node              string
-	Direction         string
-	ID                string
-	State             string
-	CapturedAt        time.Time
-	OriginEventID     string
-	OriginEventDigest string
-	LocalEventID      string
-	LocalEventDigest  string
-	Accepted          bool
+	Node                    string
+	Direction               string
+	ID                      string
+	RouteID                 string
+	State                   string
+	CapturedAt              time.Time
+	EnvelopeDigest          string
+	OriginEventID           string
+	OriginEventDigest       string
+	OriginSequence          uint64
+	OriginAcceptedAt        time.Time
+	OriginSource            string
+	OriginConsequence       string
+	OriginTargetCount       int
+	OriginCausalDepth       uint16
+	OriginSemanticKind      string
+	OriginPayloadBytes      int
+	OriginArtifacts         []string
+	OriginCausation         []eventRefWire
+	OriginCorrelation       *eventRefWire
+	InReplyToDeliveryID     string
+	ReplyAnchorHandlingID   string
+	ExpectedReplyRootID     string
+	ExpectedReplyRootDigest string
+	LocalEventID            string
+	LocalEventDigest        string
+	Accepted                bool
 }
 
 func loadEvidence(reportPath, authorityRoot string) (evidence, error) {

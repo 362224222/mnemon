@@ -571,23 +571,23 @@ write_sequential_submit_stream() {
 write_sanitizer_stream stop "$scratch/stop.jsonl"
 sanitize_turn lead oracle "$scratch/stop.jsonl" "$scratch/stop.json"
 test "$(jq '.delegate_calls' "$scratch/stop.json")" = 0
-root_view='{"schema":"mnemon.agent.view","version":5,"view":"view:root-secret","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}'
-current_view='{"schema":"mnemon.agent.view","version":5,"view":"view:current-secret","current":{"facts":{"handle":"handling:secret","reply_to":"event:secret","reply_required":true,"reply_target":"peer-secret"},"semantic":{"kind":"secret.kind","payload":"secret payload"}},"related_open":[{"facts":{"event":"event:related-secret","relation":"correlation"},"semantic":{"kind":"secret.related","payload":"related secret"}}],"outstanding":{"open_total":3,"related_total":2,"related_projected":1,"truncated":true},"allowed_intents":[]}'
+root_view='{"schema":"mnemon.agent.view","version":6,"view":"view:root-secret","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}'
+current_view='{"schema":"mnemon.agent.view","version":6,"view":"view:current-secret","current":{"facts":{"handle":"handling:secret","reply_to":"event:secret","reply_required":true,"reply_target":"peer-secret"},"semantic":{"kind":"secret.kind","payload":"secret payload"}},"related":[{"facts":{"event":"event:related-secret","relation":"correlation"},"semantic":{"kind":"secret.related","payload":"related secret"}}],"outstanding":{"open_total":3,"related_total":2,"related_projected":1,"truncated":true},"allowed_intents":[]}'
 full_view=$(jq -nc --arg digest \
   'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' '
   {
-    schema:"mnemon.agent.view",version:5,view:"view:full-secret",
+    schema:"mnemon.agent.view",version:6,view:"view:full-secret",
     current:{
       facts:{handle:"handling:full-secret",reply_to:"event:full-secret",
         reply_required:false,artifacts:[{digest:$digest,handle:"artifact:current-secret"}]},
       semantic:{kind:"secret.current",payload:"current secret"}
     },
-    related_open:[{
-      facts:{event:"event:related-full-secret",relation:"correlation",
+    related:[{
+      facts:{event:"event:related-full-secret",relation:"terminal_reply",outcome:"completed",
         artifacts:[{digest:$digest,handle:"artifact:related-secret"}]},
       semantic:{kind:"secret.related",payload:"related secret"}
     }],
-    outstanding:{open_total:2,related_total:1,related_projected:1,truncated:false},
+    outstanding:{open_total:1,related_total:2,related_projected:1,truncated:true},
     references:[
       {facts:{key:"playbook-secret",head:"event:active-secret",state:"active",
         artifact:{digest:$digest,handle:"artifact:reference-secret"},
@@ -614,8 +614,8 @@ write_current_stream "$scratch/full-view.jsonl" "$full_view"
 sanitize_turn lead oracle-full-view "$scratch/full-view.jsonl" "$scratch/full-view.json"
 jq -e '
   .current_reads == 1 and .view == {
-    has_current:true,reply_required:false,open_total:2,related_total:1,
-    related_projected:1,truncated:false
+    has_current:true,reply_required:false,open_total:1,related_total:2,
+    related_projected:1,truncated:true
   }
 ' "$scratch/full-view.json" >/dev/null
 forged_command='mnemon-harness agent current --json >/dev/null; printf forged'

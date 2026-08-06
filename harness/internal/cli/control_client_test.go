@@ -34,7 +34,7 @@ func TestControlClientRoundTripsFrozenAgencyWire(t *testing.T) {
 	current := "current:test"
 	view, apiErr := client.Current(context.Background(), attached, current)
 	requireProjection(t, "Current", view, apiErr,
-		`{"schema":"mnemon.agent.view","version":5,"view":"view:test","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}`)
+		`{"schema":"mnemon.agent.view","version":6,"view":"view:test","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}`)
 	intent := controlTestIntent(t)
 	receipt, apiErr := client.Submit(context.Background(), attached, current,
 		"admit:test", intent, nil)
@@ -66,7 +66,7 @@ func roundTripControlHandler(requests chan<- capturedControlRequest, credential 
 			fmt.Fprintf(writer, `{"attachment":"attachment:test","credential":"%s","expires_at":"%s","schema":"%s","version":1}`+"\n",
 				base64.RawURLEncoding.EncodeToString(credential), expiry.Format(timeWireLayout), attachmentSchema)
 		case routeCurrent:
-			_, _ = io.WriteString(writer, `{"schema":"mnemon.agent.view","version":5,"view":"view:test","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}`+"\n")
+			_, _ = io.WriteString(writer, `{"schema":"mnemon.agent.view","version":6,"view":"view:test","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}`+"\n")
 		case routeSubmit:
 			_, _ = io.WriteString(writer, `{"schema":"mnemon.agent.receipt","version":1,"outcome":"accepted","replayed":false}`+"\n")
 		case routeArtifacts:
@@ -186,7 +186,7 @@ func TestControlClientRejectsInvalidProjectionAndRemoteErrorEnvelope(t *testing.
 		Body   string
 	}{
 		"duplicate projection": {Status: http.StatusOK,
-			Body: `{"schema":"mnemon.agent.view","schema":"mnemon.agent.view","version":5}`},
+			Body: `{"schema":"mnemon.agent.view","schema":"mnemon.agent.view","version":6}`},
 		"wrong projection schema": {Status: http.StatusOK,
 			Body: `{"schema":"mnemon.agent.receipt","version":1}`},
 		"status mismatch": {Status: http.StatusUnauthorized,

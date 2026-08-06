@@ -89,6 +89,7 @@ func projectViewContentTx(ctx context.Context, tx *sql.Tx, principal agency.Agen
 			return err
 		}
 		spec.ReplyTarget = reply.target
+		spec.ReplyDelivery = reply.delivery
 		if err := projectClaim(claim, reply.root, spec, publicSpec); err != nil {
 			return err
 		}
@@ -182,11 +183,13 @@ func projectClaim(claim *projectedClaim, replyRoot agency.EventRef, spec *agency
 		return errors.New("current View: reply root is required")
 	}
 	subjectHandle, err := deterministicHandle("subject", claim.handlingID.String(),
-		claim.head.ID().String(), claim.head.Digest().String(), fmt.Sprint(claim.fence))
+		claim.head.ID().String(), claim.head.Digest().String(), fmt.Sprint(claim.fence),
+		fmt.Sprint(claim.observationRevision))
 	if err != nil {
 		return err
 	}
-	subject, err := agency.NewSubjectBinding(subjectHandle, claim.handlingID, claim.head, claim.fence)
+	subject, err := agency.NewSubjectBinding(subjectHandle, claim.handlingID, claim.head,
+		claim.fence, claim.observationRevision)
 	if err != nil {
 		return err
 	}

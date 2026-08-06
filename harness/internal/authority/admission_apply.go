@@ -60,6 +60,12 @@ func applyDomainEffectTx(ctx context.Context, tx *sql.Tx, event agency.Event,
 		return supersedeReferenceTx(ctx, tx, event)
 	case agency.ConsequenceRetractReference:
 		return retractReferenceTx(ctx, tx, event)
+	case agency.ConsequenceObserveCompleted, agency.ConsequenceObserveDeclined,
+		agency.ConsequenceObserveUnresolved:
+		if len(handlingIDs) != 0 {
+			return errors.New("admit peer observation: successor cardinality must be zero")
+		}
+		return nil
 	default:
 		return errors.New("admit Event: unknown consequence")
 	}

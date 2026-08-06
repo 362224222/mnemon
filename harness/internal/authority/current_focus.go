@@ -13,6 +13,7 @@ import (
 type currentReplyContext struct {
 	root     agency.EventRef
 	target   agency.TargetRef
+	delivery agency.DeliveryID
 	imported bool
 }
 
@@ -45,16 +46,10 @@ func currentReplyContextTx(ctx context.Context, tx *sql.Tx,
 			result.root = delivery.OriginEvent()
 		}
 	}
-	// A terminal reply was already correlated and re-admitted against an open
-	// local responsibility. Its integration Handling remains explicit local
-	// work, but it never acquires a reply capability that could echo the
-	// terminal disposition back to its sender.
-	if imported && delivery.RequiresTerminalReplyMatch() {
-		return result, nil
-	}
 	if !imported || !route.Active() {
 		return result, nil
 	}
+	result.delivery = delivery.ID()
 	result.target, err = agency.AliasTarget(route.PublicAlias())
 	if err != nil {
 		return currentReplyContext{}, errors.New("current View: corrupt reply target alias")
@@ -132,6 +127,7 @@ func peerDeliveryForLocalEventTx(ctx context.Context, tx *sql.Tx,
 type projectedRelated struct {
 	details  storedEventDetails
 	relation agency.AgentViewRelation
+	outcome  agency.AgentViewTerminalOutcome
 }
 
 func loadFocusProjectionTx(ctx context.Context, tx *sql.Tx, principal agency.AgentPrincipalID,
@@ -159,8 +155,15 @@ func loadFocusProjectionTx(ctx context.Context, tx *sql.Tx, principal agency.Age
 		}
 		candidates = append(candidates, details)
 	}
-	projected, relatedTotal := selectFocusRelated(claim.payload, focusRoot, candidates)
-	outstanding.RelatedTotal = relatedTotal
+	projected, openRelatedTotal := selectFocusRelated(claim.payload, focusRoot, candidates)
+	observations, err := loadTerminalObservationCandidatesTx(ctx, tx, claim.handlingID)
+	if err != nil {
+		return nil, agency.AgentViewOutstanding{}, err
+	}
+	if observation := selectTerminalObservation(claim.payload, claim.fence, observations); observation != nil {
+		projected = observation
+	}
+	outstanding.RelatedTotal = openRelatedTotal + len(observations)
 	outstanding.RelatedProjected = len(projected)
 	outstanding.Truncated = outstanding.RelatedProjected < outstanding.RelatedTotal
 	return projected, outstanding, nil
@@ -169,7 +172,7 @@ func loadFocusProjectionTx(ctx context.Context, tx *sql.Tx, principal agency.Age
 func selectFocusRelated(currentPayload agency.SemanticPayload, root agency.EventRef,
 	candidates []storedEventDetails,
 ) ([]projectedRelated, int) {
-	projected := make([]projectedRelated, 0, agency.MaxAgentViewRelatedOpen)
+	projected := make([]projectedRelated, 0, agency.MaxAgentViewRelated)
 	relatedTotal := 0
 	encodedPayloadBytes := jsonEncodedPayloadBytes(currentPayload)
 	for _, details := range candidates {
@@ -180,13 +183,100 @@ func selectFocusRelated(currentPayload agency.SemanticPayload, root agency.Event
 		relatedPayloadBytes := jsonEncodedPayloadBytes(details.payload)
 		withinPayload := encodedPayloadBytes <= agency.MaxAgentViewFocusPayloadBytes &&
 			relatedPayloadBytes <= agency.MaxAgentViewFocusPayloadBytes-encodedPayloadBytes
-		if len(projected) < agency.MaxAgentViewRelatedOpen && withinPayload {
+		if len(projected) < agency.MaxAgentViewRelated && withinPayload {
 			projected = append(projected, projectedRelated{details: details,
 				relation: agency.AgentViewRelationCorrelation})
 			encodedPayloadBytes += relatedPayloadBytes
 		}
 	}
 	return projected, relatedTotal
+}
+
+type terminalObservationCandidate struct {
+	details storedEventDetails
+	outcome agency.AgentViewTerminalOutcome
+}
+
+func loadTerminalObservationCandidatesTx(ctx context.Context, tx *sql.Tx,
+	anchor agency.HandlingID,
+) ([]terminalObservationCandidate, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT inbox.local_event_id, outbound.delivery_id
+		FROM peer_inbox inbox
+		JOIN peer_outbox outbound ON outbound.delivery_id = inbox.in_reply_to_delivery_id
+		JOIN events observed ON observed.event_id = inbox.local_event_id
+		WHERE outbound.reply_anchor_handling_id = ? AND inbox.local_event_id IS NOT NULL
+		ORDER BY observed.origin_sequence, observed.event_id LIMIT ?`, anchor.String(),
+		MaxTerminalObservationsPerAnchor+1)
+	if err != nil {
+		return nil, fmt.Errorf("current View: load terminal observations: %w", err)
+	}
+	defer rows.Close()
+	type observationRow struct{ eventID, outboundID string }
+	var selected []observationRow
+	for rows.Next() {
+		var row observationRow
+		if err := rows.Scan(&row.eventID, &row.outboundID); err != nil {
+			return nil, fmt.Errorf("current View: scan terminal observation: %w", err)
+		}
+		selected = append(selected, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("current View: iterate terminal observations: %w", err)
+	}
+	if len(selected) > MaxTerminalObservationsPerAnchor {
+		return nil, errors.New("current View: terminal observation bound violated")
+	}
+	result := make([]terminalObservationCandidate, 0, len(selected))
+	for _, row := range selected {
+		details, err := loadStoredEventDetailsTx(ctx, tx, row.eventID)
+		if err != nil {
+			return nil, err
+		}
+		outbound, err := agency.ParseDeliveryID(row.outboundID)
+		if err != nil || details.inReplyTo != outbound {
+			return nil, errors.New("current View: terminal observation reply binding diverges")
+		}
+		outcome, err := terminalObservationOutcome(details.consequence)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, terminalObservationCandidate{details: details, outcome: outcome})
+	}
+	return result, nil
+}
+
+func terminalObservationOutcome(consequence agency.Consequence) (agency.AgentViewTerminalOutcome, error) {
+	switch consequence {
+	case agency.ConsequenceObserveCompleted:
+		return agency.AgentViewTerminalOutcomeCompleted, nil
+	case agency.ConsequenceObserveDeclined:
+		return agency.AgentViewTerminalOutcomeDeclined, nil
+	case agency.ConsequenceObserveUnresolved:
+		return agency.AgentViewTerminalOutcomeUnresolved, nil
+	default:
+		return agency.AgentViewTerminalOutcomeInvalid,
+			errors.New("current View: linked reply is not a terminal observation")
+	}
+}
+
+func selectTerminalObservation(currentPayload agency.SemanticPayload, fence uint64,
+	candidates []terminalObservationCandidate,
+) []projectedRelated {
+	if len(candidates) == 0 || fence == 0 {
+		return nil
+	}
+	encodedPayloadBytes := jsonEncodedPayloadBytes(currentPayload)
+	start := int((fence - 1) % uint64(len(candidates)))
+	for offset := 0; offset < len(candidates); offset++ {
+		candidate := candidates[(start+offset)%len(candidates)]
+		relatedPayloadBytes := jsonEncodedPayloadBytes(candidate.details.payload)
+		if encodedPayloadBytes <= agency.MaxAgentViewFocusPayloadBytes &&
+			relatedPayloadBytes <= agency.MaxAgentViewFocusPayloadBytes-encodedPayloadBytes {
+			return []projectedRelated{{details: candidate.details,
+				relation: agency.AgentViewRelationTerminalReply, outcome: candidate.outcome}}
+		}
+	}
+	return nil
 }
 
 // jsonEncodedPayloadBytes measures the JSON string content rather than its raw
@@ -250,7 +340,7 @@ func projectRelated(related projectedRelated, spec *agency.MachineViewSpec,
 	}
 	spec.Provenance = append(spec.Provenance, provenance)
 	public := agency.AgentViewRelatedSpec{Event: eventHandle, Relation: related.relation,
-		Kind: related.details.kind, Payload: related.details.payload}
+		Outcome: related.outcome, Kind: related.details.kind, Payload: related.details.payload}
 	for _, digest := range related.details.artifacts {
 		handle, err := deterministicHandle("related-artifact", related.details.ref.ID().String(),
 			digest.String())

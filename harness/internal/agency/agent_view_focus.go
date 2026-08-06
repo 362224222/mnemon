@@ -7,6 +7,7 @@ import "sort"
 type AgentViewRelatedSpec struct {
 	Event     OpaqueHandle
 	Relation  AgentViewRelation
+	Outcome   AgentViewTerminalOutcome
 	Kind      SemanticLabel
 	Payload   SemanticPayload
 	Artifacts []OpaqueHandle
@@ -19,17 +20,48 @@ type AgentViewRelation uint8
 const (
 	AgentViewRelationInvalid AgentViewRelation = iota
 	AgentViewRelationCorrelation
+	AgentViewRelationTerminalReply
 )
 
 func (relation AgentViewRelation) String() string {
-	if relation == AgentViewRelationCorrelation {
+	switch relation {
+	case AgentViewRelationCorrelation:
 		return "correlation"
+	case AgentViewRelationTerminalReply:
+		return "terminal_reply"
+	default:
+		return ""
 	}
-	return ""
 }
 
-// AgentViewOutstanding is a bounded, read-only projection. Counts describe
-// locally accepted open Handlings; they grant no claim, fence, or action.
+// AgentViewTerminalOutcome is the closed observed outcome of one imported
+// terminal reply. It is a machine fact, never an Agent-selected effect.
+type AgentViewTerminalOutcome uint8
+
+const (
+	AgentViewTerminalOutcomeInvalid AgentViewTerminalOutcome = iota
+	AgentViewTerminalOutcomeCompleted
+	AgentViewTerminalOutcomeDeclined
+	AgentViewTerminalOutcomeUnresolved
+)
+
+func (outcome AgentViewTerminalOutcome) String() string {
+	switch outcome {
+	case AgentViewTerminalOutcomeCompleted:
+		return "completed"
+	case AgentViewTerminalOutcomeDeclined:
+		return "declined"
+	case AgentViewTerminalOutcomeUnresolved:
+		return "unresolved"
+	default:
+		return ""
+	}
+}
+
+// AgentViewOutstanding is a bounded, read-only projection. OpenTotal counts
+// accepted open Handlings, while RelatedTotal also includes immutable terminal
+// reply observations linked to current. Neither count grants claim, fence, or
+// action authority.
 type AgentViewOutstanding struct {
 	OpenTotal        int
 	RelatedTotal     int
@@ -40,11 +72,11 @@ type AgentViewOutstanding struct {
 func projectRelated(specs []AgentViewRelatedSpec, outstanding AgentViewOutstanding,
 	authority ViewAuthority,
 ) ([]agentViewRelatedWire, map[string]struct{}, error) {
-	if len(specs) > MaxAgentViewRelatedOpen {
-		return nil, nil, limit("Agent View related open", len(specs), MaxAgentViewRelatedOpen)
+	if len(specs) > MaxAgentViewRelated {
+		return nil, nil, limit("Agent View related", len(specs), MaxAgentViewRelated)
 	}
 	if outstanding.OpenTotal < 0 || outstanding.RelatedTotal < 0 ||
-		outstanding.RelatedProjected < 0 || outstanding.RelatedTotal > outstanding.OpenTotal ||
+		outstanding.RelatedTotal > MaxAgentViewRelatedTotal || outstanding.RelatedProjected < 0 ||
 		outstanding.RelatedProjected != len(specs) ||
 		outstanding.Truncated != (outstanding.RelatedProjected < outstanding.RelatedTotal) {
 		return nil, nil, invariant("Agent View outstanding", "counts do not match the related projection")
@@ -69,6 +101,12 @@ func projectRelatedEvent(spec AgentViewRelatedSpec, authority ViewAuthority,
 	if spec.Event.IsZero() || spec.Kind.IsZero() || spec.Relation.String() == "" {
 		return agentViewRelatedWire{}, invalid("Agent View related Event", "event, relation, and kind are required")
 	}
+	if (spec.Relation == AgentViewRelationTerminalReply) !=
+		(spec.Outcome != AgentViewTerminalOutcomeInvalid) ||
+		(spec.Outcome != AgentViewTerminalOutcomeInvalid && spec.Outcome.String() == "") {
+		return agentViewRelatedWire{}, invariant("Agent View related outcome",
+			"is required exactly for a terminal reply")
+	}
 	if _, offered := authority.provenance[spec.Event.String()]; !offered {
 		return agentViewRelatedWire{}, invariant("Agent View related Event", "event was not offered as provenance")
 	}
@@ -91,7 +129,7 @@ func projectRelatedEvent(spec AgentViewRelatedSpec, authority ViewAuthority,
 	sort.Slice(artifactWires, func(i, j int) bool { return artifactWires[i].Handle < artifactWires[j].Handle })
 	return agentViewRelatedWire{
 		Facts: agentViewRelatedFactsWire{Event: spec.Event.String(), Relation: spec.Relation.String(),
-			Artifacts: artifactWires},
+			Outcome: spec.Outcome.String(), Artifacts: artifactWires},
 		Semantic: agentViewSemanticWire{Kind: spec.Kind.String(), Payload: spec.Payload.String()},
 	}, nil
 }
@@ -109,6 +147,7 @@ type agentViewRelatedWire struct {
 type agentViewRelatedFactsWire struct {
 	Event     string                  `json:"event"`
 	Relation  string                  `json:"relation"`
+	Outcome   string                  `json:"outcome,omitempty"`
 	Artifacts []agentViewArtifactWire `json:"artifacts,omitempty"`
 }
 
