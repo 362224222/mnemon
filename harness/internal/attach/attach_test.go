@@ -88,10 +88,11 @@ func assertGuideTerminalSurface(t *testing.T, guide string) {
 	for _, required := range []string{
 		"current remains the local causal anchor",
 		"A `self` successor creates another responsibility; never use it as reply keepalive",
-		"A reply target is optional, not an obligation",
-		"resolve locally without successors unless another peer must act",
-		"If replying finishes current, combine terminal resolve with one correlated remote successor in the same Intent",
-		"Reports and Receipts need no acknowledgement",
+		"The anchor awaits the outcome; sending does not complete the work",
+		"A request for evidence, action, or decision returns exactly one correlated terminal disposition",
+		"including declined or unresolved; never close it silently",
+		"A one-way report, duplicate/stale input, or correlated response needing no new remote work closes locally without successors",
+		"Never acknowledge a report or Receipt",
 	} {
 		if !strings.Contains(normalized, required) {
 			t.Errorf("guide lacks response convergence rule %q", required)
@@ -124,7 +125,7 @@ func TestGuideResponseExampleAtomicallyClosesAndReturnsCorrelatedEvidence(t *tes
 	}
 }
 
-func TestGuideDeclineExampleClosesLocallyWithoutSuccessor(t *testing.T) {
+func TestGuideDeclineExampleReturnsCorrelatedDisposition(t *testing.T) {
 	projection, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -139,9 +140,10 @@ func TestGuideDeclineExampleClosesLocallyWithoutSuccessor(t *testing.T) {
 		t.Fatalf("guide work.declined is not a valid AgentIntent: %v", err)
 	}
 	if intent.Consequence() != agency.ConsequenceResolveDeclined ||
-		intent.SubjectHandling().IsZero() || len(intent.Successors()) != 0 ||
-		!intent.CorrelationHandle().IsZero() {
-		t.Fatal("guide work.declined does not close only its current responsibility")
+		intent.SubjectHandling().IsZero() || len(intent.Successors()) != 1 ||
+		intent.Successors()[0].IsSelf() || intent.Successors()[0].Alias().IsZero() ||
+		intent.CorrelationHandle().IsZero() {
+		t.Fatal("guide work.declined does not close while returning a correlated disposition")
 	}
 }
 
