@@ -472,11 +472,11 @@
     const RESULT_KEYS = Object.freeze(["schema", "version", "record", "status", "finished_at", "record_count", "trace_digest", "gates"]);
     const FACT_FIELDS = Object.freeze([
       "action", "alpha", "artifact_count", "attempt_count", "authenticated", "batched_unattributed_count", "bypassed_hook", "byte_size",
-      "code", "consequence", "count", "duration_ms", "episode", "gate_id", "hook_cue", "invalid_result_count", "invalid_votes",
-      "margin_after", "margin_before", "no_vote", "no_votes", "occupied_claims", "open_unclaimed", "outcome", "payload_bytes", "phase",
-      "preference_after", "preference_before", "recolored", "replayed", "result", "role", "round",
-      "sample_size", "semantic_kind", "state", "status", "success_count", "target_count", "targets", "timed_out", "tool_error_count", "view_nonempty",
-      "turn_limit", "turns_used", "votes_a", "votes_b"
+      "code", "consequence", "count", "duration_ms", "episode", "gate_id", "has_current", "hook_cue", "invalid_result_count", "invalid_votes",
+      "margin_after", "margin_before", "no_vote", "no_votes", "occupied_claims", "open_total", "open_unclaimed", "outcome", "payload_bytes", "phase",
+      "preference_after", "preference_before", "recolored", "related_projected", "related_total", "replayed", "reply_required", "result", "role", "round",
+      "sample_size", "semantic_kind", "state", "status", "success_count", "target_count", "targets", "timed_out", "tool_error_count", "truncated",
+      "turn_limit", "turns_used", "view_nonempty", "votes_a", "votes_b"
     ]);
     const INTENT_DENIAL_CODES = Object.freeze([
       "invalid_argument", "content_required", "content_too_large", "artifact_invalid",
@@ -679,9 +679,12 @@
       optionalInteger(facts.margin_before, -1024, 1024, label + ".margin_before");
       optionalInteger(facts.no_votes, 0, 64, label + ".no_votes");
       optionalInteger(facts.occupied_claims, 0, 64, label + ".occupied_claims");
+      optionalInteger(facts.open_total, 0, 64, label + ".open_total");
       optionalInteger(facts.open_unclaimed, 0, 64, label + ".open_unclaimed");
       optionalInteger(facts.payload_bytes, 0, 32768, label + ".payload_bytes");
       optionalInteger(facts.round, 0, 1024, label + ".round");
+      optionalInteger(facts.related_projected, 0, 1, label + ".related_projected");
+      optionalInteger(facts.related_total, 0, 64, label + ".related_total");
       optionalInteger(facts.sample_size, 0, 64, label + ".sample_size");
       optionalInteger(facts.success_count, 0, 256, label + ".success_count");
       optionalInteger(facts.target_count, 0, 16, label + ".target_count");
@@ -708,7 +711,7 @@
       if (facts.target_count !== undefined && facts.target_count !== (facts.targets || []).length) {
         fail(label + ".target_count", "must equal targets length");
       }
-      ["authenticated", "bypassed_hook", "hook_cue", "no_vote", "recolored", "replayed", "timed_out", "view_nonempty"].forEach(key => optionalBoolean(facts[key], label + "." + key));
+      ["authenticated", "bypassed_hook", "has_current", "hook_cue", "no_vote", "recolored", "replayed", "reply_required", "timed_out", "truncated", "view_nonempty"].forEach(key => optionalBoolean(facts[key], label + "." + key));
       ["code", "episode", "gate_id", "role", "semantic_kind"].forEach(key => optionalString(facts[key], TOKEN, label + "." + key));
     }
 
@@ -751,6 +754,20 @@
         if (!Object.prototype.hasOwnProperty.call(object, field)) fail(path + "." + field, "is required for " + record.kind);
       });
       switch (record.kind) {
+        case "runtime.view.received":
+          required(record.facts, ["action", "has_current", "open_total", "related_projected",
+            "related_total", "truncated"], label + ".facts");
+          if (record.facts.action !== "current" ||
+              record.facts.related_total > record.facts.open_total ||
+              record.facts.related_projected > record.facts.related_total ||
+              record.facts.truncated !==
+                (record.facts.related_projected < record.facts.related_total) ||
+              record.facts.has_current !==
+                Object.prototype.hasOwnProperty.call(record.facts, "reply_required") ||
+              (record.facts.has_current && record.facts.open_total < 1)) {
+            fail(label, "does not describe one bounded Agent View structure");
+          }
+          break;
         case "runtime.domain.operation":
           required(record.facts, ["action", "attempt_count", "batched_unattributed_count",
             "invalid_result_count", "success_count", "tool_error_count"], label + ".facts");

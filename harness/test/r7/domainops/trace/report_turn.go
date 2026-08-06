@@ -8,6 +8,7 @@ type turnSummary struct {
 	BashCalls                int                     `json:"bash_calls"`
 	DelegateCalls            int                     `json:"delegate_calls"`
 	CurrentReads             int                     `json:"current_reads"`
+	View                     *agentViewSummary       `json:"view,omitempty"`
 	DomainOperations         domainOperationsSummary `json:"domain_operations"`
 	SubmitAttempts           int                     `json:"submit_attempts"`
 	IntentSubmits            int                     `json:"intent_submits"`
@@ -20,6 +21,18 @@ type turnSummary struct {
 	PostAcceptDenials        int                     `json:"post_accept_denials"`
 	PrivateBindingProbes     int                     `json:"private_binding_probes"`
 	AgentEnd                 bool                    `json:"agent_end"`
+}
+
+// agentViewSummary retains only the bounded structural shape needed to
+// explain one Runtime attention opportunity. Handles, identities, semantic
+// content, and private authority never enter the sanitized report.
+type agentViewSummary struct {
+	HasCurrent       bool  `json:"has_current"`
+	ReplyRequired    *bool `json:"reply_required,omitempty"`
+	OpenTotal        int   `json:"open_total"`
+	RelatedTotal     int   `json:"related_total"`
+	RelatedProjected int   `json:"related_projected"`
+	Truncated        bool  `json:"truncated"`
 }
 
 type acceptedEventSummary struct {

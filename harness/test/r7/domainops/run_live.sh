@@ -470,6 +470,13 @@ sanitize_turn() {
     def invocation_count($verb): [command | scan(invocation_pattern($verb))] | length;
     def invokes($verb):
       (invocation_count($verb) > 0);
+    def mentions_current:
+      (command | test(
+        "mnemon-harness[[:space:]]+agent[[:space:]]+current([[:space:]]|$)"));
+    def invokes_exact_current:
+      (command | test(
+        "^[[:space:]]*mnemon-harness[[:space:]]+agent" +
+        "[[:space:]]+current[[:space:]]+--json[[:space:]]*$"));
     def is_submit_start:
       .type == "tool_execution_start" and
       (.toolName == "mnemond_submit" or
@@ -490,6 +497,103 @@ sanitize_turn() {
       else empty end;
     def result_objects:
       [result_texts | split("\n")[] | fromjson? | select(type == "object")];
+    def exact_object($required; $optional):
+      . as $object |
+      ($object | type) == "object" and
+      all($required[]; . as $field | $object | has($field)) and
+      all(($object | keys_unsorted[]);
+        . as $field | (($required + $optional) | index($field)) != null);
+    def bounded_string($maximum):
+      type == "string" and utf8bytelength > 0 and utf8bytelength <= $maximum;
+    def bounded_payload:
+      type == "string" and (contains("\u0000") | not) and
+      (tojson | utf8bytelength) <= 4098;
+    def valid_view_artifact:
+      exact_object(["digest", "handle"]; []) and
+      (.digest | type == "string" and
+        test("^sha256:[0-9a-f]{64}$") and
+        . != "sha256:0000000000000000000000000000000000000000000000000000000000000000") and
+      (.handle | bounded_string(192));
+    def valid_view_semantic:
+      exact_object(["kind", "payload"]; []) and
+      (.kind | bounded_string(96)) and (.payload | bounded_payload);
+    def valid_view_current:
+      exact_object(["facts", "semantic"]; []) and
+      (.semantic | valid_view_semantic) and
+      (.facts | exact_object(["handle", "reply_required", "reply_to"];
+        ["artifacts", "reply_target"])) and
+      (.facts.handle | bounded_string(192)) and
+      (.facts.reply_to | bounded_string(192)) and
+      (.facts.reply_required | type == "boolean") and
+      (.facts.reply_required == (.facts | has("reply_target"))) and
+      (if .facts | has("reply_target") then
+        (.facts.reply_target | bounded_string(192)) else true end) and
+      ((.facts.artifacts // []) | type == "array" and length <= 8 and
+        all(.[]; valid_view_artifact));
+    def valid_view_related:
+      exact_object(["facts", "semantic"]; []) and
+      (.semantic | valid_view_semantic) and
+      (.facts | exact_object(["event", "relation"]; ["artifacts"])) and
+      (.facts.event | bounded_string(192)) and .facts.relation == "correlation" and
+      ((.facts.artifacts // []) | type == "array" and length <= 8 and
+        all(.[]; valid_view_artifact));
+    def valid_view_reference:
+      exact_object(["facts"]; []) and
+      (.facts | exact_object(["head", "key", "state", "terminal_outcomes"];
+        ["artifact"])) and
+      (.facts.head | bounded_string(192)) and (.facts.key | bounded_string(160)) and
+      (.facts.state == "active" or .facts.state == "retracted") and
+      (if .facts.state == "active" then
+        (.facts | has("artifact")) and (.facts.artifact | valid_view_artifact)
+       else (.facts | has("artifact") | not) end) and
+      (.facts.terminal_outcomes |
+        exact_object(["completed", "declined", "unresolved"]; []) and
+        all([.completed, .declined, .unresolved][];
+          type == "number" and floor == . and . >= 0));
+    def valid_view_intent:
+      exact_object(["artifacts", "consequence", "subject"];
+        ["reference", "successors"]) and
+      all([.artifacts, .consequence, .subject][]; bounded_string(192)) and
+      (if has("reference") then (.reference | bounded_string(192)) else true end) and
+      (if has("successors") then (.successors | bounded_string(192)) else true end);
+    def valid_agent_view:
+      exact_object(["allowed_intents", "outstanding", "schema", "version", "view"];
+        ["current", "provenance_handles", "references", "related_open", "targets"]) and
+      .schema == "mnemon.agent.view" and .version == 5 and
+      (.view | bounded_string(192)) and
+      (.outstanding |
+        exact_object(["open_total", "related_projected", "related_total", "truncated"];
+          []) and
+        all([.open_total, .related_projected, .related_total][];
+          type == "number" and floor == . and . >= 0) and
+        .open_total <= 64 and .related_total <= .open_total and
+        .related_projected <= 1 and .related_projected <= .related_total and
+        (.truncated | type == "boolean") and
+        .truncated == (.related_projected < .related_total)) and
+      (if has("current") then
+        (.current | valid_view_current) and .outstanding.open_total > 0
+       else true end) and
+      ((.related_open // []) | type == "array" and length <= 1 and
+        all(.[]; valid_view_related)) and
+      .outstanding.related_projected == ((.related_open // []) | length) and
+      ((.references // []) | type == "array" and length <= 8 and
+        all(.[]; valid_view_reference)) and
+      ((.targets // []) | type == "array" and length <= 64 and
+        all(.[]; bounded_string(192))) and
+      ((.provenance_handles // []) | type == "array" and length <= 128 and
+        all(.[]; bounded_string(192))) and
+      (.allowed_intents | type == "array" and length <= 8 and
+        all(.[]; valid_view_intent));
+    def view_summary:
+      . as $view |
+      {has_current:($view | has("current")),
+       open_total:$view.outstanding.open_total,
+       related_total:$view.outstanding.related_total,
+       related_projected:$view.outstanding.related_projected,
+       truncated:$view.outstanding.truncated} |
+      if .has_current then
+        . + {reply_required:$view.current.facts.reply_required}
+      else . end;
     def host_attention_disposition:
       .isError == true and
       ((.result | type) == "object") and
@@ -542,7 +646,15 @@ sanitize_turn() {
     ([$stream[] | select(.type == "message_end" and .message.role == "assistant")]) as
       $assistant_ends |
     ([$stream[] | select(.type == "tool_execution_start" and .toolName == "bash" and
-      invokes("current")) | .toolCallId] | unique) as $current_calls |
+      mentions_current) | .toolCallId] | unique) as $observed_current_calls |
+    ([$stream[] | select(.type == "tool_execution_start" and .toolName == "bash" and
+      invokes_exact_current) | .toolCallId] | unique) as $current_calls |
+    ([$stream[] | select(.type == "tool_execution_end" and
+      belongs($current_calls))]) as $current_ends |
+    ([$current_ends[] | select(.isError == false) |
+      ([result_objects[] | select(.schema? == "mnemon.agent.view")]) as $views |
+      select(($views | length) == 1 and ($views[0] | valid_agent_view)) |
+      $views[0]]) as $agent_views |
     ([$stream[] | select(is_submit_start)]) as $submit_starts |
     ([$submit_starts[].toolCallId] | unique) as $submit_calls |
     ([$stream[] | select(.type == "tool_execution_end" and
@@ -622,9 +734,7 @@ sanitize_turn() {
         select(.result.details.status == "completed")] | length),
       current_reads: ([$stream[] | select(
         .type == "tool_execution_end" and .toolName == "bash" and .isError == false and
-        belongs($current_calls) and
-        any(result_objects[]; .schema == "mnemon.agent.view" and .version == 5 and
-          (.view | type == "string" and length > 0)))] | length),
+        belongs($current_calls))] | length),
       submit_attempts: ($submit_outcomes | length),
       intent_submits: ([$submit_outcomes[] | .accepted + .rejected] | add // 0),
       accepted_receipts: ([$submit_outcomes[].accepted] | add // 0),
@@ -645,6 +755,9 @@ sanitize_turn() {
         (command | test("DEEPSEEK|API_KEY|printenv|auth\\.json|provider-key")))] | length),
       agent_end: any($stream[]; .type == "agent_end")
     }
+    | if ($agent_views | length) > 0 then
+        . + {view:($agent_views[0] | view_summary)}
+      else . end
     | select(
         .hook_cues >= 1 and
         ($assistant_ends | length) >= 1 and
@@ -662,6 +775,12 @@ sanitize_turn() {
           .accepted_receipts, .rejected_receipts, .submit_denials, .submit_invocation_failures,
           .post_accept_denials, .private_binding_probes] | all(. >= 0 and . <= 256)) and
         .delegate_calls <= 1 and
+        $observed_current_calls == $current_calls and
+        ($current_ends | length) == ($current_calls | length) and
+        ([$current_ends[].toolCallId] | unique | sort) == ($current_calls | sort) and
+        all($current_ends[]; .isError == true or .isError == false) and
+        ($agent_views | length) == ([ $current_ends[] | select(.isError == false) ] | length) and
+        ($agent_views | unique | length) <= 1 and
         ($delegate_ends | length) == ($delegate_attempts | length) and
         ([$delegate_ends[].toolCallId] | unique | sort) == ($delegate_attempts | sort) and
         all($delegate_ends[]; valid_delegate_result) and

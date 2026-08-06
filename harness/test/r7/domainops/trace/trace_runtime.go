@@ -42,8 +42,17 @@ func projectRuntimeFacts(turn turnSummary, capturedAt time.Time) []observer.Fact
 			observer.TruthObservation, observer.FactFields{HookCue: &value}))
 	}
 	if turn.CurrentReads > 0 {
+		fields := observer.FactFields{Action: "current",
+			HasCurrent:       boolPointer(turn.View.HasCurrent),
+			OpenTotal:        intPointer(turn.View.OpenTotal),
+			RelatedTotal:     intPointer(turn.View.RelatedTotal),
+			RelatedProjected: intPointer(turn.View.RelatedProjected),
+			Truncated:        boolPointer(turn.View.Truncated)}
+		if turn.View.ReplyRequired != nil {
+			fields.ReplyRequired = boolPointer(*turn.View.ReplyRequired)
+		}
 		facts = append(facts, runtimeFact(turn, capturedAt, "view", "runtime.view.received",
-			observer.TruthDerivedProjection, observer.FactFields{Action: "current"}))
+			observer.TruthDerivedProjection, fields))
 	}
 	facts = append(facts, projectDomainOperationFacts(turn, capturedAt)...)
 	if turn.DelegateCalls > 0 {
@@ -109,3 +118,5 @@ func runtimeFact(turn turnSummary, capturedAt time.Time, suffix, kind string,
 }
 
 func intPointer(value int) *int { return &value }
+
+func boolPointer(value bool) *bool { return &value }

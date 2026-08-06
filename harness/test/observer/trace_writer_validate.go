@@ -83,6 +83,7 @@ type kindEvidenceRule struct {
 
 var kindEvidenceRules = map[string]kindEvidenceRule{
 	"runtime.domain.operation": {"domain operation observation", validDomainOperationEvidence},
+	"runtime.view.received":    {"Agent View structural projection", validRuntimeViewEvidence},
 	"runtime.intent.denied":    {"Intent denial observation", validIntentDenialEvidence},
 	"r7.event.accepted":        {"accepted Event evidence", validAcceptedEventEvidence},
 	"r7.handling.resolved":     {"terminal Handling evidence", validResolvedHandlingEvidence},
@@ -94,6 +95,22 @@ var kindEvidenceRules = map[string]kindEvidenceRule{
 	"r8.vote.observed":         {"vote evidence", validVoteEvidence},
 	"r8.round.settled":         {"settled round evidence", validSettledRoundEvidence},
 	"r8.observation.produced":  {"preference observation", validPreferenceObservation},
+}
+
+func validRuntimeViewEvidence(fact Fact) bool {
+	fields := fact.Fields
+	if fields.Action != "current" ||
+		fields.HasCurrent == nil || fields.OpenTotal == nil || fields.RelatedTotal == nil ||
+		fields.RelatedProjected == nil || fields.Truncated == nil ||
+		*fields.OpenTotal < 0 || *fields.OpenTotal > 64 ||
+		*fields.RelatedTotal < 0 || *fields.RelatedTotal > *fields.OpenTotal ||
+		*fields.RelatedProjected < 0 || *fields.RelatedProjected > 1 ||
+		*fields.RelatedProjected > *fields.RelatedTotal ||
+		*fields.Truncated != (*fields.RelatedProjected < *fields.RelatedTotal) ||
+		*fields.HasCurrent != (fields.ReplyRequired != nil) {
+		return false
+	}
+	return !*fields.HasCurrent || *fields.OpenTotal > 0
 }
 
 func validDomainOperationEvidence(fact Fact) bool {
@@ -268,8 +285,11 @@ func validateFactFields(fields FactFields, sequence int) error {
 		{"margin_before", fields.MarginBefore, -1024, 1024},
 		{"no_votes", fields.NoVotes, 0, 64},
 		{"occupied_claims", fields.OccupiedClaims, 0, 64},
+		{"open_total", fields.OpenTotal, 0, 64},
 		{"open_unclaimed", fields.OpenUnclaimed, 0, 64},
 		{"round", fields.Round, 0, 1024},
+		{"related_projected", fields.RelatedProjected, 0, 1},
+		{"related_total", fields.RelatedTotal, 0, 64},
 		{"payload_bytes", fields.PayloadBytes, 0, 32 << 10},
 		{"sample_size", fields.SampleSize, 0, 64}, {"votes_a", fields.VotesA, 0, 64},
 		{"success_count", fields.SuccessCount, 0, 256},

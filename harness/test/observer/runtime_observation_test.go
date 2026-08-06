@@ -20,6 +20,9 @@ func factEvidenceInput(fact factRecord) Fact {
 		VotesA: fact.Facts.VotesA, VotesB: fact.Facts.VotesB,
 		MarginBefore: fact.Facts.MarginBefore, MarginAfter: fact.Facts.MarginAfter,
 		Authenticated: fact.Facts.Authenticated, Recolored: fact.Facts.Recolored,
+		HasCurrent: fact.Facts.HasCurrent, ReplyRequired: fact.Facts.ReplyRequired,
+		OpenTotal: fact.Facts.OpenTotal, RelatedTotal: fact.Facts.RelatedTotal,
+		RelatedProjected: fact.Facts.RelatedProjected, Truncated: fact.Facts.Truncated,
 	}}
 }
 
@@ -51,6 +54,28 @@ func TestRuntimeObservationEvidenceIsClosed(t *testing.T) {
 	denial.Fields.Code = "provider-prose"
 	if err := validateKindEvidence(denial, 2); err == nil {
 		t.Fatal("Intent denial accepted an open diagnostic class")
+	}
+}
+
+func TestRuntimeViewEvidenceRequiresConsistentStructuralMetadata(t *testing.T) {
+	hasCurrent, replyRequired, truncated := true, true, true
+	openTotal, relatedTotal, relatedProjected := 3, 2, 1
+	view := Fact{Kind: "runtime.view.received", Fields: FactFields{
+		Action: "current", HasCurrent: &hasCurrent, ReplyRequired: &replyRequired,
+		OpenTotal: &openTotal, RelatedTotal: &relatedTotal,
+		RelatedProjected: &relatedProjected, Truncated: &truncated,
+	}}
+	if err := validateKindEvidence(view, 1); err != nil {
+		t.Fatalf("valid Agent View structure: %v", err)
+	}
+	view.Fields.ReplyRequired = nil
+	if err := validateKindEvidence(view, 1); err == nil {
+		t.Fatal("current Agent View omitted reply-required structure")
+	}
+	view.Fields.ReplyRequired = &replyRequired
+	*view.Fields.RelatedProjected = 2
+	if err := validateKindEvidence(view, 1); err == nil {
+		t.Fatal("Agent View exceeded the related projection bound")
 	}
 }
 

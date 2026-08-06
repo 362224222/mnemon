@@ -106,6 +106,7 @@ type FactFields struct {
 	DurationMillis   *int64   `json:"duration_ms,omitempty"`
 	Episode          string   `json:"episode,omitempty"`
 	GateID           string   `json:"gate_id,omitempty"`
+	HasCurrent       *bool    `json:"has_current,omitempty"`
 	HookCue          *bool    `json:"hook_cue,omitempty"`
 	InvalidVotes     *int     `json:"invalid_votes,omitempty"`
 	InvalidCount     *int     `json:"invalid_result_count,omitempty"`
@@ -114,6 +115,7 @@ type FactFields struct {
 	NoVote           *bool    `json:"no_vote,omitempty"`
 	NoVotes          *int     `json:"no_votes,omitempty"`
 	OccupiedClaims   *int     `json:"occupied_claims,omitempty"`
+	OpenTotal        *int     `json:"open_total,omitempty"`
 	OpenUnclaimed    *int     `json:"open_unclaimed,omitempty"`
 	Outcome          string   `json:"outcome,omitempty"`
 	PayloadBytes     *int     `json:"payload_bytes,omitempty"`
@@ -122,7 +124,10 @@ type FactFields struct {
 	PreferenceBefore string   `json:"preference_before,omitempty"`
 	Recolored        *bool    `json:"recolored,omitempty"`
 	Replayed         *bool    `json:"replayed,omitempty"`
+	ReplyRequired    *bool    `json:"reply_required,omitempty"`
 	Result           string   `json:"result,omitempty"`
+	RelatedProjected *int     `json:"related_projected,omitempty"`
+	RelatedTotal     *int     `json:"related_total,omitempty"`
 	Role             string   `json:"role,omitempty"`
 	Round            *int     `json:"round,omitempty"`
 	SampleSize       *int     `json:"sample_size,omitempty"`
@@ -134,6 +139,7 @@ type FactFields struct {
 	ToolErrorCount   *int     `json:"tool_error_count,omitempty"`
 	Targets          []string `json:"targets,omitempty"`
 	TimedOut         *bool    `json:"timed_out,omitempty"`
+	Truncated        *bool    `json:"truncated,omitempty"`
 	TurnLimit        *int     `json:"turn_limit,omitempty"`
 	TurnsUsed        *int     `json:"turns_used,omitempty"`
 	ViewNonempty     *bool    `json:"view_nonempty,omitempty"`

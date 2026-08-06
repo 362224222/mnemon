@@ -80,6 +80,9 @@
         "gate_id": {
           "$ref": "#/$defs/token"
         },
+        "has_current": {
+          "type": "boolean"
+        },
         "hook_cue": {
           "type": "boolean"
         },
@@ -112,6 +115,11 @@
           "type": "integer"
         },
         "occupied_claims": {
+          "maximum": 64,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "open_total": {
           "maximum": 64,
           "minimum": 0,
           "type": "integer"
@@ -160,6 +168,19 @@
         },
         "replayed": {
           "type": "boolean"
+        },
+        "reply_required": {
+          "type": "boolean"
+        },
+        "related_projected": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "related_total": {
+          "maximum": 64,
+          "minimum": 0,
+          "type": "integer"
         },
         "result": {
           "enum": [
@@ -226,6 +247,9 @@
           "type": "array"
         },
         "timed_out": {
+          "type": "boolean"
+        },
+        "truncated": {
           "type": "boolean"
         },
         "turn_limit": {
@@ -846,6 +870,75 @@
                       "invalid_result_count",
                       "success_count",
                       "tool_error_count"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "runtime.view.received"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "facts": {
+                    "allOf": [
+                      {
+                        "if": {
+                          "properties": {
+                            "has_current": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "has_current"
+                          ]
+                        },
+                        "then": {
+                          "required": [
+                            "reply_required"
+                          ]
+                        }
+                      },
+                      {
+                        "if": {
+                          "properties": {
+                            "has_current": {
+                              "const": false
+                            }
+                          },
+                          "required": [
+                            "has_current"
+                          ]
+                        },
+                        "then": {
+                          "not": {
+                            "required": [
+                              "reply_required"
+                            ]
+                          }
+                        }
+                      }
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "current"
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "has_current",
+                      "open_total",
+                      "related_projected",
+                      "related_total",
+                      "truncated"
                     ]
                   }
                 }

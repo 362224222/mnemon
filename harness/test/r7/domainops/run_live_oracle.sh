@@ -411,6 +411,34 @@ write_sanitizer_stream() {
   jq -nc '{type:"agent_end"}' >>"$destination"
 }
 
+write_current_stream() {
+  local destination=$1
+  shift
+  write_current_stream_command "$destination" \
+    "mnemon-harness agent current --json" "$@"
+}
+
+write_current_stream_command() {
+  local destination=$1 command=$2
+  shift 2
+  local index=0 view
+  jq -nc '{type:"message_start",message:{role:"custom",customType:"mnemond"}}' \
+    >"$destination"
+  for view in "$@"; do
+    index=$((index + 1))
+    jq -nc --arg id "current-$index" --arg command "$command" \
+      '{type:"tool_execution_start",toolCallId:$id,toolName:"bash",
+        args:{command:$command}}' >>"$destination"
+    jq -nc --arg id "current-$index" --arg text "$view" \
+      '{type:"tool_execution_end",toolCallId:$id,toolName:"bash",isError:false,
+        result:{content:[{type:"text",text:$text}],details:{output:$text}}}' \
+      >>"$destination"
+  done
+  jq -nc '{type:"message_end",message:{role:"assistant",stopReason:"stop"}}' \
+    >>"$destination"
+  jq -nc '{type:"agent_end"}' >>"$destination"
+}
+
 write_domain_observation_stream() {
   local destination=$1
   jq -nc '{type:"message_start",message:{role:"custom",customType:"mnemond"}}' \
@@ -543,6 +571,105 @@ write_sequential_submit_stream() {
 write_sanitizer_stream stop "$scratch/stop.jsonl"
 sanitize_turn lead oracle "$scratch/stop.jsonl" "$scratch/stop.json"
 test "$(jq '.delegate_calls' "$scratch/stop.json")" = 0
+root_view='{"schema":"mnemon.agent.view","version":5,"view":"view:root-secret","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}'
+current_view='{"schema":"mnemon.agent.view","version":5,"view":"view:current-secret","current":{"facts":{"handle":"handling:secret","reply_to":"event:secret","reply_required":true,"reply_target":"peer-secret"},"semantic":{"kind":"secret.kind","payload":"secret payload"}},"related_open":[{"facts":{"event":"event:related-secret","relation":"correlation"},"semantic":{"kind":"secret.related","payload":"related secret"}}],"outstanding":{"open_total":3,"related_total":2,"related_projected":1,"truncated":true},"allowed_intents":[]}'
+full_view=$(jq -nc --arg digest \
+  'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' '
+  {
+    schema:"mnemon.agent.view",version:5,view:"view:full-secret",
+    current:{
+      facts:{handle:"handling:full-secret",reply_to:"event:full-secret",
+        reply_required:false,artifacts:[{digest:$digest,handle:"artifact:current-secret"}]},
+      semantic:{kind:"secret.current",payload:"current secret"}
+    },
+    related_open:[{
+      facts:{event:"event:related-full-secret",relation:"correlation",
+        artifacts:[{digest:$digest,handle:"artifact:related-secret"}]},
+      semantic:{kind:"secret.related",payload:"related secret"}
+    }],
+    outstanding:{open_total:2,related_total:1,related_projected:1,truncated:false},
+    references:[
+      {facts:{key:"playbook-secret",head:"event:active-secret",state:"active",
+        artifact:{digest:$digest,handle:"artifact:reference-secret"},
+        terminal_outcomes:{completed:1,declined:2,unresolved:3}}},
+      {facts:{key:"retired-secret",head:"event:retracted-secret",state:"retracted",
+        terminal_outcomes:{completed:0,declined:0,unresolved:0}}}
+    ],
+    targets:["peer-secret"],
+    allowed_intents:[
+      {artifacts:"zero_or_one",consequence:"handling.advance",subject:"current"},
+      {artifacts:"exactly_one",consequence:"reference.supersede",subject:"none",
+        reference:"offered_head",successors:"none"}
+    ],
+    provenance_handles:["event:full-secret","event:related-full-secret"]
+  }')
+write_current_stream "$scratch/root-view.jsonl" "$root_view"
+sanitize_turn lead oracle-root-view "$scratch/root-view.jsonl" "$scratch/root-view.json"
+jq -e '
+  .current_reads == 1 and .view == {
+    has_current:false,open_total:0,related_total:0,related_projected:0,truncated:false
+  }
+' "$scratch/root-view.json" >/dev/null
+write_current_stream "$scratch/full-view.jsonl" "$full_view"
+sanitize_turn lead oracle-full-view "$scratch/full-view.jsonl" "$scratch/full-view.json"
+jq -e '
+  .current_reads == 1 and .view == {
+    has_current:true,reply_required:false,open_total:2,related_total:1,
+    related_projected:1,truncated:false
+  }
+' "$scratch/full-view.json" >/dev/null
+forged_command='mnemon-harness agent current --json >/dev/null; printf forged'
+write_current_stream_command "$scratch/forged-view.jsonl" "$forged_command" "$root_view"
+if sanitize_turn lead oracle-forged-view "$scratch/forged-view.jsonl" \
+    "$scratch/forged-view.json"; then
+  printf 'runtime oracle: a non-exact current invocation was silently ignored\n' >&2
+  exit 1
+fi
+write_current_stream_command "$scratch/path-view.jsonl" \
+  "/tmp/mnemon-harness agent current --json" "$root_view"
+if sanitize_turn lead oracle-path-view "$scratch/path-view.jsonl" \
+    "$scratch/path-view.json"; then
+  printf 'runtime oracle: an unfrozen current binary path was trusted\n' >&2
+  exit 1
+fi
+for wrapped_current in \
+    'command mnemon-harness agent current --json' \
+    '(mnemon-harness agent current --json)'; do
+  write_current_stream_command "$scratch/wrapped-view.jsonl" \
+    "$wrapped_current" "$root_view"
+  if sanitize_turn lead oracle-wrapped-view "$scratch/wrapped-view.jsonl" \
+      "$scratch/wrapped-view.json"; then
+    printf 'runtime oracle: a wrapped current invocation was silently ignored\n' >&2
+    exit 1
+  fi
+done
+write_current_stream "$scratch/current-view.jsonl" "$current_view" "$current_view"
+sanitize_turn lead oracle-current-view "$scratch/current-view.jsonl" \
+  "$scratch/current-view.json"
+jq -e '
+  .current_reads == 2 and .view == {
+    has_current:true,reply_required:true,open_total:3,related_total:2,
+    related_projected:1,truncated:true
+  }
+' "$scratch/current-view.json" >/dev/null
+if grep -E 'secret|handling:|event:|peer-' "$scratch/current-view.json" >/dev/null; then
+  printf 'runtime oracle: sanitized Agent View retained semantic or authority content\n' >&2
+  exit 1
+fi
+inconsistent_view=$(printf '%s' "$current_view" | jq -c '.outstanding.open_total = 4')
+write_current_stream "$scratch/inconsistent-view.jsonl" "$current_view" "$inconsistent_view"
+if sanitize_turn lead oracle-inconsistent-view "$scratch/inconsistent-view.jsonl" \
+    "$scratch/inconsistent-view.json"; then
+  printf 'runtime oracle: inconsistent Agent Views were silently combined\n' >&2
+  exit 1
+fi
+malformed_view=$(printf '%s' "$root_view" | jq -c '.private_authority = "secret"')
+write_current_stream "$scratch/malformed-view.jsonl" "$malformed_view"
+if sanitize_turn lead oracle-malformed-view "$scratch/malformed-view.jsonl" \
+    "$scratch/malformed-view.json"; then
+  printf 'runtime oracle: a non-exact Agent View was accepted\n' >&2
+  exit 1
+fi
 write_domain_observation_stream "$scratch/domain-observations.jsonl"
 sanitize_turn lead oracle-domain-observations "$scratch/domain-observations.jsonl" \
   "$scratch/domain-observations.json"

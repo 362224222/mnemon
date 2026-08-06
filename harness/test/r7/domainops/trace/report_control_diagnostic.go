@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
+	"github.com/mnemon-dev/mnemon/harness/internal/authority"
 )
 
 type controlDenial struct {
@@ -71,6 +72,9 @@ func validateRuntimeObservationConsistency(turn turnSummary) error {
 		turn.SubmitAttempts != turn.IntentSubmits+turn.SubmitDenials+turn.SubmitInvocationFailures {
 		return errors.New("sanitized report contains inconsistent Runtime observations")
 	}
+	if !validViewSummary(turn.View, turn.CurrentReads) {
+		return errors.New("sanitized report contains inconsistent Agent View metadata")
+	}
 	for _, event := range turn.AcceptedEvents {
 		if _, err := agency.NewEventID(event.ID); err != nil {
 			return errors.New("sanitized report contains an invalid accepted Event ID")
@@ -80,6 +84,21 @@ func validateRuntimeObservationConsistency(turn turnSummary) error {
 		}
 	}
 	return nil
+}
+
+func validViewSummary(view *agentViewSummary, reads int) bool {
+	if reads == 0 {
+		return view == nil
+	}
+	if view == nil || view.OpenTotal < 0 || view.OpenTotal > authority.MaxOpenHandlingsPerPrincipal ||
+		view.RelatedTotal < 0 || view.RelatedTotal > view.OpenTotal ||
+		view.RelatedProjected < 0 || view.RelatedProjected > agency.MaxAgentViewRelatedOpen ||
+		view.RelatedProjected > view.RelatedTotal ||
+		view.Truncated != (view.RelatedProjected < view.RelatedTotal) ||
+		view.HasCurrent != (view.ReplyRequired != nil) {
+		return false
+	}
+	return !view.HasCurrent || view.OpenTotal > 0
 }
 
 func domainOperationClosed(operation domainOperationSummary) bool {

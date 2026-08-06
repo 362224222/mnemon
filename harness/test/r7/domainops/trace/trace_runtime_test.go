@@ -17,14 +17,20 @@ type projectedRuntimeFact struct {
 	Kind   string   `json:"kind"`
 	Causes []string `json:"causes"`
 	Facts  struct {
-		Action         string `json:"action"`
-		Code           string `json:"code"`
-		Count          *int   `json:"count"`
-		AttemptCount   *int   `json:"attempt_count"`
-		SuccessCount   *int   `json:"success_count"`
-		ToolErrorCount *int   `json:"tool_error_count"`
-		InvalidCount   *int   `json:"invalid_result_count"`
-		BatchedCount   *int   `json:"batched_unattributed_count"`
+		Action           string `json:"action"`
+		Code             string `json:"code"`
+		Count            *int   `json:"count"`
+		AttemptCount     *int   `json:"attempt_count"`
+		SuccessCount     *int   `json:"success_count"`
+		ToolErrorCount   *int   `json:"tool_error_count"`
+		InvalidCount     *int   `json:"invalid_result_count"`
+		BatchedCount     *int   `json:"batched_unattributed_count"`
+		HasCurrent       *bool  `json:"has_current"`
+		ReplyRequired    *bool  `json:"reply_required"`
+		OpenTotal        *int   `json:"open_total"`
+		RelatedTotal     *int   `json:"related_total"`
+		RelatedProjected *int   `json:"related_projected"`
+		Truncated        *bool  `json:"truncated"`
 	} `json:"facts"`
 }
 
@@ -48,7 +54,10 @@ func projectTestRuntime(t *testing.T) string {
 			Read:     domainOperationSummary{Attempts: 2, Successes: 2},
 			Mutation: domainOperationSummary{Attempts: 1, ToolErrors: 1},
 		},
-		DelegateCalls: 1, CurrentReads: 1, SubmitAttempts: 2, IntentSubmits: 1,
+		DelegateCalls: 1, CurrentReads: 1, View: &agentViewSummary{
+			HasCurrent: true, ReplyRequired: boolPointer(true), OpenTotal: 3,
+			RelatedTotal: 2, RelatedProjected: 1, Truncated: true,
+		}, SubmitAttempts: 2, IntentSubmits: 1,
 		SubmitDenials: 1, SubmitControlDenials: []controlDenial{{
 			Code: "authentication_failed", Count: 1,
 		}},
@@ -57,6 +66,19 @@ func projectTestRuntime(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return output.String()
+}
+
+func TestRuntimeProjectionIncludesAgentViewStructure(t *testing.T) {
+	facts := decodeProjectedRuntimeFacts(t, projectTestRuntime(t))
+	view, found := findProjectedRuntimeFact(facts, "runtime.view.received", "current")
+	if !found || view.Facts.HasCurrent == nil || !*view.Facts.HasCurrent ||
+		view.Facts.ReplyRequired == nil || !*view.Facts.ReplyRequired ||
+		view.Facts.OpenTotal == nil || *view.Facts.OpenTotal != 3 ||
+		view.Facts.RelatedTotal == nil || *view.Facts.RelatedTotal != 2 ||
+		view.Facts.RelatedProjected == nil || *view.Facts.RelatedProjected != 1 ||
+		view.Facts.Truncated == nil || !*view.Facts.Truncated {
+		t.Fatalf("Agent View structural projection = %+v", view.Facts)
+	}
 }
 
 func decodeProjectedRuntimeFacts(t *testing.T, output string) []projectedRuntimeFact {
@@ -169,6 +191,18 @@ func TestTurnSummaryFailsClosedOnUnsafeObservationCounts(t *testing.T) {
 				{Code: "context_required", Count: 1},
 				{Code: "action_not_allowed", Count: 1},
 			}
+		}},
+		{"view without read", func(turn *turnSummary) {
+			turn.View = &agentViewSummary{}
+		}},
+		{"read without view", func(turn *turnSummary) {
+			turn.CurrentReads = 1
+			turn.BashCalls = 3
+		}},
+		{"current view without reply structure", func(turn *turnSummary) {
+			turn.CurrentReads = 1
+			turn.BashCalls = 3
+			turn.View = &agentViewSummary{HasCurrent: true, OpenTotal: 1}
 		}},
 	}
 	for _, test := range tests {
