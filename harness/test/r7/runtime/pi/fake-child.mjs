@@ -22,6 +22,10 @@ for (const required of [
 ]) {
 	if (!process.argv.includes(required)) process.exit(35);
 }
+if (mode === "require-high") {
+	const thinking = process.argv.indexOf("--thinking");
+	if (thinking < 0 || process.argv[thinking + 1] !== "high") process.exit(36);
+}
 
 if (mode === "hang") {
 	setInterval(() => {}, 10_000);

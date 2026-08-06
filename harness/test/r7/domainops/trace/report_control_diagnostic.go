@@ -61,7 +61,7 @@ func validateTurnBounds(turn turnSummary) error {
 
 func validateRuntimeObservationConsistency(turn turnSummary) error {
 	if turn.PrivateBindingProbes != 0 || turn.DelegateCalls > 1 ||
-		turn.CurrentReads > turn.BashCalls || turn.AcceptedReceipts > 1 ||
+		turn.AcceptedReceipts > 1 ||
 		len(turn.AcceptedEvents) > 1 ||
 		!domainOperationClosed(turn.DomainOperations.Read) ||
 		!domainOperationClosed(turn.DomainOperations.Probe) ||
@@ -95,7 +95,8 @@ func validViewSummary(view *agentViewSummary, reads int) bool {
 		view.RelatedProjected < 0 || view.RelatedProjected > agency.MaxAgentViewRelated ||
 		view.RelatedProjected > view.RelatedTotal ||
 		view.Truncated != (view.RelatedProjected < view.RelatedTotal) ||
-		view.HasCurrent != (view.ReplyRequired != nil) {
+		view.HasCurrent != (view.ReplyRequired != nil) ||
+		view.HasCurrent != (view.ReplyPending != nil) {
 		return false
 	}
 	return !view.HasCurrent || view.OpenTotal > 0

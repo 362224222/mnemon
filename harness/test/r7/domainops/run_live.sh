@@ -23,26 +23,24 @@ mission_file="$case_root/mission.md"
 
 pi_version=0.83.0
 pi_model=${DOMAIN_OPS_PI_MODEL:-deepseek-v4-flash}
+pi_thinking=${DOMAIN_OPS_PI_THINKING:-high}
 turn_seconds=${DOMAIN_OPS_TURN_SECONDS:-150}
 persisted_evidence_max_bytes=$((8 * 1024 * 1024))
 persisted_evidence_max_blocks=$((persisted_evidence_max_bytes / 1024))
 peer_quiescence_seconds=30
 open_attention_turn_limit=16
-agent_probe_per_turn_limit=1
-monitor_probe_limit=69
+monitor_probe_limit=128
 monitor_probe_charge_limit=4
-gateway_history_limit=128
+gateway_history_limit=192
 scenario_episode_count=2
 baseline_load_count=4
 recovery_load_count=6
 stability_load_count=6
-max_agent_probe_count=$((scenario_episode_count * (open_attention_turn_limit + 1) *
-  agent_probe_per_turn_limit + agent_probe_per_turn_limit))
-max_goal_probe_count=$((scenario_episode_count * (open_attention_turn_limit + 1)))
 scenario_customer_receipt_limit=$((scenario_episode_count *
   (baseline_load_count + recovery_load_count + stability_load_count)))
 synthetic_charge_limit=$((monitor_probe_limit * monitor_probe_charge_limit))
-domain_control_max_kib=64
+domain_request_max_kib=32
+domain_response_max_kib=128
 attention_exhausted_reason='Attention budget exhausted. This tool did not run. Only mnemond_submit may remain.'
 current_failed_reason='Current unavailable.'
 report_path=${DOMAIN_OPS_REPORT:-$repository_root/.testdata/r7-domain-ops-live/last-report.json}
@@ -155,6 +153,10 @@ require_prerequisites() {
   case "$pi_model" in
     ''|*[!a-zA-Z0-9._-]*) fail 'DOMAIN_OPS_PI_MODEL is invalid' ;;
   esac
+  case "$pi_thinking" in
+    off|minimal|low|medium|high|xhigh|max) ;;
+    *) fail 'DOMAIN_OPS_PI_THINKING is invalid' ;;
+  esac
   command -v docker >/dev/null 2>&1 || fail 'docker is required'
   command -v jq >/dev/null 2>&1 || fail 'jq is required'
   command -v sqlite3 >/dev/null 2>&1 ||
@@ -164,8 +166,6 @@ require_prerequisites() {
   test -f "$compose_file" || fail 'domain-ops compose fixture is missing'
   test -f "$runner_dir/Dockerfile" || fail 'domain-ops Dockerfile is missing'
   test -s "$mission_file" || fail 'domain-ops mission fixture is missing or empty'
-  test "$monitor_probe_limit" -ge $((max_agent_probe_count + max_goal_probe_count)) ||
-    fail 'monitor probe bound does not cover all Agent and goal opportunities'
   test "$gateway_history_limit" -ge \
     $((monitor_probe_limit + scenario_customer_receipt_limit)) ||
     fail 'gateway history cannot retain the bounded scenario and probe envelope'
@@ -414,13 +414,14 @@ pi_process() {
       umask 077
       pid_file=$1
       model=$2
+      thinking=$3
       # BusyBox setsid forks and returns immediately when invoked as the
       # docker-exec process-group leader. Starting it as a background child of
       # this non-interactive wrapper lets it become the session leader in
       # place, while the wrapper explicitly owns and joins its lifetime.
       setsid pi --mode json --print --no-session --approve --no-prompt-templates --no-themes \
         --extension /opt/mnemon/pi-delegate/delegate.ts \
-        --provider deepseek --model "$model" --thinking off \
+        --provider deepseek --model "$model" --thinking "$thinking" \
         --tools bash,delegate,mnemond_current,mnemond_submit \
         @/workspace/.mnemon/live/turn-prompt.md &
       child=$!
@@ -428,7 +429,7 @@ pi_process() {
       if wait "$child"; then status=0; else status=$?; fi
       rm -f "$pid_file"
       exit "$status"
-    ' pi-turn-wrapper "$pid_file" "$pi_model"
+    ' pi-turn-wrapper "$pid_file" "$pi_model" "$pi_thinking"
 }
 
 bounded_pi_process() {
@@ -482,7 +483,6 @@ sanitize_turn() {
   jq -s -e --arg role "$role" --arg turn "$tag" \
     --arg attention_exhausted "$attention_exhausted_reason" \
     --arg current_failed "$current_failed_reason" \
-    --argjson agent_probe_per_turn "$agent_probe_per_turn_limit" \
     --arg captured_at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" '
     def command: (.args.command // "");
     def invocation_pattern($verb):
@@ -541,11 +541,12 @@ sanitize_turn() {
     def valid_view_current:
       exact_object(["facts", "semantic"]; []) and
       (.semantic | valid_view_semantic) and
-      (.facts | exact_object(["handle", "reply_required", "reply_to"];
+      (.facts | exact_object(["handle", "reply_observation_pending", "reply_required", "reply_to"];
         ["artifacts", "reply_target"])) and
       (.facts.handle | bounded_string(192)) and
       (.facts.reply_to | bounded_string(192)) and
       (.facts.reply_required | type == "boolean") and
+      (.facts.reply_observation_pending | type == "boolean") and
       (.facts.reply_required == (.facts | has("reply_target"))) and
       (if .facts | has("reply_target") then
         (.facts.reply_target | bounded_string(192)) else true end) and
@@ -586,7 +587,7 @@ sanitize_turn() {
     def valid_agent_view:
       exact_object(["allowed_intents", "outstanding", "schema", "version", "view"];
         ["current", "provenance_handles", "references", "related", "targets"]) and
-      .schema == "mnemon.agent.view" and .version == 6 and
+      .schema == "mnemon.agent.view" and .version == 7 and
       (.view | bounded_string(192)) and
       (.outstanding |
         exact_object(["open_total", "related_projected", "related_total", "truncated"];
@@ -619,7 +620,8 @@ sanitize_turn() {
        related_projected:$view.outstanding.related_projected,
        truncated:$view.outstanding.truncated} |
       if .has_current then
-        . + {reply_required:$view.current.facts.reply_required}
+        . + {reply_required:$view.current.facts.reply_required,
+             reply_observation_pending:$view.current.facts.reply_observation_pending}
       else . end;
     def host_attention_disposition:
       .isError == true and
@@ -954,7 +956,6 @@ sanitize_turn() {
           all(. >= 0 and . <= 256)) and
         all(.domain_operations[];
           (.successes + .tool_errors + .invalid_results + .batched_unattributed) == .attempts) and
-        .domain_operations.probe.attempts <= $agent_probe_per_turn and
         ([.hook_cues, .bash_calls, .delegate_calls, .current_reads, .submit_attempts, .intent_submits,
           .accepted_receipts, .rejected_receipts, .submit_denials, .submit_invocation_failures,
           .post_accept_denials, .private_binding_probes] | all(. >= 0 and . <= 256)) and
@@ -1074,6 +1075,13 @@ summarize_partial_turn() {
       (command | test(
         "^[[:space:]]*mnemon-harness[[:space:]]+agent" +
         "[[:space:]]+current[[:space:]]+--json[[:space:]]*$"));
+    def domain_invocation_pattern($verb):
+      (("(^|[|;&\n])[[:space:]]*([^[:space:];|&]*/)?domainctl" +
+        "(?:[[:space:]]+--?(?:role|endpoint|timeout)" +
+        "(?:=[^[:space:];|&]+|[[:space:]]+[^[:space:];|&]+))*" +
+        "[[:space:]]+" + $verb + "([[:space:];|&]|$)"));
+    def domain_invocation_count($verb):
+      [command | scan(domain_invocation_pattern($verb))] | length;
     def is_submit_start:
       .type == "tool_execution_start" and
       (.toolName == "mnemond_submit" or
@@ -1204,6 +1212,14 @@ summarize_partial_turn() {
       tool_errors:([.[] | select(.type == "tool_execution_end" and .isError == true)] | length),
       domain_calls:([.[] | select(.type == "tool_execution_start" and
         .toolName == "bash" and (command | contains("domainctl")))] | length),
+      domain_invocations:{
+        read:([.[] | select(.type == "tool_execution_start" and .toolName == "bash") |
+          domain_invocation_count("status") + domain_invocation_count("read")] | add // 0),
+        probe:([.[] | select(.type == "tool_execution_start" and .toolName == "bash") |
+          domain_invocation_count("probe")] | add // 0),
+        mutation:([.[] | select(.type == "tool_execution_start" and .toolName == "bash") |
+          domain_invocation_count("action")] | add // 0)
+      },
       delegate_attempts:([.[] | select(.type == "tool_execution_start" and
         .toolName == "delegate")] | length),
       delegate_results:([.[] | select(.type == "tool_execution_end" and
@@ -1233,8 +1249,8 @@ summarize_partial_turn() {
         untrusted_shell_explorations:(if ($native_current_starts | length) > 0 then
           ($observed_current_starts | length) else 0 end),
         view_objects:($current_view_objects | length),
-        v6_view_objects:([$current_view_objects[] | select(
-          .schema == "mnemon.agent.view" and .version == 6)] | length),
+        v7_view_objects:([$current_view_objects[] | select(
+          .schema == "mnemon.agent.view" and .version == 7)] | length),
         unique_views:($current_view_objects | unique | length),
         one_invocation_each:all($observed_current_starts[];
           invocation_count("current") == 1)
@@ -2084,12 +2100,19 @@ capture_evolution_boundary() {
   done
   rm -rf -- "$runtime_root/runtime-restart-state"
   mv "$staging" "$runtime_root/runtime-restart-state"
+  # Freeze the authority evidence before any restart path reads it. Runtime
+  # restoration uses a disposable copy and cannot mutate this boundary.
+  chmod -R a-w "$runtime_root/runtime-restart-state"
   jq -s '{nodes:.,active_head_count:([.[].active_heads | length] | add)}' \
     "$runtime_root/evolution-boundary"/*.json >"$runtime_root/evolution-boundary.json"
 }
 
 restart_agent_runtimes() {
-  local role container snapshot state_dir=/workspace/.mnemon/harness/node
+  local role container snapshot restore
+  local restore_root="$runtime_root/runtime-restore-state"
+  local state_dir=/workspace/.mnemon/harness/node
+  rm -rf -- "$restore_root"
+  mkdir -p "$restore_root"
   for role in $roles; do
     container=$(container_for "$role")
     docker stop --time 5 "$container" >/dev/null
@@ -2100,13 +2123,17 @@ restart_agent_runtimes() {
   for role in $roles; do
     snapshot="$runtime_root/runtime-restart-state/$role"
     test -s "$snapshot/agency.db" || fail "$role restart snapshot lacks authority"
-    rm -f -- "$snapshot/control.sock"
+    restore="$restore_root/$role"
+    mkdir -p "$restore"
+    cp -R "$snapshot/." "$restore"
+    chmod -R u+w "$restore"
+    rm -f -- "$restore/control.sock"
     start_agent_container "$role"
     container=$(container_for "$role")
-    docker exec -u 0 "$container" sh -c \
-      'mkdir -p /workspace/.mnemon/harness/node && chown -R 10001:10001 /workspace/.mnemon'
-    docker cp "$snapshot/." "$container:$state_dir" >/dev/null
-    docker exec -u 0 "$container" chown -R 10001:10001 /workspace/.mnemon
+    docker exec "$container" sh -c \
+      'umask 077; mkdir -p /workspace/.mnemon/harness/node'
+    tar -C "$restore" -cf - . | docker exec -i "$container" sh -c \
+      'umask 077; tar -C /workspace/.mnemon/harness/node -xf -'
     assert_agent_boundary "$role"
     docker exec -w /workspace "$container" mnemon-harness setup \
       --runtime pi --project-root /workspace >"$runtime_root/restart-setup-$role.json"
@@ -2133,9 +2160,7 @@ restart_agent_runtimes() {
     done
     test "$ready" = 1 || fail "$role fresh Runtime mnemond did not become ready"
   done
-  # The original stopped boundary remains independent of the restarted nodes
-  # and is consumed read-only by the final evidence oracle.
-  chmod -R a-w "$runtime_root/runtime-restart-state"
+  rm -rf -- "$restore_root"
 }
 
 assert_evolution() {
@@ -2279,6 +2304,7 @@ write_report() {
   jq -n \
     --arg schema 'mnemon.r7.domain-ops.live-report' \
     --arg model "$pi_model" \
+    --arg thinking "$pi_thinking" \
     --arg run_id "$project" \
     --arg started_at "$run_started_at" \
     --arg finished_at "$run_finished_at" \
@@ -2295,9 +2321,10 @@ write_report() {
     --argjson peer_effect_total "$total" '
       {
         schema:$schema,
-        version:6,
+        version:7,
         status:"passed",
         model:$model,
+        thinking:$thinking,
         run:{id:$run_id,started_at:$started_at,finished_at:$finished_at,
           candidate_digest:$candidate_digest},
         isolation:{passed:true,fresh_runtime_between_episodes:true},
@@ -2372,6 +2399,7 @@ finalize_failure_evidence() {
   jq -n \
     --arg schema 'mnemon.r7.domain-ops.failure-report' \
     --arg model "$pi_model" \
+    --arg thinking "$pi_thinking" \
     --arg run_id "$project" \
     --arg started_at "$run_started_at" \
     --arg finished_at "$observed_at" \
@@ -2383,9 +2411,10 @@ finalize_failure_evidence() {
     --argjson turns "$completed_turns" '
       {
         schema:$schema,
-        version:6,
+        version:7,
         status:"failed",
         model:$model,
+        thinking:$thinking,
         run:{id:$run_id,started_at:$started_at,finished_at:$finished_at,
           candidate_digest:$candidate_digest},
         failure:{code:$code,observed_at:$observed_at},

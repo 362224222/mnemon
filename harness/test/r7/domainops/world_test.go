@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -110,7 +111,7 @@ func TestGatewayHistoryIsReadOnlyAndBounded(t *testing.T) {
 	}
 
 	for index := 1; index <= world.GatewayHistoryLimit+3; index++ {
-		businessID := fmt.Sprintf("bounded-%03d", index)
+		businessID := maxWidthBusinessID(index)
 		if _, err := checkout(gateway.URL, businessID); err != nil {
 			t.Fatalf("bounded checkout %q: %v", businessID, err)
 		}
@@ -120,13 +121,18 @@ func TestGatewayHistoryIsReadOnlyAndBounded(t *testing.T) {
 		t.Fatalf("history entries = %d, want hard limit %d", len(history.Entries),
 			world.GatewayHistoryLimit)
 	}
-	lastBoundedBusiness := fmt.Sprintf("bounded-%03d", world.GatewayHistoryLimit+3)
-	if history.Entries[0].BusinessID != "bounded-004" ||
+	lastBoundedBusiness := maxWidthBusinessID(world.GatewayHistoryLimit + 3)
+	if history.Entries[0].BusinessID != maxWidthBusinessID(4) ||
 		history.Entries[len(history.Entries)-1].BusinessID != lastBoundedBusiness {
 		t.Fatalf("bounded history retained wrong window: first=%q last=%q",
 			history.Entries[0].BusinessID,
 			history.Entries[len(history.Entries)-1].BusinessID)
 	}
+}
+
+func maxWidthBusinessID(index int) string {
+	suffix := fmt.Sprintf("-%03d", index)
+	return strings.Repeat("b", 96-len(suffix)) + suffix
 }
 
 func TestDistinctRemediationsSatisfySameOutcomeOracle(t *testing.T) {

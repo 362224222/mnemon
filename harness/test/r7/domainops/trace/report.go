@@ -22,6 +22,7 @@ type liveReport struct {
 	Version   int       `json:"version"`
 	Status    string    `json:"status"`
 	Model     string    `json:"model"`
+	Thinking  string    `json:"thinking"`
 	Run       runReport `json:"run"`
 	Isolation struct {
 		Passed                      bool `json:"passed"`
@@ -184,8 +185,9 @@ func loadReport(path string) (liveReport, error) {
 }
 
 func validateReport(report liveReport) error {
-	if report.Schema != "mnemon.r7.domain-ops.live-report" || report.Version != 6 ||
+	if report.Schema != "mnemon.r7.domain-ops.live-report" || report.Version != 7 ||
 		report.Status != "passed" || report.Model == "" ||
+		!validThinkingLevel(report.Thinking) ||
 		report.RawProviderStreamsRetained || !report.Isolation.Passed ||
 		!report.Isolation.FreshRuntimeBetweenEpisodes {
 		return errors.New("sanitized live report has invalid identity or terminal status")
@@ -215,6 +217,10 @@ func validateReport(report liveReport) error {
 		return err
 	}
 	return validateTurns(report.Turns, attention.Turns)
+}
+
+func validThinkingLevel(value string) bool {
+	return slices.Contains([]string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}, value)
 }
 
 func validateReportProtocol(report liveReport) (attentionValidation, error) {

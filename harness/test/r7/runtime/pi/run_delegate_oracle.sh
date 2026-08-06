@@ -71,7 +71,7 @@ assert_current_rpc() {
       .result.content[0].type == "text" and
       (if $mode == "projected" then
         (.result.content[0].text | fromjson) |
-          .schema == "mnemon.agent.view" and .version == 6
+          .schema == "mnemon.agent.view" and .version == 7
        else .result.content[0].text == "Current unavailable." end))] | length) == 1 and
     any(.[]; .type == "agent_settled")
   ' >/dev/null

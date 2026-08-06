@@ -164,13 +164,13 @@ func TestAgentViewProjectsTerminalReplyWithoutOpenHandlingCountCoupling(t *testi
 		t.Fatal(err)
 	}
 	if bytes.Contains(view.CanonicalJSON(), []byte(`"related_open"`)) {
-		t.Fatalf("v6 View retained related_open: %s", view.CanonicalJSON())
+		t.Fatalf("v7 View retained related_open: %s", view.CanonicalJSON())
 	}
 	var wire agentViewWire
 	if err := json.Unmarshal(view.CanonicalJSON(), &wire); err != nil {
 		t.Fatal(err)
 	}
-	if wire.Version != 6 || len(wire.Related) != 1 ||
+	if wire.Version != AgentViewVersion || len(wire.Related) != 1 ||
 		wire.Related[0].Facts.Relation != "terminal_reply" ||
 		wire.Related[0].Facts.Outcome != "completed" || wire.Outstanding.RelatedTotal != 2 {
 		t.Fatalf("terminal reply projection drift: %#v", wire)

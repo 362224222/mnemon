@@ -14,11 +14,14 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/mnemon-dev/mnemon/harness/testdata/r7/domain-ops/world"
 )
 
-// maxControlBytes covers the closed 69-probe x 4-charge live-case envelope
-// while retaining a small, explicit ceiling for every control response.
-const maxControlBytes = 64 << 10
+const (
+	maxActionRequestBytes   = world.MaxRequestBodyBytes
+	maxControlResponseBytes = world.MaxResponseBodyBytes
+)
 
 type configuration struct {
 	role     string
@@ -45,12 +48,27 @@ func main() {
 }
 
 func parseConfiguration() (configuration, error) {
+	return parseConfigurationArgs(os.Args[1:], os.Getenv)
+}
+
+func parseConfigurationArgs(arguments []string, getenv func(string) string) (configuration, error) {
+	if getenv == nil {
+		return configuration{}, errors.New("domainctl environment reader is required")
+	}
+	options, operands, err := splitClosedOptions(arguments)
+	if err != nil {
+		return configuration{}, err
+	}
 	config := configuration{}
-	flag.StringVar(&config.role, "role", os.Getenv("DOMAIN_ROLE"), "local domain role label")
-	flag.StringVar(&config.endpoint, "endpoint", os.Getenv("DOMAIN_ENDPOINT"),
+	flags := flag.NewFlagSet("domainctl", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.StringVar(&config.role, "role", getenv("DOMAIN_ROLE"), "local domain role label")
+	flags.StringVar(&config.endpoint, "endpoint", getenv("DOMAIN_ENDPOINT"),
 		"base URL for the local domain service")
-	flag.DurationVar(&config.timeout, "timeout", 5*time.Second, "bounded request timeout")
-	flag.Parse()
+	flags.DurationVar(&config.timeout, "timeout", 5*time.Second, "bounded request timeout")
+	if err := flags.Parse(options); err != nil {
+		return configuration{}, fmt.Errorf("domainctl options: %w", err)
+	}
 	if config.role == "" || config.endpoint == "" || config.timeout < time.Second ||
 		config.timeout > 30*time.Second {
 		return configuration{}, errors.New(
@@ -59,11 +77,44 @@ func parseConfiguration() (configuration, error) {
 	if strings.ContainsAny(config.role, "\r\n\t") {
 		return configuration{}, errors.New("domainctl role is invalid")
 	}
-	config.args = flag.Args()
+	config.args = operands
 	if len(config.args) == 0 {
 		usage()
 	}
 	return config, nil
+}
+
+func splitClosedOptions(arguments []string) ([]string, []string, error) {
+	known := map[string]struct{}{"role": {}, "endpoint": {}, "timeout": {}}
+	seen := make(map[string]struct{}, len(known))
+	options := make([]string, 0, len(known))
+	operands := make([]string, 0, len(arguments))
+	for index := 0; index < len(arguments); index++ {
+		token := arguments[index]
+		trimmed := strings.TrimLeft(token, "-")
+		name, value, inline := strings.Cut(trimmed, "=")
+		_, recognized := known[name]
+		if token == trimmed || !recognized {
+			if strings.HasPrefix(token, "-") {
+				return nil, nil, fmt.Errorf("domainctl option %q is not supported", token)
+			}
+			operands = append(operands, token)
+			continue
+		}
+		if _, duplicate := seen[name]; duplicate {
+			return nil, nil, fmt.Errorf("domainctl option %q is repeated", name)
+		}
+		seen[name] = struct{}{}
+		if !inline {
+			index++
+			if index >= len(arguments) {
+				return nil, nil, fmt.Errorf("domainctl option %q requires a value", name)
+			}
+			value = arguments[index]
+		}
+		options = append(options, "--"+name+"="+value)
+	}
+	return options, operands, nil
 }
 
 func execute(ctx context.Context, config configuration) (json.RawMessage, error) {
@@ -95,7 +146,7 @@ func execute(ctx context.Context, config configuration) (json.RawMessage, error)
 			usage()
 		}
 		payload := []byte(arguments[2])
-		if !json.Valid(payload) || len(payload) > maxControlBytes {
+		if !json.Valid(payload) || len(payload) > maxActionRequestBytes {
 			return nil, errors.New("action body must be bounded valid JSON")
 		}
 		response, err = request(ctx, http.MethodPost, config.endpoint, arguments[1], payload)
@@ -145,11 +196,11 @@ func request(ctx context.Context, method, endpoint, path string, payload []byte)
 		return nil, fmt.Errorf("send request: %w", err)
 	}
 	defer response.Body.Close()
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxControlBytes+1))
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxControlResponseBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
-	if len(responseBody) > maxControlBytes {
+	if len(responseBody) > maxControlResponseBytes {
 		return nil, errors.New("response exceeds control bound")
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {

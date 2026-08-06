@@ -686,10 +686,11 @@ func admitSignedResponse(t *testing.T, fixture *peerRoundTripFixture, delivery a
 type focusViewWire struct {
 	Current *struct {
 		Facts struct {
-			Handle        string `json:"handle"`
-			ReplyTo       string `json:"reply_to"`
-			ReplyRequired bool   `json:"reply_required"`
-			ReplyTarget   string `json:"reply_target"`
+			Handle                  string `json:"handle"`
+			ReplyTo                 string `json:"reply_to"`
+			ReplyRequired           bool   `json:"reply_required"`
+			ReplyTarget             string `json:"reply_target"`
+			ReplyObservationPending bool   `json:"reply_observation_pending"`
 		} `json:"facts"`
 		Semantic struct {
 			Kind    string `json:"kind"`

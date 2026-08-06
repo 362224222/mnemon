@@ -111,9 +111,8 @@ ON peer_outbox(state, expires_at, created_at);
 CREATE UNIQUE INDEX peer_outbox_origin_route
 ON peer_outbox(origin_event_id, route_id);
 
-CREATE INDEX peer_outbox_reply_match
-ON peer_outbox(route_id, expected_reply_root_event_id,
-               expected_reply_root_event_digest, reply_anchor_handling_id)
+CREATE INDEX peer_outbox_reply_anchor
+ON peer_outbox(reply_anchor_handling_id, delivery_id)
 WHERE reply_anchor_handling_id IS NOT NULL;
 
 CREATE TABLE peer_inbox (
@@ -257,4 +256,4 @@ CREATE TABLE reference_outcome_projection (
 ) STRICT;
 
 PRAGMA application_id = 1296978487;
-PRAGMA user_version = 11;
+PRAGMA user_version = 12;

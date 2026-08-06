@@ -3,18 +3,19 @@ package agency
 import "sort"
 
 type machineViewWire struct {
-	SchemaVersion   int                       `json:"schema_version"`
-	SourcePrincipal string                    `json:"source_principal"`
-	MayInitiate     bool                      `json:"may_initiate"`
-	Consequences    []string                  `json:"consequences,omitempty"`
-	Subjects        []viewSubjectWire         `json:"subjects,omitempty"`
-	References      []viewReferenceWire       `json:"references,omitempty"`
-	Targets         []viewTargetWire          `json:"targets,omitempty"`
-	ReplyTo         string                    `json:"reply_to,omitempty"`
-	ReplyTarget     *targetWire               `json:"reply_target,omitempty"`
-	ReplyDelivery   string                    `json:"reply_delivery_id,omitempty"`
-	Artifacts       []viewArtifactOfferWire   `json:"artifacts,omitempty"`
-	Provenance      []viewProvenanceOfferWire `json:"provenance,omitempty"`
+	SchemaVersion           int                       `json:"schema_version"`
+	SourcePrincipal         string                    `json:"source_principal"`
+	MayInitiate             bool                      `json:"may_initiate"`
+	Consequences            []string                  `json:"consequences,omitempty"`
+	Subjects                []viewSubjectWire         `json:"subjects,omitempty"`
+	References              []viewReferenceWire       `json:"references,omitempty"`
+	Targets                 []viewTargetWire          `json:"targets,omitempty"`
+	ReplyTo                 string                    `json:"reply_to,omitempty"`
+	ReplyTarget             *targetWire               `json:"reply_target,omitempty"`
+	ReplyDelivery           string                    `json:"reply_delivery_id,omitempty"`
+	ReplyObservationPending bool                      `json:"reply_observation_pending"`
+	Artifacts               []viewArtifactOfferWire   `json:"artifacts,omitempty"`
+	Provenance              []viewProvenanceOfferWire `json:"provenance,omitempty"`
 }
 
 type viewSubjectWire struct {
@@ -51,8 +52,9 @@ type viewProvenanceOfferWire struct {
 
 func (view ViewAuthority) wire() machineViewWire {
 	wire := machineViewWire{SchemaVersion: viewAuthorityVersion,
-		SourcePrincipal: view.attachment.principal.String(),
-		MayInitiate:     view.attachment.mayInitiate}
+		SourcePrincipal:         view.attachment.principal.String(),
+		MayInitiate:             view.attachment.mayInitiate,
+		ReplyObservationPending: view.replyObservationPending}
 	for consequence := range view.consequences {
 		wire.Consequences = append(wire.Consequences, consequence.String())
 	}

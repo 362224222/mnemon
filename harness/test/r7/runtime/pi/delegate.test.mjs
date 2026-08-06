@@ -52,6 +52,17 @@ test("delegate child is isolated, bounded, and leaves no private state", async (
 	});
 });
 
+test("delegate passes the trusted high reasoning level as one child argument", async () => {
+	await withTempParent(async (parent) => {
+		const result = await runDelegateWithInvocation(
+			options(parent, { thinkingLevel: "high" }),
+			invocation("require-high"),
+		);
+		assert.equal(result.text, "independent bounded finding");
+		assert.deepEqual(await readdir(parent), []);
+	});
+});
+
 test("delegate truncates model-visible output at the UTF-8 byte bound", async () => {
 	await withTempParent(async (parent) => {
 		const result = await runDelegateWithInvocation(options(parent), invocation("long-output"));
@@ -141,7 +152,7 @@ test("extension exposes one slot per parent run and inherits trusted model ident
 	extension(pi);
 	const context = {
 		model: { provider: "deepseek", id: "deepseek-v4-flash" },
-		thinkingLevel: "off",
+		thinkingLevel: "high",
 		modelRegistry: { async getApiKeyForProvider() { return secret; } },
 	};
 
@@ -163,6 +174,7 @@ test("extension exposes one slot per parent run and inherits trusted model ident
 	assert.equal(calls.length, 1);
 	assert.equal(calls[0].provider, "deepseek");
 	assert.equal(calls[0].model, "deepseek-v4-flash");
+	assert.equal(calls[0].thinkingLevel, "high");
 	assert.equal(JSON.stringify(first).includes(secret), false);
 	assert.equal(tool.parameters.properties.task.maxLength, DELEGATE_LIMITS.taskBytes);
 

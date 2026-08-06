@@ -4,6 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 const CURRENT_TOOL = "mnemond_current";
 const CURRENT_TIMEOUT_MS = 5000;
 const CURRENT_SHUTDOWN_GRACE_MS = 100;
+const CURRENT_ATTEMPTS = 2;
 // Agent View canonical JSON is bounded at 16 KiB; stdout adds one newline.
 const MAX_CURRENT_OUTPUT_BYTES = (16 << 10) + 1;
 const CURRENT_FAILED_TEXT = "Current unavailable.";
@@ -13,6 +14,8 @@ const CurrentParameters = {
   properties: {},
   additionalProperties: false,
 } as const;
+
+class CurrentInterruptedError extends Error {}
 
 function currentResult(text: string, status: "projected" | "failed") {
   return {
@@ -35,7 +38,7 @@ function parseCurrentOutput(stdout: string): string | undefined {
   }
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const view = value as { schema?: unknown; version?: unknown; view?: unknown };
-  if (view.schema !== "mnemon.agent.view" || view.version !== 6 ||
+  if (view.schema !== "mnemon.agent.view" || view.version !== 7 ||
       typeof view.view !== "string" || view.view.length === 0) return undefined;
   return raw;
 }
@@ -74,7 +77,8 @@ function readCurrent(signal: AbortSignal): Promise<string> {
       cleanup();
       const view = !interrupted && error === null && stderr === "" ?
         parseCurrentOutput(stdout) : undefined;
-      if (view === undefined) reject(new Error("current unavailable"));
+      if (interrupted) reject(new CurrentInterruptedError("current interrupted"));
+      else if (view === undefined) reject(new Error("current unavailable"));
       else resolve(view);
     });
     timeout = setTimeout(interrupt, CURRENT_TIMEOUT_MS);
@@ -97,6 +101,19 @@ function readCurrent(signal: AbortSignal): Promise<string> {
   });
 }
 
+async function readCurrentWithReplay(signal: AbortSignal): Promise<string> {
+  // The CLI journals one operation key before transport. Repeating this exact
+  // argv therefore replays one Current; it cannot claim a second subject.
+  for (let attempt = 0; attempt < CURRENT_ATTEMPTS; attempt += 1) {
+    try {
+      return await readCurrent(signal);
+    } catch (error) {
+      if (signal.aborted || error instanceof CurrentInterruptedError) break;
+    }
+  }
+  throw new Error("current unavailable");
+}
+
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: CURRENT_TOOL,
@@ -107,7 +124,7 @@ export default function (pi: ExtensionAPI) {
       if (params === null || typeof params !== "object" || Array.isArray(params) ||
           Object.keys(params).length !== 0) return currentResult(CURRENT_FAILED_TEXT, "failed");
       try {
-        return currentResult(await readCurrent(signal), "projected");
+        return currentResult(await readCurrentWithReplay(signal), "projected");
       } catch {
         return currentResult(CURRENT_FAILED_TEXT, "failed");
       }

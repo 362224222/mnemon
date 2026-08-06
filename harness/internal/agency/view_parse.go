@@ -35,7 +35,8 @@ func ParseViewAuthorityCanonicalJSON(data []byte, attachment Attachment) (ViewAu
 }
 
 func machineViewSpecFromWire(wire machineViewWire, attachment Attachment) (MachineViewSpec, error) {
-	spec := MachineViewSpec{Attachment: attachment}
+	spec := MachineViewSpec{Attachment: attachment,
+		ReplyObservationPending: wire.ReplyObservationPending}
 	var err error
 	if spec.Consequences, err = parseViewConsequences(wire.Consequences); err != nil {
 		return MachineViewSpec{}, err

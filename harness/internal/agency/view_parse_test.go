@@ -30,7 +30,7 @@ func newViewParserFixture(t *testing.T) viewParserFixture {
 	activeReference := mustReference(t, activeHead, "playbook-active", "event:active", "active")
 	activeReference.outcomes = AgentViewTerminalOutcomes{Completed: 2, Unresolved: 1}
 	authority := mustView(t, MachineViewSpec{
-		Attachment: attachment,
+		Attachment: attachment, ReplyObservationPending: true,
 		Consequences: []Consequence{
 			ConsequenceCreateHandlings, ConsequenceAdvanceHandling, ConsequenceResolveCompleted,
 			ConsequenceSupersedeReference, ConsequenceRetractReference,
@@ -137,10 +137,10 @@ func TestParseViewAuthorityCanonicalJSONRejectsUnboundOrMalformedData(t *testing
 	cases := map[string][]byte{
 		"leading whitespace": append([]byte(" "), canonical...),
 		"trailing value":     append(append([]byte(nil), canonical...), []byte("{}")...),
-		"duplicate key": bytes.Replace(canonical, []byte(`"schema_version":5`),
-			[]byte(`"schema_version":5,"schema_version":5`), 1),
-		"unknown top field": bytes.Replace(canonical, []byte(`{"schema_version":5`),
-			[]byte(`{"schema_version":5,"unknown":true`), 1),
+		"duplicate key": bytes.Replace(canonical, []byte(`"schema_version":6`),
+			[]byte(`"schema_version":6,"schema_version":6`), 1),
+		"unknown top field": bytes.Replace(canonical, []byte(`{"schema_version":6`),
+			[]byte(`{"schema_version":6,"unknown":true`), 1),
 		"unknown nested field": bytes.Replace(canonical, []byte(`"binding":{`),
 			[]byte(`"binding":{"unknown":true,`), 1),
 		"duplicate typed handle": duplicateBytes,
@@ -219,6 +219,10 @@ func TestParseAgentViewCanonicalJSONRejectsNoncanonicalAndDivergentProjection(t 
 	wrongReplyRequirement.Current = cloneAgentViewCurrent(wire.Current)
 	wrongReplyRequirement.Current.Facts.ReplyRequired = false
 	wrongReplyRequirementBytes, _ := json.Marshal(wrongReplyRequirement)
+	wrongReplyObservation := wire
+	wrongReplyObservation.Current = cloneAgentViewCurrent(wire.Current)
+	wrongReplyObservation.Current.Facts.ReplyObservationPending = false
+	wrongReplyObservationBytes, _ := json.Marshal(wrongReplyObservation)
 	wrongReplyTo := wire
 	wrongReplyTo.Current = cloneAgentViewCurrent(wire.Current)
 	wrongReplyTo.Current.Facts.ReplyTo = "cause:prior"
@@ -241,6 +245,7 @@ func TestParseAgentViewCanonicalJSONRejectsNoncanonicalAndDivergentProjection(t 
 		"reply-to divergence":          wrongReplyToBytes,
 		"reply target divergence":      wrongReplyTargetBytes,
 		"reply requirement divergence": wrongReplyRequirementBytes,
+		"reply observation divergence": wrongReplyObservationBytes,
 	}
 	for name, data := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -271,12 +276,12 @@ func cloneAgentViewCurrent(source *agentViewCurrentWire) *agentViewCurrentWire {
 
 func TestViewParsersEnforceCanonicalByteBounds(t *testing.T) {
 	fixture := newViewParserFixture(t)
-	private := []byte(`{"schema_version":5,"source_principal":"agent:parse","may_initiate":true,"padding":"` +
+	private := []byte(`{"schema_version":6,"source_principal":"agent:parse","may_initiate":true,"padding":"` +
 		strings.Repeat("x", MaxViewCanonicalBytes) + `"}`)
 	if _, err := ParseViewAuthorityCanonicalJSON(private, fixture.attachment); !errors.Is(err, ErrLimit) {
 		t.Fatalf("private byte bound error = %v, want ErrLimit", err)
 	}
-	public := []byte(`{"schema":"mnemon.agent.view","version":6,"view":"view:public","padding":"` +
+	public := []byte(`{"schema":"mnemon.agent.view","version":7,"view":"view:public","padding":"` +
 		strings.Repeat("x", MaxAgentViewCanonicalBytes) + `"}`)
 	if _, err := ParseAgentViewCanonicalJSON(public, fixture.authority); !errors.Is(err, ErrLimit) {
 		t.Fatalf("public byte bound error = %v, want ErrLimit", err)
@@ -286,7 +291,7 @@ func TestViewParsersEnforceCanonicalByteBounds(t *testing.T) {
 func FuzzParseViewAuthorityCanonicalJSON(f *testing.F) {
 	attachment, authority, _ := minimalParserFixture()
 	f.Add(authority.CanonicalJSON())
-	f.Add([]byte(`{"schema_version":5}`))
+	f.Add([]byte(`{"schema_version":6}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		view, err := ParseViewAuthorityCanonicalJSON(data, attachment)
 		if err != nil {
@@ -304,7 +309,7 @@ func FuzzParseViewAuthorityCanonicalJSON(f *testing.F) {
 func FuzzParseAgentViewCanonicalJSON(f *testing.F) {
 	_, authority, public := minimalParserFixture()
 	f.Add(public.CanonicalJSON())
-	f.Add([]byte(`{"schema":"mnemon.agent.view","version":6}`))
+	f.Add([]byte(`{"schema":"mnemon.agent.view","version":7}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		view, err := ParseAgentViewCanonicalJSON(data, authority)
 		if err != nil {

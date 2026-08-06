@@ -178,6 +178,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", async () => {
+    if (governedRun) return undefined;
     if (!resetAttention()) return undefined;
     const boundary = randomBytes(32).toString("base64url");
     if (!attachBoundary(boundary)) return undefined;

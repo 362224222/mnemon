@@ -239,7 +239,7 @@ test("cutoff never re-enables a settlement tool removed by the Host allowlist", 
   });
 });
 
-test("the cutoff restores the exact current tool set on replacement and shutdown", async () => {
+test("automatic continuation cannot remint attachment or attention before settlement", async () => {
   await withFakeHarness(async ({ log }) => {
     const runtime = fakePi(["bash"]);
     const abort = abortContext();
@@ -248,6 +248,13 @@ test("the cutoff restores the exact current tool set on replacement and shutdown
     await exhaust(runtime, abort.context);
     assert.deepEqual(runtime.activeTools(), []);
 
+    assert.equal(await runtime.handlers.get("before_agent_start")({}, {}), undefined);
+    assert.deepEqual(runtime.activeTools(), []);
+    assert.deepEqual((await readFile(log, "utf8")).trim().split("\n"), [
+      "hook attach --json",
+    ]);
+
+    await runtime.handlers.get("agent_settled")({}, {});
     await attach(runtime);
     assert.deepEqual(runtime.activeTools(), ["bash", "read", "delegate"]);
     assert.equal(

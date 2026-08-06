@@ -107,7 +107,7 @@ inside a turn boundary. The runner enforces one exclusive turn window per node;
 without that exclusivity this is temporal attribution rather than a private
 operation-to-turn binding and would not be sufficient.
 
-The passed runner report is `mnemon.r7.domain-ops.live-report` version 6. It
+The passed runner report is `mnemon.r7.domain-ops.live-report` version 7. It
 contains two ordered service-world episodes and a bounded authority boundary
 between them. After the lead's interactive entry and before either full business
 oracle, its attention envelope
@@ -130,7 +130,7 @@ the stopped Reference lineage, and is no newer than the end boundary. Every
 reported later use must be an exact causation or supersede/retract edge from a
 post-boundary accepted Event. It does not inspect Artifact bytes, semantic kinds, or remediation
 choices. Earlier passed-report versions are intentionally not accepted as two-episode
-evidence; failed reports use the same version-6 wire below.
+evidence; failed reports use the same version-7 wire below.
 
 ## Failed-run input
 

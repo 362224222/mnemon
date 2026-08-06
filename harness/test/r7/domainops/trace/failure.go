@@ -12,12 +12,13 @@ import (
 )
 
 type failureReport struct {
-	Schema  string    `json:"schema"`
-	Version int       `json:"version"`
-	Status  string    `json:"status"`
-	Model   string    `json:"model"`
-	Run     runReport `json:"run"`
-	Failure struct {
+	Schema   string    `json:"schema"`
+	Version  int       `json:"version"`
+	Status   string    `json:"status"`
+	Model    string    `json:"model"`
+	Thinking string    `json:"thinking"`
+	Run      runReport `json:"run"`
+	Failure  struct {
 		Code       string `json:"code"`
 		ObservedAt string `json:"observed_at"`
 	} `json:"failure"`
@@ -48,9 +49,9 @@ func loadFailureReport(path string) (failureReport, error) {
 }
 
 func validateFailureReport(report failureReport) error {
-	if report.Schema != "mnemon.r7.domain-ops.failure-report" || report.Version != 6 ||
+	if report.Schema != "mnemon.r7.domain-ops.failure-report" || report.Version != 7 ||
 		report.Status != "failed" || report.RawProviderStreamsRetained ||
-		report.Model == "" || report.Failure.Code == "" {
+		report.Model == "" || !validThinkingLevel(report.Thinking) || report.Failure.Code == "" {
 		return errors.New("sanitized failure report has invalid identity or status")
 	}
 	for label, value := range map[string]string{"model": report.Model,
@@ -118,7 +119,8 @@ func validateCompletedTurnSubset(turns []turnSummary) error {
 		}
 		seen[turn.Turn] = struct{}{}
 		if err := validateTurnSummary(turn); err != nil {
-			return errors.New("sanitized failure report contains an invalid completed turn")
+			return fmt.Errorf("sanitized failure report contains invalid completed turn %q for role %q: %w",
+				turn.Turn, turn.Role, err)
 		}
 	}
 	return nil

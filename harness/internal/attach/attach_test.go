@@ -76,7 +76,7 @@ func assertGuideTerminalSurface(t *testing.T, guide string) {
 	normalized := strings.Join(strings.Fields(guide), " ")
 	for _, required := range []string{
 		"mnemond_current {}",
-		"Pass one Intent to `mnemond_submit`",
+		"Choose one `allowed_intents` shape, submit once",
 		"mnemon-harness artifact capture --json < PATH",
 		"mnemon-harness artifact read \"$HANDLE\"",
 		"exactly one nonempty",
@@ -88,17 +88,18 @@ func assertGuideTerminalSurface(t *testing.T, guide string) {
 		}
 	}
 	for _, required := range []string{
-		"Current is the local anchor; self creates responsibility, not reply keepalive",
-		"self anchors the outcome. Sending is not completion",
-		"Completed needs a verified local Artifact",
-		"`current.facts.reply_required` is machine-owned",
-		"When true and current asks for evidence, action, or a decision, return one correlated terminal disposition",
-		"including declined or unresolved; never close silently",
-		"When false, no response is owed; do not echo receipt",
-		"New remote work follows ordinary anchor rules",
-		"Reports, duplicates, Receipts, and terminal replies are evidence, not reply requests",
-		"Missing evidence: advance and ask a View target; do not complete",
-		"References stay local; publish/supersede never sends them to peers",
+		"Advance only when unseen evidence could change the decision",
+		"self anchors the outcome. Sending and final text schedule nothing",
+		"`reply_required` is inbound duty; `reply_observation_pending` means an outbound result is unobserved. Pending is evidence, not a rule",
+		"Completed needs a verified local Artifact", "Otherwise no response is owed",
+		"When `reply_required` and current asks for evidence, action, or decision, return one correlated terminal disposition",
+		"including declined/unresolved; never close silently", "`self` creates a duty, never a keepalive",
+		"`related` is bounded, read-only, never a subject", "`truncated` means this View omitted evidence",
+		"Summarize/cite only shown Events; never invent a handle",
+		"bounded summary and any shown Artifact",
+		"A reply proves only its contribution; require direct outcome evidence for global completion",
+		"Receipts/replies are evidence, not requests", "References stay local; share Artifact through targeted work",
+		"Reference changes future View and creates no duty. Current stays open; otherwise self-anchor surviving work",
 	} {
 		if !strings.Contains(normalized, required) {
 			t.Errorf("guide lacks response convergence rule %q", required)
@@ -446,7 +447,7 @@ func TestPiHookSeparatesExplorationFromBoundedEffectSettlement(t *testing.T) {
 		!strings.Contains(source, "if (!resetAttention()) return undefined;") {
 		t.Fatal("Pi attention is not reset at run start, settlement, and shutdown")
 	}
-	before := regexp.MustCompile(`(?s)pi\.on\("before_agent_start".*?if \(!resetAttention\(\)\) return undefined;.*?` +
+	before := regexp.MustCompile(`(?s)pi\.on\("before_agent_start".*?if \(governedRun\) return undefined;.*?if \(!resetAttention\(\)\) return undefined;.*?` +
 		`if \(!attachBoundary\(boundary\)\) return undefined;.*?governedRun = true;`)
 	if !before.MatchString(source) {
 		t.Fatal("Pi attachment failure can inherit or activate a governed tool budget")

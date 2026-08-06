@@ -4,7 +4,7 @@ import "sort"
 
 const (
 	AgentViewSchema              = "mnemon.agent.view"
-	AgentViewVersion             = 6
+	AgentViewVersion             = 7
 	MaxAgentViewCanonicalBytes   = 16 << 10
 	MaxAgentViewReferences       = 8
 	MaxAgentViewCurrentArtifacts = MaxArtifactInputs
@@ -190,7 +190,8 @@ func projectCurrent(spec *AgentViewCurrentSpec, authority ViewAuthority) (*agent
 	sort.Slice(artifactWires, func(i, j int) bool { return artifactWires[i].Handle < artifactWires[j].Handle })
 	return &agentViewCurrentWire{
 		Facts: agentViewCurrentFactsWire{Handle: spec.Subject.String(), ReplyTo: spec.ReplyTo.String(),
-			ReplyRequired: replyTarget != "", ReplyTarget: replyTarget, Artifacts: artifactWires},
+			ReplyRequired: replyTarget != "", ReplyTarget: replyTarget,
+			ReplyObservationPending: authority.replyObservationPending, Artifacts: artifactWires},
 		Semantic: agentViewSemanticWire{Kind: spec.Kind.String(), Payload: spec.Payload.String()},
 	}, artifacts, nil
 }

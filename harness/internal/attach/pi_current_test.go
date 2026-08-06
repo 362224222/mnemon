@@ -28,8 +28,7 @@ func TestPiCurrentIsTheOnlyViewSurfaceInThePiGuide(t *testing.T) {
 	}
 	guide := string(projection.Guide())
 	for _, required := range []string{
-		"Read this Pi turn's View exactly once with `mnemond_current {}`",
-		"Never run\nCurrent through bash, switch surfaces, or retry after a failed Current",
+		"Read this Pi turn's View once with `mnemond_current {}`; never use bash or retry.",
 	} {
 		if !strings.Contains(guide, required) {
 			t.Fatalf("Pi guide lacks its exclusive Current surface %q", required)
@@ -55,9 +54,12 @@ func TestPiCurrentUsesOneNativeBoundedToolWithoutShellInference(t *testing.T) {
 		`This is Pi's only Current surface; do not retry through bash.`,
 		`const CURRENT_TIMEOUT_MS = 5000;`,
 		`const CURRENT_SHUTDOWN_GRACE_MS = 100;`,
+		`const CURRENT_ATTEMPTS = 2;`,
 		`const MAX_CURRENT_OUTPUT_BYTES = (16 << 10) + 1;`,
 		`properties: {}`, `additionalProperties: false`,
 		`execFile("mnemon-harness", ["agent", "current", "--json"]`,
+		`return await readCurrent(signal);`,
+		`error instanceof CurrentInterruptedError`,
 		`shell: false`, `setTimeout(interrupt, CURRENT_TIMEOUT_MS)`,
 		`setTimeout(() => signalOwnedChild(child, "SIGKILL")`,
 		`signalOwnedChild(child, "SIGTERM")`, `clearTimeout(timeout)`, `clearTimeout(killTimer)`,
@@ -65,7 +67,7 @@ func TestPiCurrentUsesOneNativeBoundedToolWithoutShellInference(t *testing.T) {
 		`maxBuffer: MAX_CURRENT_OUTPUT_BYTES`, `child.stdin.end();`,
 		`stdout.endsWith("\n")`, `stdout.indexOf("\n") !== stdout.length - 1`,
 		`value = JSON.parse(raw)`, `view.schema !== "mnemon.agent.view"`,
-		`view.version !== 6`, `details: { schema: "mnemon.pi.current", version: 1, status }`,
+		`view.version !== 7`, `details: { schema: "mnemon.pi.current", version: 1, status }`,
 		`event.toolName !== CURRENT_TOOL`, `details.status !== "projected"`,
 	} {
 		if !strings.Contains(source, required) {

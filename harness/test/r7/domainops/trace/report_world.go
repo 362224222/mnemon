@@ -4,11 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/mnemon-dev/mnemon/harness/testdata/r7/domain-ops/world"
 )
 
 const (
-	maxSyntheticProbes          = 69
-	maxSyntheticChargesPerProbe = 4
+	maxSyntheticProbes          = world.MonitorProbeLimit
+	maxSyntheticChargesPerProbe = world.MonitorProbeChargeLimit
 )
 
 func validateWorld(report liveReport) error {

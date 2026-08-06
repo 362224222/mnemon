@@ -309,7 +309,7 @@ func parseView(t *testing.T, raw string) viewProjection {
 	if err := json.Unmarshal([]byte(raw), &view); err != nil {
 		t.Fatalf("decode Agent View: %v\n%s", err, raw)
 	}
-	if view.Schema != "mnemon.agent.view" || view.Version != 6 || view.View == "" {
+	if view.Schema != "mnemon.agent.view" || view.Version != 7 || view.View == "" {
 		t.Fatalf("invalid Agent View envelope: %#v", view)
 	}
 	return view

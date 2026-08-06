@@ -37,21 +37,26 @@ grep -Eq "^[[:space:]]*GatewayHistoryLimit[[:space:]]*=[[:space:]]*$gateway_hist
   printf 'runtime oracle: shell and gateway history bounds diverged\n' >&2
   exit 1
 }
-grep -Fqx -- "const maxControlBytes = $domain_control_max_kib << 10" \
-  "$case_root/cmd/domainctl/main.go" || {
-  printf 'runtime oracle: shell and domainctl response bounds diverged\n' >&2
+grep -Fqx -- $'\tMaxRequestBodyBytes  = '"$domain_request_max_kib"' << 10' \
+  "$case_root/world/protocol.go" &&
+  grep -Fqx -- $'\tMaxResponseBodyBytes = '"$domain_response_max_kib"' << 10' \
+    "$case_root/world/protocol.go" &&
+  grep -Fqx -- $'\tmaxActionRequestBytes   = world.MaxRequestBodyBytes' \
+    "$case_root/cmd/domainctl/main.go" &&
+  grep -Fqx -- $'\tmaxControlResponseBytes = world.MaxResponseBodyBytes' \
+    "$case_root/cmd/domainctl/main.go" || {
+  printf 'runtime oracle: world and domainctl body bounds diverged\n' >&2
   exit 1
 }
 test "$synthetic_charge_limit" = $((monitor_probe_limit * monitor_probe_charge_limit)) || {
   printf 'runtime oracle: synthetic charge envelope is not derived from probe bounds\n' >&2
   exit 1
 }
-test "$max_agent_probe_count" = 35 && test "$max_goal_probe_count" = 34 &&
-    test "$max_agent_probe_count" = $((scenario_episode_count *
-      (open_attention_turn_limit + 1) * agent_probe_per_turn_limit +
-      agent_probe_per_turn_limit)) &&
-    test "$monitor_probe_limit" -ge $((max_agent_probe_count + max_goal_probe_count)) || {
-  printf 'runtime oracle: probe budget does not cover the bounded attention schedule\n' >&2
+grep -Fqx -- $'\tmaxSyntheticProbes          = world.MonitorProbeLimit' \
+  "$harness_root/test/r7/domainops/trace/report_world.go" &&
+  grep -Fqx -- $'\tmaxSyntheticChargesPerProbe = world.MonitorProbeChargeLimit' \
+    "$harness_root/test/r7/domainops/trace/report_world.go" || {
+  printf 'runtime oracle: trace and world synthetic bounds diverged\n' >&2
   exit 1
 }
 test "$scenario_customer_receipt_limit" = 32 &&
@@ -80,15 +85,23 @@ if printf '%s\n' "$consolidation_source" |
   printf 'runtime oracle: consolidation deletes its frozen authority\n' >&2
   exit 1
 fi
+boundary_source=$(declare -f capture_evolution_boundary)
+printf '%s\n' "$boundary_source" |
+  grep -F -- 'chmod -R a-w "$runtime_root/runtime-restart-state"' >/dev/null || {
+  printf 'runtime oracle: episode boundary is not frozen before restart\n' >&2
+  exit 1
+}
 restart_source=$(declare -f restart_agent_runtimes)
 if printf '%s\n' "$restart_source" |
-    grep -F -- 'rm -rf -- "$runtime_root/runtime-restart-state"' >/dev/null; then
-  printf 'runtime oracle: restart deletes independent boundary authority\n' >&2
+    grep -E -- '(rm|mv|chmod|chown|docker cp)[^\n]*\$snapshot' >/dev/null; then
+  printf 'runtime oracle: restart mutates independent boundary authority\n' >&2
   exit 1
 fi
 printf '%s\n' "$restart_source" |
-  grep -F -- 'chmod -R a-w "$runtime_root/runtime-restart-state"' >/dev/null || {
-  printf 'runtime oracle: restart does not freeze independent boundary authority\n' >&2
+  grep -F -- 'cp -R "$snapshot/." "$restore"' >/dev/null &&
+  printf '%s\n' "$restart_source" |
+    grep -F -- 'tar -C "$restore" -cf - . | docker exec -i "$container"' >/dev/null || {
+  printf 'runtime oracle: restart does not restore from a disposable unprivileged copy\n' >&2
   exit 1
 }
 
@@ -129,6 +142,12 @@ assert_domain_projection_boundary() {
   printf '%s\n' "$pi_source" | grep -F -- \
     '--tools bash,delegate,mnemond_current,mnemond_submit' >/dev/null || {
     printf 'runtime oracle: domainops Pi does not expose the exact bounded exploration and settlement surface\n' >&2
+    exit 1
+  }
+  test "$(printf '%s\n' "$pi_source" | grep -Fc -- '--thinking "$thinking"')" = 1 &&
+    test "$(printf '%s\n' "$pi_source" |
+      grep -Fc -- 'pi-turn-wrapper "$pid_file" "$pi_model" "$pi_thinking"')" = 1 || {
+    printf 'runtime oracle: Pi reasoning level is not passed through one closed argument\n' >&2
     exit 1
   }
 
@@ -826,7 +845,7 @@ write_domain_observation_stream() {
   jq -nc '{type:"agent_end"}' >>"$destination"
 }
 
-write_probe_overflow_stream() {
+write_repeated_probe_stream() {
   local destination=$1 index
   jq -nc '{type:"message_start",message:{role:"custom",customType:"mnemond"}}' \
     >"$destination"
@@ -940,15 +959,16 @@ write_sequential_submit_stream() {
 write_sanitizer_stream stop "$scratch/stop.jsonl"
 sanitize_turn lead oracle "$scratch/stop.jsonl" "$scratch/stop.json"
 test "$(jq '.delegate_calls' "$scratch/stop.json")" = 0
-root_view='{"schema":"mnemon.agent.view","version":6,"view":"view:root-secret","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}'
-current_view='{"schema":"mnemon.agent.view","version":6,"view":"view:current-secret","current":{"facts":{"handle":"handling:secret","reply_to":"event:secret","reply_required":true,"reply_target":"peer-secret"},"semantic":{"kind":"secret.kind","payload":"secret payload"}},"related":[{"facts":{"event":"event:related-secret","relation":"correlation"},"semantic":{"kind":"secret.related","payload":"related secret"}}],"outstanding":{"open_total":3,"related_total":2,"related_projected":1,"truncated":true},"allowed_intents":[]}'
+root_view='{"schema":"mnemon.agent.view","version":7,"view":"view:root-secret","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}'
+current_view='{"schema":"mnemon.agent.view","version":7,"view":"view:current-secret","current":{"facts":{"handle":"handling:secret","reply_to":"event:secret","reply_required":true,"reply_target":"peer-secret","reply_observation_pending":true},"semantic":{"kind":"secret.kind","payload":"secret payload"}},"related":[{"facts":{"event":"event:related-secret","relation":"correlation"},"semantic":{"kind":"secret.related","payload":"related secret"}}],"outstanding":{"open_total":3,"related_total":2,"related_projected":1,"truncated":true},"allowed_intents":[]}'
 full_view=$(jq -nc --arg digest \
   'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' '
   {
-    schema:"mnemon.agent.view",version:6,view:"view:full-secret",
+    schema:"mnemon.agent.view",version:7,view:"view:full-secret",
     current:{
       facts:{handle:"handling:full-secret",reply_to:"event:full-secret",
-        reply_required:false,artifacts:[{digest:$digest,handle:"artifact:current-secret"}]},
+        reply_required:false,reply_observation_pending:false,
+        artifacts:[{digest:$digest,handle:"artifact:current-secret"}]},
       semantic:{kind:"secret.current",payload:"current secret"}
     },
     related:[{
@@ -991,7 +1011,8 @@ write_current_stream "$scratch/full-view.jsonl" "$full_view"
 sanitize_turn lead oracle-full-view "$scratch/full-view.jsonl" "$scratch/full-view.json"
 jq -e '
   .current_reads == 1 and .view == {
-    has_current:true,reply_required:false,open_total:1,related_total:2,
+    has_current:true,reply_required:false,reply_observation_pending:false,
+    open_total:1,related_total:2,
     related_projected:1,truncated:true
   }
 ' "$scratch/full-view.json" >/dev/null
@@ -1000,7 +1021,8 @@ sanitize_turn lead oracle-native-current "$scratch/native-current-view.jsonl" \
   "$scratch/native-current-view.json"
 jq -e '
   .bash_calls == 0 and .current_reads == 2 and .view == {
-    has_current:true,reply_required:false,open_total:1,related_total:2,
+    has_current:true,reply_required:false,reply_observation_pending:false,
+    open_total:1,related_total:2,
     related_projected:1,truncated:true
   }
 ' "$scratch/native-current-view.json" >/dev/null
@@ -1030,7 +1052,8 @@ sanitize_turn lead oracle-mixed-current-surfaces \
   "$scratch/mixed-current-surfaces.jsonl" "$scratch/mixed-current-surfaces.json"
 jq -e '
   .current_reads == 1 and .view == {
-    has_current:true,reply_required:false,open_total:1,related_total:2,
+    has_current:true,reply_required:false,reply_observation_pending:false,
+    open_total:1,related_total:2,
     related_projected:1,truncated:true
   }
 ' "$scratch/mixed-current-surfaces.json" >/dev/null
@@ -1135,7 +1158,8 @@ sanitize_turn lead oracle-current-view "$scratch/current-view.jsonl" \
   "$scratch/current-view.json"
 jq -e '
   .current_reads == 2 and .view == {
-    has_current:true,reply_required:true,open_total:3,related_total:2,
+    has_current:true,reply_required:true,reply_observation_pending:true,
+    open_total:3,related_total:2,
     related_projected:1,truncated:true
   }
 ' "$scratch/current-view.json" >/dev/null
@@ -1170,12 +1194,15 @@ jq -e '
       batched_unattributed:1}
   }
 ' "$scratch/domain-observations.json" >/dev/null
-write_probe_overflow_stream "$scratch/domain-probe-overflow.jsonl"
-if sanitize_turn lead oracle-domain-probe-overflow \
-    "$scratch/domain-probe-overflow.jsonl" "$scratch/domain-probe-overflow.json"; then
-  printf 'runtime oracle: one Agent turn exceeded its real probe budget\n' >&2
+write_repeated_probe_stream "$scratch/domain-repeated-probes.jsonl"
+sanitize_turn lead oracle-domain-repeated-probes \
+  "$scratch/domain-repeated-probes.jsonl" "$scratch/domain-repeated-probes.json"
+jq -e '.domain_operations.probe ==
+  {attempts:2,successes:2,tool_errors:0,invalid_results:0,batched_unattributed:0}' \
+  "$scratch/domain-repeated-probes.json" >/dev/null || {
+  printf 'runtime oracle: repeated probes lost bounded outcome accounting\n' >&2
   exit 1
-fi
+}
 printf '%s\n' '[{"id":"event:before","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]' \
   >"$scratch/events-before.json"
 printf '%s\n' '[{"id":"event:before","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"id":"event:new","digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]' \
@@ -1224,6 +1251,18 @@ jq -e '
   ] and
   .assistant_stop_reasons == ["stop"]
 ' <<<"$partial" >/dev/null
+printf '%s\n' \
+  '{"type":"tool_execution_start","toolName":"bash","toolCallId":"read","args":{"command":"domainctl status"}}' \
+  '{"type":"tool_execution_start","toolName":"bash","toolCallId":"probe","args":{"command":"domainctl probe"}}' \
+  '{"type":"tool_execution_start","toolName":"bash","toolCallId":"mutation","args":{"command":"domainctl action /admin/config {}"}}' \
+  >"$scratch/partial-domain-operations.jsonl"
+domain_partial=$(summarize_partial_turn "$scratch/partial-domain-operations.jsonl")
+jq -e '.domain_calls == 3 and
+  .domain_invocations == {read:1,probe:1,mutation:1}' \
+  <<<"$domain_partial" >/dev/null || {
+  printf 'runtime oracle: partial diagnostics lost domain operation classes\n' >&2
+  exit 1
+}
 printf '%s' 'HTTP 503 provider unavailable' >"$scratch/provider.err"
 provider_error=$(summarize_provider_stderr "$scratch/provider.err")
 jq -e '

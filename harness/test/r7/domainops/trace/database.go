@@ -17,7 +17,7 @@ import (
 
 const (
 	authorityApplicationID = 0x4d4e5237
-	authoritySchemaVersion = 11
+	authoritySchemaVersion = 12
 )
 
 type evidence struct {

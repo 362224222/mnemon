@@ -9,7 +9,7 @@ const extensionPath = process.env.MNEMON_PI_CURRENT_EXTENSION;
 if (!extensionPath) throw new Error("MNEMON_PI_CURRENT_EXTENSION is required");
 const { default: currentExtension } = await import(extensionPath);
 
-const view = '{"schema":"mnemon.agent.view","version":6,"view":"view:test",' +
+const view = '{"schema":"mnemon.agent.view","version":7,"view":"view:test",' +
   '"outstanding":{"open_total":0,"related_total":0,"related_projected":0,' +
   '"truncated":false},"allowed_intents":[]}';
 
@@ -21,9 +21,13 @@ async function withFakeHarness(fn) {
   const oldLog = process.env.MNEMON_CURRENT_LOG;
   const oldOutput = process.env.MNEMON_CURRENT_OUTPUT;
   const oldFail = process.env.MNEMON_CURRENT_FAIL;
+  const oldFailOnce = process.env.MNEMON_CURRENT_FAIL_ONCE;
+  const oldAttempts = process.env.MNEMON_CURRENT_ATTEMPTS;
   const oldHang = process.env.MNEMON_CURRENT_HANG;
   const oldPid = process.env.MNEMON_CURRENT_PID;
-  await writeFile(executable, '#!/bin/sh\ninput=$(cat)\n' +
+  await writeFile(executable, '#!/bin/sh\ninput=$(cat)\nattempt=0\n' +
+    'test ! -f "$MNEMON_CURRENT_ATTEMPTS" || attempt=$(cat "$MNEMON_CURRENT_ATTEMPTS")\n' +
+    'attempt=$((attempt + 1))\nprintf "%s\\n" "$attempt" >"$MNEMON_CURRENT_ATTEMPTS"\n' +
     'printf "%s|%s\\n" "$*" "${#input}" >>"$MNEMON_CURRENT_LOG"\n' +
     'if test "${MNEMON_CURRENT_HANG:-0}" = 1; then\n' +
     '  trap "" TERM\n' +
@@ -31,13 +35,16 @@ async function withFakeHarness(fn) {
     '  mkfifo "$MNEMON_CURRENT_PID.pipe"\n' +
     '  read ignored <"$MNEMON_CURRENT_PID.pipe"\n' +
     'fi\n' +
+    'if test "${MNEMON_CURRENT_FAIL_ONCE:-0}" = 1 && test "$attempt" = 1; then exit 1; fi\n' +
     'printf "%s" "$MNEMON_CURRENT_OUTPUT"\n' +
     'test "${MNEMON_CURRENT_FAIL:-0}" != 1\n');
   await chmod(executable, 0o755);
   process.env.PATH = `${directory}:${oldPath ?? ""}`;
   process.env.MNEMON_CURRENT_LOG = log;
+  process.env.MNEMON_CURRENT_ATTEMPTS = path.join(directory, "attempts");
   process.env.MNEMON_CURRENT_OUTPUT = `${view}\n`;
   delete process.env.MNEMON_CURRENT_FAIL;
+  delete process.env.MNEMON_CURRENT_FAIL_ONCE;
   delete process.env.MNEMON_CURRENT_HANG;
   delete process.env.MNEMON_CURRENT_PID;
   try {
@@ -51,6 +58,10 @@ async function withFakeHarness(fn) {
     else process.env.MNEMON_CURRENT_OUTPUT = oldOutput;
     if (oldFail === undefined) delete process.env.MNEMON_CURRENT_FAIL;
     else process.env.MNEMON_CURRENT_FAIL = oldFail;
+    if (oldFailOnce === undefined) delete process.env.MNEMON_CURRENT_FAIL_ONCE;
+    else process.env.MNEMON_CURRENT_FAIL_ONCE = oldFailOnce;
+    if (oldAttempts === undefined) delete process.env.MNEMON_CURRENT_ATTEMPTS;
+    else process.env.MNEMON_CURRENT_ATTEMPTS = oldAttempts;
     if (oldHang === undefined) delete process.env.MNEMON_CURRENT_HANG;
     else process.env.MNEMON_CURRENT_HANG = oldHang;
     if (oldPid === undefined) delete process.env.MNEMON_CURRENT_PID;
@@ -92,7 +103,7 @@ function fakePi() {
   return { tool, toolResult };
 }
 
-test("native Current executes one fixed argv and returns one View v6", async () => {
+test("native Current executes one fixed argv and returns one View v7", async () => {
   await withFakeHarness(async ({ log }) => {
     const runtime = fakePi();
     assert.equal(runtime.tool.name, "mnemond_current");
@@ -114,6 +125,22 @@ test("native Current executes one fixed argv and returns one View v6", async () 
   });
 });
 
+test("native Current internally replays one journaled operation after transport failure", async () => {
+  await withFakeHarness(async ({ log }) => {
+    const runtime = fakePi();
+    process.env.MNEMON_CURRENT_FAIL_ONCE = "1";
+    const result = await runtime.tool.execute(
+      "current-replay", {}, new AbortController().signal,
+    );
+    assert.equal(result.details.status, "projected");
+    assert.equal(result.content[0].text, view);
+    assert.deepEqual((await readFile(log, "utf8")).trim().split("\n"), [
+      "agent current --json|0",
+      "agent current --json|0",
+    ]);
+  });
+});
+
 test("native Current fails closed on parameters, framing, schema, and process failure", async () => {
   await withFakeHarness(async ({ log }) => {
     const runtime = fakePi();
@@ -126,9 +153,9 @@ test("native Current fails closed on parameters, framing, schema, and process fa
       '{}\n',
       '{"schema":"mnemon.agent.view","version":5,"view":"view:test"}\n',
       `${view}\n${view}\n`,
-      '{"schema":"mnemon.agent.view","version":6,"view":"view:test"\n',
+      '{"schema":"mnemon.agent.view","version":7,"view":"view:test"\n',
       `${JSON.stringify({
-        schema: "mnemon.agent.view", version: 6, view: "x".repeat(16 << 10),
+        schema: "mnemon.agent.view", version: 7, view: "x".repeat(16 << 10),
       })}\n`,
     ]) {
       process.env.MNEMON_CURRENT_OUTPUT = output;
@@ -148,7 +175,7 @@ test("native Current fails closed on parameters, framing, schema, and process fa
     assert.deepEqual(await runtime.toolResult({
       toolName: "mnemond_current", details: { schema: "wrong", version: 1, status: "projected" },
     }), { isError: true });
-    assert.equal((await readFile(log, "utf8")).trim().split("\n").length, 6);
+    assert.equal((await readFile(log, "utf8")).trim().split("\n").length, 12);
   });
 });
 

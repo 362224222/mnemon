@@ -197,6 +197,34 @@ type terminalObservationCandidate struct {
 	outcome agency.AgentViewTerminalOutcome
 }
 
+// replyObservationPendingTx projects whether one current requester anchor has
+// any ordinary outbound reply binding for which no exact terminal observation
+// has yet been accepted. Delivery settlement is deliberately irrelevant: an
+// ACK is not a reply, and this read-only fact neither changes Handling state
+// nor removes any offered subject consequence.
+func replyObservationPendingTx(ctx context.Context, tx *sql.Tx,
+	anchor agency.HandlingID,
+) (bool, error) {
+	if anchor.IsZero() {
+		return false, errors.New("current View: reply observation anchor is required")
+	}
+	var pending int
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM peer_outbox outbound
+		WHERE outbound.reply_anchor_handling_id = ?
+		AND NOT EXISTS(
+			SELECT 1 FROM peer_inbox inbox
+			WHERE inbox.in_reply_to_delivery_id = outbound.delivery_id
+			AND inbox.local_event_id IS NOT NULL))`, anchor.String()).Scan(&pending)
+	if err != nil {
+		return false, fmt.Errorf("current View: inspect pending reply observation: %w", err)
+	}
+	if pending != 0 && pending != 1 {
+		return false, errors.New("current View: corrupt pending reply observation")
+	}
+	return pending == 1, nil
+}
+
 func loadTerminalObservationCandidatesTx(ctx context.Context, tx *sql.Tx,
 	anchor agency.HandlingID,
 ) ([]terminalObservationCandidate, error) {

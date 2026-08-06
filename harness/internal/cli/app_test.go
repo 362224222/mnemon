@@ -88,7 +88,7 @@ func (client *fakeAgencyClient) Current(_ context.Context, _ attachment,
 	if len(client.currentView) > 0 {
 		return append([]byte(nil), client.currentView...), nil
 	}
-	return []byte(`{"schema":"mnemon.agent.view","version":6,"view":"view:test","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}`), nil
+	return []byte(`{"schema":"mnemon.agent.view","version":7,"view":"view:test","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}`), nil
 }
 
 func (client *fakeAgencyClient) Submit(_ context.Context, _ attachment,
@@ -252,7 +252,7 @@ func TestAgentCurrentReadsViewAfterAttach(t *testing.T) {
 	exit := fixture.app(strings.NewReader(""), &output).
 		Run(context.Background(), []string{"agent", "current", "--json"})
 	if exit != 0 || output.String() !=
-		`{"schema":"mnemon.agent.view","version":6,"view":"view:test","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}`+"\n" {
+		`{"schema":"mnemon.agent.view","version":7,"view":"view:test","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}`+"\n" {
 		t.Fatalf("R7 current = exit %d output %q", exit, output.String())
 	}
 }
@@ -386,8 +386,8 @@ func TestHookAttachNewBoundaryEndsPredecessorAndRotatesEmptyCurrent(t *testing.T
 
 func TestHookAttachKeepsCurrentThatOwnsAHandling(t *testing.T) {
 	fixture := newAppFixture(t)
-	fixture.client.currentView = []byte(`{"schema":"mnemon.agent.view","version":6,` +
-		`"view":"view:test","current":{"facts":{"handle":"r7:subject:test","reply_to":"r7:subject:test","reply_required":false},` +
+	fixture.client.currentView = []byte(`{"schema":"mnemon.agent.view","version":7,` +
+		`"view":"view:test","current":{"facts":{"handle":"r7:subject:test","reply_to":"r7:subject:test","reply_required":false,"reply_observation_pending":false},` +
 		`"semantic":{"kind":"review.request","payload":"review"}},` +
 		`"outstanding":{"open_total":1,"related_total":0,"related_projected":0,"truncated":false},` +
 		`"allowed_intents":[]}`)

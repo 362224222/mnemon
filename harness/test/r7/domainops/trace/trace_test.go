@@ -231,6 +231,14 @@ func TestValidateReportRequiresAllIndependentGates(t *testing.T) {
 	}
 }
 
+func TestValidateReportRequiresSupportedThinkingLevel(t *testing.T) {
+	report := validReport()
+	report.Thinking = "unsupported"
+	if err := validateReport(report); err == nil {
+		t.Fatal("validateReport() accepted an unsupported thinking level")
+	}
+}
+
 func TestWriteTraceKeepsRuntimeAndAuthorityEvidenceSeparate(t *testing.T) {
 	report := validReport()
 	rootDigest := agency.Sum([]byte("root Event")).String()
@@ -409,6 +417,11 @@ func TestFailureReportRejectsProviderMaterialAndNoncanonicalOutcome(t *testing.T
 	if err := validateFailureReport(report); err != nil {
 		t.Fatalf("validateFailureReport() error = %v", err)
 	}
+	report.Thinking = "unsupported"
+	if err := validateFailureReport(report); err == nil {
+		t.Fatal("failure report accepted an unsupported thinking level")
+	}
+	report = validFailureReport()
 	report.RawProviderStreamsRetained = true
 	if err := validateFailureReport(report); err == nil {
 		t.Fatal("failure report retained provider streams")
@@ -540,7 +553,7 @@ func createAuthorityFixture(t *testing.T) string {
 	db := openFixture(t, path)
 	schema := `
 PRAGMA application_id = 1296978487;
-PRAGMA user_version = 11;
+PRAGMA user_version = 12;
 CREATE TABLE events(event_id TEXT PRIMARY KEY,event_digest TEXT,origin_sequence INTEGER,
  source_principal_id TEXT,request_digest TEXT,causal_depth INTEGER,accepted_at TEXT,canonical_json BLOB);
 CREATE TABLE verified_artifacts(digest TEXT PRIMARY KEY,byte_size INTEGER,verified_at TEXT);
@@ -627,8 +640,9 @@ func readRequiredFile(t *testing.T, path string) []byte {
 
 func validReport() liveReport {
 	var report liveReport
-	report.Schema, report.Version, report.Status = "mnemon.r7.domain-ops.live-report", 6, "passed"
+	report.Schema, report.Version, report.Status = "mnemon.r7.domain-ops.live-report", 7, "passed"
 	report.Model = "deepseek-v4-flash"
+	report.Thinking = "high"
 	report.Run = runReport{ID: "domain-ops-test", StartedAt: "2026-08-04T01:00:00Z",
 		FinishedAt: "2026-08-04T01:01:00Z", CandidateDigest: agency.Sum([]byte("candidate")).String()}
 	report.Isolation.Passed = true
@@ -724,8 +738,9 @@ func populateValidEvolution(report *liveReport) {
 func validFailureReport() failureReport {
 	var report failureReport
 	report.Schema, report.Version, report.Status =
-		"mnemon.r7.domain-ops.failure-report", 6, "failed"
+		"mnemon.r7.domain-ops.failure-report", 7, "failed"
 	report.Model = "deepseek-v4-flash"
+	report.Thinking = "high"
 	report.Run = runReport{ID: "domain-ops-failed", StartedAt: "2026-08-04T01:00:00Z",
 		FinishedAt:      "2026-08-04T01:01:00Z",
 		CandidateDigest: agency.Sum([]byte("candidate")).String()}

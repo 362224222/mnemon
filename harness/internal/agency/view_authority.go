@@ -1,6 +1,6 @@
 package agency
 
-const viewAuthorityVersion = 5
+const viewAuthorityVersion = 6
 
 // MachineViewSpec is the complete machine-owned authority behind one bounded
 // Agent View. Its typed offers prevent an opaque handle from being repurposed
@@ -14,8 +14,12 @@ type MachineViewSpec struct {
 	ReplyTo       OpaqueHandle
 	ReplyTarget   TargetRef
 	ReplyDelivery DeliveryID
-	Artifacts     []ViewArtifactOffer
-	Provenance    []ProvenanceOffer
+	// ReplyObservationPending is a machine-derived fact about the current
+	// subject's existing outbound reply bindings. It grants no reply authority
+	// and does not constrain which offered subject consequence may be selected.
+	ReplyObservationPending bool
+	Artifacts               []ViewArtifactOffer
+	Provenance              []ProvenanceOffer
 }
 
 // ViewAuthority seals an exact Attachment and the read-set projected at that
@@ -23,18 +27,19 @@ type MachineViewSpec struct {
 // envelope while binding the stable Principal, initiation authority, and all
 // typed offers.
 type ViewAuthority struct {
-	attachment    Attachment
-	consequences  map[Consequence]struct{}
-	subjects      map[string]SubjectBinding
-	references    map[string]ReferenceExpectation
-	targets       map[string]ResolvedTarget
-	replyTo       OpaqueHandle
-	replyTarget   TargetRef
-	replyDelivery DeliveryID
-	artifacts     map[string]ViewArtifactOffer
-	provenance    map[string]EventRef
-	canonical     []byte
-	digest        Digest
+	attachment              Attachment
+	consequences            map[Consequence]struct{}
+	subjects                map[string]SubjectBinding
+	references              map[string]ReferenceExpectation
+	targets                 map[string]ResolvedTarget
+	replyTo                 OpaqueHandle
+	replyTarget             TargetRef
+	replyDelivery           DeliveryID
+	replyObservationPending bool
+	artifacts               map[string]ViewArtifactOffer
+	provenance              map[string]EventRef
+	canonical               []byte
+	digest                  Digest
 }
 
 func NewViewAuthority(spec MachineViewSpec) (ViewAuthority, error) {
@@ -121,6 +126,10 @@ func (view *ViewAuthority) load(spec MachineViewSpec) error {
 		spec.ReplyTarget, spec.ReplyDelivery, view.subjects, view.targets, view.provenance); err != nil {
 		return err
 	}
+	if spec.ReplyObservationPending && len(view.subjects) != 1 {
+		return invalid("View reply observation", "pending state requires one current subject")
+	}
+	view.replyObservationPending = spec.ReplyObservationPending
 	return nil
 }
 

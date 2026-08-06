@@ -88,6 +88,11 @@ func projectViewContentTx(ctx context.Context, tx *sql.Tx, principal agency.Agen
 		if err != nil {
 			return err
 		}
+		spec.ReplyObservationPending, err = replyObservationPendingTx(ctx, tx,
+			claim.handlingID)
+		if err != nil {
+			return err
+		}
 		spec.ReplyTarget = reply.target
 		spec.ReplyDelivery = reply.delivery
 		if err := projectClaim(claim, reply.root, spec, publicSpec); err != nil {

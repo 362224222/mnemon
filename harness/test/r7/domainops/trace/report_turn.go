@@ -29,6 +29,7 @@ type turnSummary struct {
 type agentViewSummary struct {
 	HasCurrent       bool  `json:"has_current"`
 	ReplyRequired    *bool `json:"reply_required,omitempty"`
+	ReplyPending     *bool `json:"reply_observation_pending,omitempty"`
 	OpenTotal        int   `json:"open_total"`
 	RelatedTotal     int   `json:"related_total"`
 	RelatedProjected int   `json:"related_projected"`

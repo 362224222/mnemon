@@ -102,6 +102,12 @@ receipts retain exactly their acknowledged active capture, failed receipts leave
 no active capture, and all other side effects remain explicit void records. Its
 pre-reconciliation observation remains visible to the caller, while independent
 fresh production traffic—not probe cleanup—decides whether the incident is fixed.
+Probe attempts remain visible in the turn evidence, but do not retroactively
+invalidate an otherwise valid Event. The Monitor rejects work beyond its global
+128-probe physical budget before another checkout begins; this is the resource
+authority, rather than a prompt convention or a post-effect per-turn predicate.
+Agent and runner observations share that single budget; no hidden reserve exists,
+and exhaustion is a closed scenario failure rather than an inferred success.
 Pi runs with a fresh process and no session for every attention opportunity,
 while the five mnemond authority stores and their References survive both
 episodes. Before Episode 2, all five Runtime containers and writable workspaces
@@ -111,6 +117,13 @@ only Lead gets one additional neutral attention opportunity. It receives no
 diagnosis or instruction to publish; it can only re-observe its own now-updated
 service and decide whether anything is worth retaining before the authority
 boundary is captured.
+
+The paid runner pins Pi 0.83.0 and defaults to DeepSeek V4 Flash with its
+bounded `high` reasoning mode. `DOMAIN_OPS_PI_MODEL` and
+`DOMAIN_OPS_PI_THINKING` may select another explicit cohort, but the runner
+validates the model label and the closed Pi reasoning-level vocabulary before
+starting any container. Reasoning remains Runtime-private and cannot alter the
+View, Event, admission, or Receipt contract.
 
 Every Runtime prompt also states the generic attention contract: one
 opportunity does not own the whole workflow, may commit at most one accepted
@@ -125,7 +138,7 @@ The oracle never inspects Reference bytes, Event kind, diagnosis wording, peer
 order, or repair configuration, and it does not claim that a retained Reference
 improved the later diagnosis or recovery.
 
-The gateway retains only its 128 most recent completed request observations.
+The gateway retains only its 192 most recent completed request observations.
 This edge-owned surface records the business ID, selected route, outcome, and
 the capture ID actually returned to the caller. It does not expose downstream
 attempts, infer a root cause, prescribe a repair, or grant ledger authority.

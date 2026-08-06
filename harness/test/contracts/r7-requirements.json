@@ -13,6 +13,10 @@
           "test": "./internal/authority::TestPeerDeliveryRoundTripUsesTwoLocalAdmissions"
         },
         {
+          "id": "pending-reply-observation-is-machine-derived",
+          "test": "./internal/authority::TestCurrentProjectsPendingReplyObservationAfterRemoteRoot"
+        },
+        {
           "id": "related-evidence-is-provenance-only",
           "test": "./internal/agency::TestAgentViewProjectsRelatedEvidenceWithoutWritableSubjectAuthority"
         },
@@ -250,6 +254,14 @@
           "test": "./internal/authority::TestPeerRouteProjectionIsScopedToAttachmentPrincipal"
         },
         {
+          "id": "pending-reply-observation-clears-after-exact-terminal-observation",
+          "test": "./internal/authority::TestPendingReplyObservationClearsAfterExactTerminalObservation"
+        },
+        {
+          "id": "pending-reply-observation-survives-settlement-and-local-advance",
+          "test": "./internal/authority::TestPendingReplyObservationSurvivesDeliverySettlementAndLocalAdvance"
+        },
+        {
           "id": "remote-failure-preserves-origin-anchor",
           "test": "./internal/authority::TestRemoteRejectionAndExpiryLeaveOriginAnchorOpen"
         },
@@ -437,6 +449,10 @@
           "test": "./internal/agency::TestVerifiedPeerArtifactBounds"
         },
         {
+          "id": "pending-reply-observation-query-is-anchor-bounded",
+          "test": "./internal/authority::TestPendingReplyObservationUsesAnchorIndex"
+        },
+        {
           "id": "pi-effect-settlement-is-fixed-and-no-shell",
           "test": "./internal/attach::TestPiEffectSettlementUsesOneNativeBoundedToolWithoutShellInference"
         },
@@ -472,6 +488,10 @@
         {
           "id": "completion-requires-verified-artifact",
           "test": "./internal/authority::TestLocalHandlingLoopRejectsStaleFenceAndRequiresArtifactForCompleted"
+        },
+        {
+          "id": "pending-reply-observation-does-not-prohibit-explicit-resolution",
+          "test": "./internal/authority::TestExplicitResolveRemainsLegalWithPendingReplyObservation"
         },
         {
           "id": "runtime-observations-cannot-complete",
@@ -655,10 +675,12 @@
             "test:./internal/authority::TestCurrentLeastAttendedSelectionSurvivesBoundaryWithoutAdvance",
             "test:./internal/authority::TestCurrentNeverClaimsAnotherPrincipalsHandling",
             "test:./internal/authority::TestCurrentOperationReplaysFrozenViewAfterRestartAndExpiry",
+            "test:./internal/authority::TestCurrentProjectsPendingReplyObservationAfterRemoteRoot",
             "test:./internal/authority::TestCurrentRejectsExpiredAndWrongAttachmentProof",
             "test:./internal/authority::TestEndInteractiveAttachmentFaultRollsBackEndAndClaim",
             "test:./internal/authority::TestEndInteractiveAttachmentRacesAdmissionWithoutPartialEffect",
             "test:./internal/authority::TestEndInteractiveAttachmentReleasesClaimWithoutDomainEffect",
+            "test:./internal/authority::TestExplicitResolveRemainsLegalWithPendingReplyObservation",
             "test:./internal/authority::TestFocusProjectionUsesDeterministicBoundedPrefixAndPayloadBudget",
             "test:./internal/authority::TestFreshBoundaryAtomicallyReplacesPredecessorWithoutDomainEffect",
             "test:./internal/authority::TestFreshCurrentDurablySettlesExpiredClaimWithoutDomainEffect",
@@ -676,6 +698,9 @@
             "test:./internal/authority::TestPeerDeliveryRoundTripUsesTwoLocalAdmissions",
             "test:./internal/authority::TestPeerInboxRejectsSameDeliveryIDDifferentEnvelope",
             "test:./internal/authority::TestPeerRouteProjectionIsScopedToAttachmentPrincipal",
+            "test:./internal/authority::TestPendingReplyObservationClearsAfterExactTerminalObservation",
+            "test:./internal/authority::TestPendingReplyObservationSurvivesDeliverySettlementAndLocalAdvance",
+            "test:./internal/authority::TestPendingReplyObservationUsesAnchorIndex",
             "test:./internal/authority::TestReferenceCanRetractThenSupersedeTombstone",
             "test:./internal/authority::TestReferenceCitationRecordsExactHeadWithoutMutatingLineage",
             "test:./internal/authority::TestReferenceExistingHeadCASRejectsStaleMutation",

@@ -55,7 +55,7 @@ func projectTestRuntime(t *testing.T) string {
 			Mutation: domainOperationSummary{Attempts: 1, ToolErrors: 1},
 		},
 		DelegateCalls: 1, CurrentReads: 1, View: &agentViewSummary{
-			HasCurrent: true, ReplyRequired: boolPointer(true), OpenTotal: 1,
+			HasCurrent: true, ReplyRequired: boolPointer(true), ReplyPending: boolPointer(false), OpenTotal: 1,
 			RelatedTotal: 65, RelatedProjected: 1, Truncated: true,
 		}, SubmitAttempts: 2, IntentSubmits: 1,
 		SubmitDenials: 1, SubmitControlDenials: []controlDenial{{
@@ -214,6 +214,15 @@ func TestTurnSummaryFailsClosedOnUnsafeObservationCounts(t *testing.T) {
 				t.Fatal("validateTurnSummary() accepted unsafe observations")
 			}
 		})
+	}
+}
+
+func TestTurnSummaryAcceptsNativeCurrentWithoutBash(t *testing.T) {
+	turn := turnSummary{Role: "lead", Turn: "native-current-only",
+		CapturedAt: "2026-08-04T01:01:00Z", HookCues: 1, CurrentReads: 1,
+		View: &agentViewSummary{}, AgentEnd: true}
+	if err := validateTurnSummary(turn); err != nil {
+		t.Fatalf("validateTurnSummary() rejected native Current without Bash: %v", err)
 	}
 }
 
