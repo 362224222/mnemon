@@ -52,8 +52,9 @@ assert_domain_projection_boundary() {
     printf 'runtime oracle: domainops Pi lacks the bounded delegate extension\n' >&2
     exit 1
   }
-  printf '%s\n' "$pi_source" | grep -F -- '--tools bash,delegate' >/dev/null || {
-    printf 'runtime oracle: domainops Pi does not expose the exact bounded tool surface\n' >&2
+  printf '%s\n' "$pi_source" | grep -F -- \
+    '--tools bash,delegate,mnemond_submit' >/dev/null || {
+    printf 'runtime oracle: domainops Pi does not expose the exact bounded exploration and settlement surface\n' >&2
     exit 1
   }
 

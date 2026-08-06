@@ -401,7 +401,8 @@ pi_process() {
       # place, while the wrapper explicitly owns and joins its lifetime.
       setsid pi --mode json --print --no-session --approve --no-prompt-templates --no-themes \
         --extension /opt/mnemon/pi-delegate/delegate.ts \
-        --provider deepseek --model "$model" --thinking off --tools bash,delegate \
+        --provider deepseek --model "$model" --thinking off \
+        --tools bash,delegate,mnemond_submit \
         @/workspace/.mnemon/live/turn-prompt.md &
       child=$!
       printf "%s\n" "$child" >"$pid_file"

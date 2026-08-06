@@ -48,6 +48,19 @@ printf '%s\n' "$attention_smoke" | grep -Eq \
   printf 'pi attention oracle: Pi rejected the attachment extension surface\n' >&2
   exit 1
 }
+combined_smoke=$(printf '%s\n' '{"id":"state","type":"get_state"}' |
+  docker run --rm -i --entrypoint pi \
+    --mount "type=bind,src=$attention_extension,dst=/attention-test/mnemond.ts,readonly" \
+    "$image" \
+    --mode rpc --no-session --no-extensions \
+    -e /opt/mnemon/pi-delegate/delegate.ts -e /attention-test/mnemond.ts \
+    --no-skills --no-prompt-templates --no-themes --no-context-files \
+    --tools bash,delegate,mnemond_submit --no-approve 2>/dev/null || true)
+printf '%s\n' "$combined_smoke" | grep -Eq \
+  '"id":"state".*"command":"get_state".*"success":true' || {
+  printf 'pi Runtime oracle: Pi rejected the combined extension load surface\n' >&2
+  exit 1
+}
 docker run --rm --entrypoint node \
   --mount "type=bind,src=$runtime_dir,dst=/delegate-test,readonly" \
   "$image" --experimental-strip-types /delegate-test/delegate.test.mjs
