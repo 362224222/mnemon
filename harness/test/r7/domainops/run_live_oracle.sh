@@ -148,6 +148,36 @@ SQL
 
 assert_generic_evolution_oracle
 
+assert_failure_world_boundary() {
+  local destination
+  runtime_root="$scratch/failure-world-runtime"
+  mkdir -p "$runtime_root"
+  cat >"$runtime_root/episode-1-incident-after.json" <<'JSON'
+{"role":"data","result":{"charges":8,"active_charges":8,"voided_charges":0,"unique_businesses":4,"duplicate_businesses":4,"ignored":"not retained"}}
+JSON
+  destination="$runtime_root/world.json"
+  collect_failure_world "$destination"
+  jq -e '
+    . == [{episode:"episode-1",charges:8,active_charges:8,voided_charges:0,
+      unique_businesses:4,duplicate_businesses:4}]
+  ' "$destination" >/dev/null
+  if grep -F 'ignored' "$destination" >/dev/null; then
+    printf 'runtime oracle: bounded failure world retained an unapproved field\n' >&2
+    exit 1
+  fi
+
+  cat >"$runtime_root/episode-2-incident-after.json" <<'JSON'
+{"role":"data","result":{"charges":8,"active_charges":7,"voided_charges":0,"unique_businesses":4,"duplicate_businesses":1}}
+JSON
+  if collect_failure_world "$runtime_root/invalid-world.json" >/dev/null 2>&1; then
+    printf 'runtime oracle: inconsistent failure world counts were accepted\n' >&2
+    exit 1
+  fi
+  runtime_root=
+}
+
+assert_failure_world_boundary
+
 write_attention_snapshot() {
   local output=$1 data_unseen=$2 platform_unseen=$3 active=${4:-0} role unseen
   : >"$output.jsonl"

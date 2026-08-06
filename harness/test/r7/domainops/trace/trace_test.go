@@ -412,6 +412,25 @@ func TestFailureReportRejectsProviderMaterialAndNoncanonicalOutcome(t *testing.T
 	}
 }
 
+func TestFailureWorldIsBoundedAndConservesCounts(t *testing.T) {
+	valid := []failureWorldSnapshot{{Episode: "episode-1", Charges: 8,
+		ActiveCharges: 8, UniqueBusinesses: 4, DuplicateBusinesses: 4}}
+	if err := validateFailureWorld(valid); err != nil {
+		t.Fatalf("validateFailureWorld() error = %v", err)
+	}
+
+	inconsistent := append([]failureWorldSnapshot(nil), valid...)
+	inconsistent[0].ActiveCharges = 7
+	if err := validateFailureWorld(inconsistent); err == nil {
+		t.Fatal("failure world accepted counts that do not conserve charges")
+	}
+
+	duplicate := append(append([]failureWorldSnapshot(nil), valid...), valid[0])
+	if err := validateFailureWorld(duplicate); err == nil {
+		t.Fatal("failure world accepted a duplicate episode")
+	}
+}
+
 func writeCandidateManifest(t *testing.T, path, digit string) {
 	t.Helper()
 	var manifest strings.Builder
@@ -706,7 +725,7 @@ func populateValidEvolution(report *liveReport) {
 func validFailureReport() failureReport {
 	var report failureReport
 	report.Schema, report.Version, report.Status =
-		"mnemon.r7.domain-ops.failure-report", 3, "failed"
+		"mnemon.r7.domain-ops.failure-report", 4, "failed"
 	report.Model = "deepseek-v4-flash"
 	report.Run = runReport{ID: "domain-ops-failed", StartedAt: "2026-08-04T01:00:00Z",
 		FinishedAt:      "2026-08-04T01:01:00Z",

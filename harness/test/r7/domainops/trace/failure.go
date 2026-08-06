@@ -21,9 +21,19 @@ type failureReport struct {
 		Code       string `json:"code"`
 		ObservedAt string `json:"observed_at"`
 	} `json:"failure"`
+	World                      []failureWorldSnapshot    `json:"world"`
 	FirstAttention             *firstAttentionSettlement `json:"first_attention"`
 	Turns                      []turnSummary             `json:"turns"`
 	RawProviderStreamsRetained bool                      `json:"raw_provider_streams_retained"`
+}
+
+type failureWorldSnapshot struct {
+	Episode             string `json:"episode"`
+	Charges             int    `json:"charges"`
+	ActiveCharges       int    `json:"active_charges"`
+	VoidedCharges       int    `json:"voided_charges"`
+	UniqueBusinesses    int    `json:"unique_businesses"`
+	DuplicateBusinesses int    `json:"duplicate_businesses"`
 }
 
 func loadFailureReport(path string) (failureReport, error) {
@@ -38,7 +48,7 @@ func loadFailureReport(path string) (failureReport, error) {
 }
 
 func validateFailureReport(report failureReport) error {
-	if report.Schema != "mnemon.r7.domain-ops.failure-report" || report.Version != 3 ||
+	if report.Schema != "mnemon.r7.domain-ops.failure-report" || report.Version != 4 ||
 		report.Status != "failed" || report.RawProviderStreamsRetained ||
 		report.Model == "" || report.Failure.Code == "" {
 		return errors.New("sanitized failure report has invalid identity or status")
@@ -67,7 +77,31 @@ func validateFailureReport(report failureReport) error {
 	if err := validateCompletedTurnSubset(report.Turns); err != nil {
 		return err
 	}
+	if err := validateFailureWorld(report.World); err != nil {
+		return err
+	}
 	return validateFailedFirstAttention(report.Failure.Code, report.FirstAttention, report.Turns)
+}
+
+func validateFailureWorld(values []failureWorldSnapshot) error {
+	if len(values) > 2 {
+		return errors.New("sanitized failure report contains too many world snapshots")
+	}
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if !slices.Contains([]string{"episode-1", "episode-2"}, value.Episode) ||
+			value.Charges < 0 || value.Charges > 1000000 || value.ActiveCharges < 0 ||
+			value.VoidedCharges < 0 || value.UniqueBusinesses < 0 ||
+			value.DuplicateBusinesses < 0 || value.ActiveCharges+value.VoidedCharges != value.Charges ||
+			value.UniqueBusinesses > value.Charges || value.DuplicateBusinesses > value.UniqueBusinesses {
+			return errors.New("sanitized failure report contains an invalid world snapshot")
+		}
+		if _, duplicate := seen[value.Episode]; duplicate {
+			return errors.New("sanitized failure report repeats a world snapshot")
+		}
+		seen[value.Episode] = struct{}{}
+	}
+	return nil
 }
 
 func validateCompletedTurnSubset(turns []turnSummary) error {

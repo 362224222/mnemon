@@ -1570,6 +1570,31 @@ episode_report_json() {
     '
 }
 
+collect_failure_world() {
+  local destination=$1 episode source staging
+  staging=$destination.jsonl
+  : >"$staging"
+  for episode in episode-1 episode-2; do
+    source="$runtime_root/$episode-incident-after.json"
+    test -s "$source" || continue
+    jq -ce --arg episode "$episode" '
+      select(.role == "data" and (.result | type) == "object") |
+      .result as $value |
+      [$value.charges,$value.active_charges,$value.voided_charges,
+       $value.unique_businesses,$value.duplicate_businesses] as $counts |
+      select(all($counts[]; type == "number" and floor == . and . >= 0 and . <= 1000000)) |
+      select($value.active_charges + $value.voided_charges == $value.charges) |
+      select($value.unique_businesses <= $value.charges) |
+      select($value.duplicate_businesses <= $value.unique_businesses) |
+      {episode:$episode,charges:$value.charges,active_charges:$value.active_charges,
+       voided_charges:$value.voided_charges,unique_businesses:$value.unique_businesses,
+       duplicate_businesses:$value.duplicate_businesses}
+    ' "$source" >>"$staging" || return 1
+  done
+  jq -s 'select(length <= 2)' "$staging" >"$destination" || return 1
+  test -s "$destination"
+}
+
 write_report() {
   local temporary total episodes evolution_total
   temporary="$runtime_root/report.json"
@@ -1662,6 +1687,7 @@ finalize_failure_evidence() {
     test "${#attention_files[@]}" -eq 1 || return 0
     first_attention=$(cat "${attention_files[0]}") || return 0
   fi
+  collect_failure_world "$runtime_root/failure-world.json" || return 0
   jq -n \
     --arg schema 'mnemon.r7.domain-ops.failure-report' \
     --arg model "$pi_model" \
@@ -1672,15 +1698,17 @@ finalize_failure_evidence() {
     --arg code "$code" \
     --arg observed_at "$observed_at" \
     --argjson first_attention "$first_attention" \
+    --argjson world "$(cat "$runtime_root/failure-world.json")" \
     --argjson turns "$completed_turns" '
       {
         schema:$schema,
-        version:3,
+        version:4,
         status:"failed",
         model:$model,
         run:{id:$run_id,started_at:$started_at,finished_at:$finished_at,
           candidate_digest:$candidate_digest},
         failure:{code:$code,observed_at:$observed_at},
+        world:$world,
         first_attention:$first_attention,
         turns:$turns,
         raw_provider_streams_retained:false
