@@ -17,12 +17,12 @@
 
 LLM agents forget everything between sessions. Context compaction drops critical decisions, cross-session knowledge vanishes, and long conversations push early information out of the window.
 
-Mnemon gives your agent persistent, cross-session memory — a four-graph knowledge store with intent-aware recall, importance decay, and automatic deduplication. Single binary, zero API keys, one setup command.
+Mnemon gives your agent persistent, cross-session memory — a four-graph knowledge store with intent-aware recall, importance decay, and automatic deduplication. The `mnemon` memory path remains one local binary with zero API keys and one setup command.
 
-> **Experimental beta:** this repository also includes `mnemon-harness`, a
-> source-built beta for project-local host-agent lifecycle state. It is separate
-> from the stable `mnemon` CLI, not production-ready, and may make breaking
-> changes at any time. See [harness/README.md](harness/README.md).
+Mnemon ships two product binaries with separate authority surfaces. `mnemon`
+remains the existing memory CLI. `mnemond` is the project-local Agency authority:
+it owns durable View → Intent → Receipt state under `.mnemon/agency` and the
+optional peer boundary. See the [mnemond Agency documentation](docs/mnemond/README.md).
 
 > **Claude Max / Pro subscriber?** Mnemon works entirely through your existing subscription — no separate API key required. Your LLM subscription *is* the intelligence layer. Two commands and you're done.
 
@@ -59,19 +59,25 @@ See [Design & Architecture](docs/DESIGN.md) for details.
 
 ### Install
 
-**Homebrew** (macOS / Linux):
+**Homebrew Cask** (macOS):
 
 ```bash
-brew install mnemon-dev/tap/mnemon
+brew install --cask mnemon-dev/tap/mnemon
 ```
 
-**Go install**:
+**Memory CLI** (macOS / Linux / Windows):
 
 ```bash
 go install github.com/mnemon-dev/mnemon@latest
 ```
 
-**From source**:
+**Agency authority** (macOS / Linux):
+
+```bash
+go install github.com/mnemon-dev/mnemon/cmd/mnemond@latest
+```
+
+**From source** (macOS / Linux):
 
 ```bash
 git clone https://github.com/mnemon-dev/mnemon.git && cd mnemon
@@ -82,6 +88,7 @@ make install
 
 ```bash
 mnemon --version
+mnemond --version  # macOS / Linux
 ```
 
 ### [Claude Code](https://github.com/anthropics/claude-code)
@@ -231,10 +238,10 @@ mnemon setup --eject
 
 ## How it works
 
-Once set up, memory operates through a lightweight harness: `SKILL.md` teaches
+Once set up, memory operates through a lightweight integration layer: `SKILL.md` teaches
 commands, `GUIDELINE.md` teaches judgment, hooks remind the agent at lifecycle
 boundaries, and the `mnemon` binary executes deterministic memory operations.
-Supported setup commands automate this, but the harness is installable from
+Supported setup commands automate this, but the integration is installable from
 markdown alone.
 
 ```text
@@ -275,7 +282,7 @@ memory is useful.
 - **Zero user-side operation** — install once; supported runtimes can use hooks, minimal runtimes can use persistent rules
 - **LLM-supervised** — the host LLM decides what to remember, update, and forget; no embedded LLM, no API keys
 - **Multi-framework support** — Claude Code, Codex, Cursor, TRAE/TRAE Work, Qoder/QoderWork, CodeBuddy, WorkBuddy, Kimi Code, OpenCode, and Hermes Agent (hooks/plugins), OpenClaw (plugins), Pi (extensions), Nanobot (skills), and more
-- **Markdown-installable harness** — `SKILL.md`, `INSTALL.md`, `GUIDELINE.md`, and four lifecycle reminders
+- **Markdown-installable integration** — `SKILL.md`, `INSTALL.md`, `GUIDELINE.md`, and four lifecycle reminders
 - **Four-graph architecture** — temporal, entity, causal, and semantic edges, not just vector similarity
 - **Intent-native protocol** — three primitives (`remember`, `link`, `recall`) map to the LLM's cognitive vocabulary, not database syntax; structured JSON output with signal transparency
 - **Intent-aware recall** — graph traversal + optional vector search (RRF fusion), enabled by default for all queries
@@ -329,7 +336,7 @@ read and write. Claude Code, Codex, Cursor, TRAE/TRAE Work, Qoder/QoderWork,
 CodeBuddy, WorkBuddy, Kimi Code, OpenCode, and Hermes Agent setup automate hook/plugin installation;
 OpenClaw can use plugin hooks; Pi integrates via native skills and TypeScript
 lifecycle extensions; Nanobot integrates via skill files; NanoClaw integrates
-via container skills and volume mounts. The same harness can be installed in any
+via container skills and volume mounts. The same integration bundle can be installed in any
 LLM CLI that supports skills, rules, system prompts, or event hooks.
 
 The longer-term direction is a **memory gateway**: protocol decoupled from storage engine. The current SQLite backend is the first adapter; the protocol surface (`remember / link / recall`) can sit on top of PostgreSQL, Neo4j, or any graph database. Agent-side optimization (when to recall, what to remember) and storage-side optimization (indexing, graph algorithms) evolve independently. See [Future Direction](docs/design/08-decisions.md#82-future-direction) for details.
@@ -380,10 +387,10 @@ Mnemon architecture.
 ## Development
 
 ```bash
-make build          # build binary
+make build          # build the mnemon and mnemond binaries
 make install        # build + install to $GOBIN
 make test           # run deterministic CI tests
-make test-integration  # opt-in CLI E2E and Harness boundary tests
+make test-integration  # opt-in CLI E2E and mnemond Agency boundary tests
 mnemon setup        # interactive setup
 mnemon setup --eject  # remove all integrations
 make help           # show all targets
@@ -395,7 +402,7 @@ See [Development and Deployment](docs/DEPLOYMENT.md) for Docker, Compose, Ollama
 
 ## Documentation
 
-- [Mnemon Harness Beta](harness/README.md) — experimental host-agent lifecycle state
+- [mnemond Agency](docs/mnemond/README.md) — durable project-local Agent authority and optional peer federation
 - [Go Engineering Standard](docs/development/go-engineering-standard.md) — maintainability, concurrency, persistence, testing, and review thresholds
 - [Design & Architecture](docs/DESIGN.md) — current engine architecture, algorithms, integration design
 - [Usage & Reference](docs/USAGE.md) — CLI commands, embedding support, architecture overview

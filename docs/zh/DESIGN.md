@@ -4,13 +4,15 @@
 >
 > 该词同源于记忆女神 Mnemosyne（Μνημοσύνη）——宙斯与她结合诞生了九位缪斯，象征记忆是一切知识与创造的源泉。
 
-Mnemon 是一个为 LLM agent 设计的持久化记忆系统。它采用 **LLM-Supervised** 模式：宿主 LLM 作为独立记忆 Binary 的外部编排者，通过符号化 CLI 接口交互，而 Binary 负责确定性的存储、图索引和生命周期管理。记忆以四图知识结构组织 — temporal、entity、causal、semantic 四种 edge。以单一 Go binary + SQLite 的形式实现，不依赖任何外部 API。
+Mnemon 是一个为 LLM agent 设计的持久化记忆系统。它采用 **LLM-Supervised** 模式：宿主 LLM 作为独立记忆 Binary 的外部编排者，通过符号化 CLI 接口交互，而 Binary 负责确定性的存储、图索引和生命周期管理。记忆以四图知识结构组织 — temporal、entity、causal、semantic 四种 edge。`mnemon` 记忆引擎仍以一个 Go binary + SQLite 实现，不依赖任何外部 API。
 
-本文档描述当前 Mnemon binary 与 engine architecture。正式 modular self-evolution harness 文档见 [Mnemon Harness](harness/README.md)，可安装 runtime 资产位于仓库根目录的 [harness](../../harness/) 目录。
+本文档描述现有 `mnemon` CLI 与 memory-engine architecture。产品还提供独立的
+[mnemond](../mnemond/README.md) 二进制，由它负责 project-local Agency authority
+及其 event-sourced lifecycle state。
 
-Harness 方向把这个 engine 扩展为给已有 agent 使用的事件溯源生命周期层。Mnemon
-保留宿主 agent 作为任务执行 runtime，并在其外围治理 memory、skill、eval、
-proposal、audit 和 projection 生命周期。
+`mnemond` 为用户已有的 agent 增加有界的 View → Intent → Receipt authority
+layer。宿主 agent 仍是任务执行 runtime；mnemond 负责持久化 Agency admission、
+Artifact、Handling、Reference 与可选 peer federation，不改变 `mnemon` CLI 行为。
 
 ---
 
@@ -44,9 +46,9 @@ MAGMA 四图模型（temporal、entity、causal、semantic），LLM 注意力与
 
 Markdown 可安装的 runtime 集成：`SKILL.md`、`INSTALL.md`、`GUIDELINE.md`、四个 hook phase（Prime、Remind、Nudge、Compact）、agent 主导的记忆判断、可选 setup 自动化，以及轻量 Markdown 自进化。
 
-### [Self-Evolution Harness](harness/README.md)
+### [mnemond Agency Authority](../mnemond/README.md)
 
-正式 modular harness 文档，覆盖 agent-agnostic 安装挂载、Agent Integration、event package 与未来可外挂 evolution modules。
+正式产品文档，覆盖 project-local Agency setup、Agent Integration、event authority、Artifact 与可选 peer federation。
 
 ### [8. 设计决策与未来方向](design/08-decisions.md)
 

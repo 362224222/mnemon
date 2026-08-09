@@ -19,8 +19,11 @@ RUN go mod download
 COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build \
-  -ldflags "-s -w -X github.com/mnemon-dev/mnemon/cmd.version=${VERSION}" \
-  -o /out/mnemon .
+  -ldflags "-s -w -X github.com/mnemon-dev/mnemon/internal/mnemoncli.version=${VERSION}" \
+  -o /out/mnemon ./cmd/mnemon
+RUN CGO_ENABLED=0 GOOS=linux go build \
+  -ldflags "-s -w -X main.version=${VERSION}" \
+  -o /out/mnemond ./cmd/mnemond
 
 FROM alpine:3.22 AS runtime
 RUN apk add --no-cache ca-certificates tzdata \
@@ -29,6 +32,7 @@ RUN apk add --no-cache ca-certificates tzdata \
   && mkdir -p /mnemon \
   && chown -R mnemon:mnemon /mnemon /home/mnemon
 COPY --from=build /out/mnemon /usr/local/bin/mnemon
+COPY --from=build /out/mnemond /usr/local/bin/mnemond
 USER mnemon
 ENV MNEMON_DATA_DIR=/mnemon \
     MNEMON_STORE=default

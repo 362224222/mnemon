@@ -30,11 +30,10 @@ This means:
 - **Stronger judgment capability**: An Opus-class LLM evaluates candidate links, not gpt-4o-mini
 - **LLM swappable**: The same Binary + Skill works across Claude Code, Cursor, or any LLM CLI
 
-This engine follows the broader [Mnemon Harness](../harness/README.md) stance:
-hook-native, LLM-led, protocol-constrained, and modular around the host agent.
-The harness doctrine is kept separate from the current engine architecture so
-we can discuss principles without assuming today's binary is the final runtime
-shape.
+This engine and the formal [mnemond Agency](../mnemond/README.md) share a
+hook-native, LLM-led, protocol-constrained stance. Their authority remains
+separate: `mnemon` owns memory operations, while `mnemond` owns project-local
+Agency admission and durable lifecycle state.
 
 ## 2.2 Tools are Organs, Skills are Textbooks
 
@@ -178,7 +177,7 @@ None of these theoretical sources address how to connect an LLM orchestrator to 
 | **Protocol algebra** — why this shape? | Graph-LLM Insight | remember/link/recall as universal primitives; read-write symmetry |
 | **Protocol** — how do they talk? | Mnemon | CLI commands + structured JSON (not code generation) |
 | **Lifecycle** — how does memory evolve? | Mnemon | Hook-driven remember → diff → link → gc |
-| **Distribution** — how to ship it? | Mnemon | Single Go binary, zero dependencies |
+| **Distribution** — how to ship it? | Mnemon | One `mnemon` Go binary, zero runtime dependencies |
 
 Where the RLM implementation relies on code generation in a sandboxed REPL (flexible but requires a runtime and raises safety concerns), Mnemon uses deterministic CLI commands as the symbolic interface — constrained, but auditable, portable, and zero-sandbox. Where MAGMA's reference implementation is a Python library with in-memory NetworkX graphs, Mnemon persists everything in SQLite with a complete write-back lifecycle.
 

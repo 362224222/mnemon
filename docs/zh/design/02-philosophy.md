@@ -30,7 +30,10 @@ Mnemon 采用 **LLM-Supervised** 模式：
 - **更强的判断能力**：Opus 级别的 LLM 评估候选链接，而非 gpt-4o-mini
 - **LLM 可替换**：同一套 Binary + Skill 可在 Claude Code、Cursor、任何 LLM CLI 中使用
 
-当前 engine 遵循更上层的 [Mnemon Harness](../harness/README.md) 立场：hook-native、LLM-led、protocol-constrained，并围绕宿主 agent 模块化挂载。Harness doctrine 与当前 engine architecture 分开维护，这样可以讨论原则，而不默认今天的 binary 就是最终 runtime 形态。
+当前 engine 与正式的 [mnemond Agency](../../mnemond/README.md) 共享
+hook-native、LLM-led、protocol-constrained 立场，但 authority 保持分离：
+`mnemon` 负责 memory operation，`mnemond` 负责 project-local Agency admission
+与持久 lifecycle state。
 
 ## 2.2 Tools are Organs, Skills are Textbooks
 
@@ -174,7 +177,7 @@ LLM 注意力：     token ←weight→ token
 | **Protocol algebra** — 为什么是这个形状？ | Graph-LLM Insight | remember/link/recall 作为通用原语；读写对称性 |
 | **Protocol** — 如何通信？ | Mnemon | CLI 命令 + structured JSON（非代码生成） |
 | **Lifecycle** — 记忆如何演化？ | Mnemon | Hook-driven remember → diff → link → gc |
-| **Distribution** — 如何分发？ | Mnemon | 单一 Go binary，零依赖 |
+| **Distribution** — 如何分发？ | Mnemon | 一个 `mnemon` Go binary，零 runtime 依赖 |
 
 RLM 的实现依赖 sandboxed REPL 中的代码生成（灵活但需要 runtime 且有安全顾虑），Mnemon 用确定性的 CLI 命令作为 symbolic interface — 受限，但可审计、可移植、零 sandbox。MAGMA 的参考实现是 Python library + 内存中的 NetworkX 图，Mnemon 将一切持久化到 SQLite 并提供完整的 write-back lifecycle。
 

@@ -17,12 +17,12 @@
 
 LLM 智能体在会话之间会遗忘一切。上下文压缩丢失关键决策，跨会话知识消失，长对话将早期信息推出窗口。
 
-Mnemon 为你的 LLM 提供持久的跨会话记忆 — 四图知识存储、意图感知检索、重要度衰减、自动去重。单一二进制，零 API 密钥，一条命令完成部署。
+Mnemon 为你的 LLM 提供持久的跨会话记忆 — 四图知识存储、意图感知检索、重要度衰减、自动去重。`mnemon` 记忆路径仍是一个本地二进制，零 API 密钥，一条命令完成部署。
 
-> **实验性 beta：**这个仓库也包含 `mnemon-harness`，它是一个源码构建的
-> project-local host-agent lifecycle state beta。它和稳定版 `mnemon` CLI 分离，
-> 还不是生产可用版本，并且可能随时出现 breaking change。见
-> [harness/README.md](../../harness/README.md)。
+Mnemon 提供两个职责独立的正式产品二进制。`mnemon` 保持现有记忆 CLI；
+`mnemond` 是 project-local Agency authority，负责 `.mnemon/agency` 下持久化的
+View → Intent → Receipt 状态与可选 peer boundary。见
+[mnemond Agency 文档](../mnemond/README.md)。
 
 > **Claude Max / Pro 订阅用户？** Mnemon 完全通过你现有的订阅运作——不需要额外的 API 密钥。你的 LLM 订阅*本身*就是智能层。两条命令即可完成。
 
@@ -59,19 +59,25 @@ Mnemon 同时填补了协议栈中的空白。MCP 标准化了 LLM 如何发现�
 
 ### 安装
 
-**Homebrew**（macOS / Linux）：
+**Homebrew Cask**（macOS）：
 
 ```bash
-brew install mnemon-dev/tap/mnemon
+brew install --cask mnemon-dev/tap/mnemon
 ```
 
-**Go install**：
+**Memory CLI**（macOS / Linux / Windows）：
 
 ```bash
 go install github.com/mnemon-dev/mnemon@latest
 ```
 
-**从源码构建**：
+**Agency authority**（macOS / Linux）：
+
+```bash
+go install github.com/mnemon-dev/mnemon/cmd/mnemond@latest
+```
+
+**从源码构建**（macOS / Linux）：
 
 ```bash
 git clone https://github.com/mnemon-dev/mnemon.git && cd mnemon
@@ -82,6 +88,7 @@ make install
 
 ```bash
 mnemon --version
+mnemond --version  # macOS / Linux
 ```
 
 ### [Claude Code](https://github.com/anthropics/claude-code)
@@ -202,7 +209,7 @@ mnemon setup --eject
 
 ## 工作原理
 
-设置完成后，记忆通过轻量 harness 运作：`SKILL.md` 教命令，`GUIDELINE.md` 教判断，hook 在生命周期边界提醒，`mnemon` binary 执行确定性记忆操作。已支持的 setup 命令可以自动化这些步骤，但 harness 本身仅靠 Markdown 也可安装。
+设置完成后，记忆通过轻量 integration layer 运作：`SKILL.md` 教命令，`GUIDELINE.md` 教判断，hook 在生命周期边界提醒，`mnemon` binary 执行确定性记忆操作。已支持的 setup 命令可以自动化这些步骤，这套集成本身仅靠 Markdown 也可安装。
 
 ```text
 会话启动
@@ -238,7 +245,7 @@ Agent 工作，并且只在有用时调用 Mnemon
 - **零用户操作** — 安装一次；支持 hook 的 runtime 可用 hook，minimal runtime 可用持久规则
 - **LLM 监督式** — 宿主 LLM 主动决定记什么、更新什么、遗忘什么；无内嵌 LLM，无 API 密钥
 - **多框架支持** — Claude Code、Codex、Cursor、TRAE/TRAE Work、Qoder/QoderWork、CodeBuddy、WorkBuddy、Kimi Code、OpenCode 和 Hermes Agent（hooks/plugins）、OpenClaw（plugins）、Pi（extensions）、Nanobot（skills）等
-- **Markdown 可安装 harness** — `SKILL.md`、`INSTALL.md`、`GUIDELINE.md` 和四个生命周期提醒
+- **Markdown 可安装集成** — `SKILL.md`、`INSTALL.md`、`GUIDELINE.md` 和四个生命周期提醒
 - **四图架构** — 时序、实体、因果、语义四种边，不仅仅是向量相似度
 - **意图原生协议** — 三个原语（`remember`、`link`、`recall`）映射到 LLM 的认知词汇而非数据库语法；结构化 JSON 输出，带信号透明度
 - **意图感知召回** — 图遍历 + 可选向量搜索（RRF 融合），所有查询默认启用
@@ -286,7 +293,7 @@ Agent 工作，并且只在有用时调用 Mnemon
   Gemini CLI ───┘
 ```
 
-基础已就绪：一个 `~/.mnemon` 数据库，任何 agent 都可以读写。Claude Code、Codex、Cursor、TRAE/TRAE Work、Qoder/QoderWork、CodeBuddy、WorkBuddy、Kimi Code、OpenCode 和 Hermes Agent setup 可自动安装 hook/plugin；OpenClaw 可以使用 plugin hooks；Pi 通过原生 skill 和 TypeScript lifecycle extension 集成；Nanobot 通过 skill 文件集成；NanoClaw 通过容器技能和卷挂载集成。同一个 harness 可以安装到任何支持 skill、rule、system prompt 或 event hook 的 LLM CLI。
+基础已就绪：一个 `~/.mnemon` 数据库，任何 agent 都可以读写。Claude Code、Codex、Cursor、TRAE/TRAE Work、Qoder/QoderWork、CodeBuddy、WorkBuddy、Kimi Code、OpenCode 和 Hermes Agent setup 可自动安装 hook/plugin；OpenClaw 可以使用 plugin hooks；Pi 通过原生 skill 和 TypeScript lifecycle extension 集成；Nanobot 通过 skill 文件集成；NanoClaw 通过容器技能和卷挂载集成。同一套 integration bundle 可以安装到任何支持 skill、rule、system prompt 或 event hook 的 LLM CLI。
 
 更长远的方向是**记忆网关**：协议层与存储引擎解耦。当前 SQLite 后端是第一个适配器；协议面（`remember / link / recall`）可运行在 PostgreSQL、Neo4j 或任何图数据库之上。Agent 侧优化（何时召回、记什么）与存储侧优化（索引、图算法）独立演进。详见[未来方向](design/08-decisions.md#82-未来方向)。
 
@@ -329,10 +336,10 @@ Sub-agent 委派是可选执行策略。当 runtime 支持时，主 agent 可以
 ## 开发
 
 ```bash
-make build          # 构建二进制
+make build          # 构建 mnemon 与 mnemond 二进制
 make install        # 构建 + 安装到 $GOBIN
 make test           # 运行确定性 CI 测试
-make test-integration  # 按需运行 CLI E2E 与 Harness 边界测试
+make test-integration  # 按需运行 CLI E2E 与 mnemond Agency 边界测试
 mnemon setup        # 交互式设置（检测环境 + 部署钩子/技能/引导）
 mnemon setup --eject  # 移除所有集成
 make help           # 显示所有目标
@@ -344,7 +351,7 @@ make help           # 显示所有目标
 
 ## 文档
 
-- [Mnemon Harness Beta](../../harness/README.md) — 实验性的 host-agent lifecycle state
+- [mnemond Agency](../mnemond/README.md) — 持久化的 project-local Agent authority 与可选 peer federation
 - [Go 工程规范](../development/go-engineering-standard.md) — 可维护性、并发、持久化、测试与质量 ratchet
 - [设计与架构](DESIGN.md) — 当前 engine architecture、核心概念、算法、集成设计
 - [用法与参考](USAGE.md) — CLI 命令、嵌入向量支持、架构概览

@@ -4,14 +4,16 @@
 >
 > The word shares its root with Mnemosyne (Μνημοσύνη), the goddess of memory — from her union with Zeus the nine Muses were born, symbolizing memory as the wellspring of all knowledge and creativity.
 
-Mnemon is a persistent memory system designed for LLM agents. It adopts the **LLM-Supervised** pattern: the host LLM acts as external orchestrator of a standalone memory binary through symbolic CLI interfaces, while the binary handles deterministic storage, graph indexing, and lifecycle management. Memory is organized as a four-graph knowledge structure with temporal, entity, causal, and semantic edges. Implemented as a single Go binary + SQLite, with no external API dependencies.
+Mnemon is a persistent memory system designed for LLM agents. It adopts the **LLM-Supervised** pattern: the host LLM acts as external orchestrator of a standalone memory binary through symbolic CLI interfaces, while the binary handles deterministic storage, graph indexing, and lifecycle management. Memory is organized as a four-graph knowledge structure with temporal, entity, causal, and semantic edges. The `mnemon` memory engine remains one Go binary + SQLite, with no external API dependencies.
 
-This document describes the current Mnemon binary and engine architecture. The formal modular self-evolution harness docs live in [Mnemon Harness](harness/README.md), with installable runtime assets under the repository-level [harness](../harness/) directory.
+This document describes the existing `mnemon` CLI and memory-engine architecture.
+The product also ships [mnemond](mnemond/README.md), a separate binary that owns
+project-local Agency authority and its event-sourced lifecycle state.
 
-The harness direction extends this engine into an event-sourced lifecycle layer
-for agents users already run. Mnemon keeps host agents as the task execution
-runtime and governs memory, skill, eval, proposal, audit, and projection
-lifecycles around them.
+`mnemond` extends the product with a bounded View → Intent → Receipt authority
+layer for agents users already run. The host agent remains the task execution
+runtime; mnemond owns durable Agency admission, Artifacts, Handlings, References,
+and optional peer federation. It does not change `mnemon` CLI behavior.
 
 ---
 
@@ -45,9 +47,9 @@ Effective Importance (EI) decay formula, immunity rules, auto-pruning, GC comman
 
 Markdown-installable runtime integration: `SKILL.md`, `INSTALL.md`, `GUIDELINE.md`, the four hook phases (Prime, Remind, Nudge, Compact), agent-led memory decisions, optional setup automation, and lightweight markdown self-evolution.
 
-### [Self-Evolution Harness](harness/README.md)
+### [mnemond Agency Authority](mnemond/README.md)
 
-The formal modular harness docs for agent-agnostic installation, Agent Integration, event packages, and future attachable evolution modules.
+The formal product documentation for project-local Agency setup, Agent Integration, event authority, Artifacts, and optional peer federation.
 
 ### [8. Design Decisions & Future Direction](design/08-decisions.md)
 

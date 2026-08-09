@@ -8,6 +8,8 @@ services:
     image: mnemon-dev/mnemon:${VERSION:-dev}
     env_file:
       - .env
+    environment:
+      MNEMON_DATA_DIR: /mnemon
     volumes:
       - mnemon-data:/mnemon
     command: ["status"]
@@ -21,6 +23,8 @@ services:
     working_dir: /workspace
     env_file:
       - .env
+    environment:
+      MNEMON_DATA_DIR: /mnemon
     volumes:
       - .:/workspace
       - go-build-cache:/root/.cache/go-build

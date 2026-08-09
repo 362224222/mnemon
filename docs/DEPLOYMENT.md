@@ -21,9 +21,9 @@ make install
 Use a project-local data directory when testing manually:
 
 ```bash
-MNEMON_DATA_DIR=.mnemon-dev ./mnemon store create default
-MNEMON_DATA_DIR=.mnemon-dev ./mnemon remember --no-diff "Local development memory" --cat fact --imp 3
-MNEMON_DATA_DIR=.mnemon-dev ./mnemon recall "development memory"
+MNEMON_DATA_DIR=.mnemon-dev ./bin/mnemon store create default
+MNEMON_DATA_DIR=.mnemon-dev ./bin/mnemon remember --no-diff "Local development memory" --cat fact --imp 3
+MNEMON_DATA_DIR=.mnemon-dev ./bin/mnemon recall "development memory"
 ```
 
 ## Container Development
