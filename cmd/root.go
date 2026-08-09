@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/mnemon-dev/mnemon/cmd/agency"
 	"github.com/mnemon-dev/mnemon/cmd/memory"
 	"github.com/spf13/cobra"
 )
@@ -18,24 +19,45 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	if ctx == nil || stdin == nil || stdout == nil || stderr == nil {
 		return 1
 	}
-	agencyExit := 0
-	root := productRoot(&agencyExit)
+	root := productRoot()
+	if command, _, findErr := root.Find(args); findErr == nil {
+		for current := command; current != nil; current = current.Parent() {
+			if current.Name() == "agency" {
+				root.SilenceErrors = true
+				root.SilenceUsage = true
+				break
+			}
+		}
+	}
 	root.SetArgs(args)
 	root.SetIn(stdin)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	if err := root.ExecuteContext(ctx); err != nil {
-		_, _ = fmt.Fprintln(stderr, err)
-		return 1
+	executed, err := root.ExecuteContextC(ctx)
+	if err == nil {
+		return 0
 	}
-	return agencyExit
+	if err.Error() != "" {
+		_, _ = fmt.Fprintln(stderr, err)
+	}
+	if code, ok := agency.ExitCode(err); ok {
+		return code
+	}
+	for command := executed; command != nil; command = command.Parent() {
+		if command.Name() == "agency" {
+			return 2
+		}
+	}
+	return 1
 }
 
-func productRoot(agencyExit *int) *cobra.Command {
+func productRoot() *cobra.Command {
 	root := memory.New(version)
 	root.Short = "Memory and durable agency for LLM agents"
 	root.Long = "Mnemon gives LLM agents persistent memory and a local authority for durable, peer-to-peer work."
-	// Memory's current command tree is process-global. Remove a prior adapter
+	root.SilenceErrors = false
+	root.SilenceUsage = false
+	// Memory's current command tree is process-global. Remove a prior command
 	// so focused tests can construct the product root more than once without
 	// changing the production command set.
 	for _, child := range root.Commands() {
@@ -43,6 +65,6 @@ func productRoot(agencyExit *int) *cobra.Command {
 			root.RemoveCommand(child)
 		}
 	}
-	addAgencyCommand(root, version, agencyExit)
+	root.AddCommand(agency.New(version))
 	return root
 }

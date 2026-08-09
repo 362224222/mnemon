@@ -6,142 +6,91 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/mnemon-dev/mnemon/internal/attach"
 	"github.com/mnemon-dev/mnemon/internal/daemon"
+	"github.com/spf13/cobra"
 )
 
 const setupRuntimePi = "pi"
 
-type setupOptions struct {
-	projectRoot string
-	runtime     string
-}
-
-type setupDependencies struct {
-	workingDirectory func() (string, error)
-	resolveState     func(string) (string, string, error)
-	ensure           func(context.Context, string) error
-	provision        func(context.Context, string) (string, error)
-	install          func(string) error
-}
-
-func productionSetupDependencies() setupDependencies {
-	return setupDependencies{
-		workingDirectory: os.Getwd,
-		resolveState:     daemon.ResolveProjectState,
-		ensure:           daemon.Ensure,
-		provision: func(ctx context.Context, projectRoot string) (string, error) {
-			result, err := daemon.Provision(ctx, projectRoot)
-			return result.StateDirectory(), err
-		},
-		install: func(projectRoot string) error {
-			_, err := attach.InstallPi(projectRoot)
-			return err
-		},
+func setupCommand() *cobra.Command {
+	runtime := &singleString{value: setupRuntimePi}
+	projectRoot := new(singleString)
+	command := &cobra.Command{
+		Use:   "setup",
+		Short: "Set up Agency for this project",
+		Long:  "Provision project-local Agency state, ensure its daemon, and install the Pi integration.",
+		Args:  cobra.NoArgs,
+		RunE:  runSetup,
 	}
+	command.Flags().Var(runtime, "runtime", "Agent Runtime to integrate (pi)")
+	command.Flags().Var(projectRoot, "project-root", "project root (default: current directory)")
+	return command
 }
 
-func runSetup(ctx context.Context, args []string, stdout, stderr io.Writer,
-	deps setupDependencies,
-) int {
-	if ctx == nil || stdout == nil || stderr == nil || !deps.available() {
-		return 1
-	}
-	options, err := parseSetupOptions(args)
+func runSetup(command *cobra.Command, _ []string) error {
+	runtime, err := command.Flags().GetString("runtime")
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "mnemon agency setup: %v\n", err)
-		return 2
+		return commandFailure{code: 1, err: fmt.Errorf("mnemon agency setup: %w", err)}
 	}
-	requested := options.projectRoot
-	if requested == "" {
-		requested, err = deps.workingDirectory()
+	projectRoot, err := command.Flags().GetString("project-root")
+	if err != nil {
+		return commandFailure{code: 1, err: fmt.Errorf("mnemon agency setup: %w", err)}
+	}
+	if runtime != setupRuntimePi {
+		return fmt.Errorf("mnemon agency setup: unsupported runtime %q", runtime)
+	}
+	if command.Flags().Changed("project-root") && strings.TrimSpace(projectRoot) == "" {
+		return errors.New("mnemon agency setup: --project-root must not be empty")
+	}
+	if err := setupProject(command.Context(), projectRoot); err != nil {
+		return commandFailure{code: 1, err: fmt.Errorf("mnemon agency setup: %w", err)}
+	}
+	if _, err := io.WriteString(command.OutOrStdout(),
+		`{"schema":"mnemon.setup","status":"ready","version":1}`+"\n"); err != nil {
+		return commandFailure{code: 1, err: fmt.Errorf("mnemon agency setup: %w", err)}
+	}
+	return nil
+}
+
+func setupProject(ctx context.Context, requestedRoot string) error {
+	if requestedRoot == "" {
+		var err error
+		requestedRoot, err = os.Getwd()
 		if err != nil {
-			return writeSetupFailure(stderr, err)
+			return err
 		}
 	}
-	projectRoot, stateDirectory, err := deps.resolveState(requested)
+	projectRoot, stateDirectory, err := daemon.ResolveProjectState(requestedRoot)
 	if err != nil {
-		return writeSetupFailure(stderr, err)
+		return err
 	}
-	if err := ensureSetupDaemon(ctx, projectRoot, stateDirectory, deps); err != nil {
-		return writeSetupFailure(stderr, err)
+	if err := ensureSetupDaemon(ctx, projectRoot, stateDirectory); err != nil {
+		return err
 	}
-	if err := deps.install(projectRoot); err != nil {
-		return writeSetupFailure(stderr, err)
-	}
-	if _, err := io.WriteString(stdout,
-		`{"schema":"mnemon.setup","status":"ready","version":1}`+"\n"); err != nil {
-		return 1
-	}
-	return 0
+	_, err = attach.InstallPi(projectRoot)
+	return err
 }
 
-func (deps setupDependencies) available() bool {
-	return deps.workingDirectory != nil && deps.resolveState != nil && deps.ensure != nil &&
-		deps.provision != nil && deps.install != nil
-}
-
-func ensureSetupDaemon(ctx context.Context, projectRoot, stateDirectory string,
-	deps setupDependencies,
-) error {
-	firstErr := deps.ensure(ctx, stateDirectory)
+func ensureSetupDaemon(ctx context.Context, projectRoot, stateDirectory string) error {
+	firstErr := daemon.Ensure(ctx, stateDirectory)
 	if firstErr == nil {
 		return nil
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	provisionedState, provisionErr := deps.provision(ctx, projectRoot)
+	provisioned, provisionErr := daemon.Provision(ctx, projectRoot)
 	if provisionErr != nil {
 		return errors.Join(firstErr, provisionErr)
 	}
-	if provisionedState != stateDirectory {
+	if provisioned.StateDirectory() != stateDirectory {
 		return errors.New("provisioned node state does not match the resolved project")
 	}
-	if err := deps.ensure(ctx, stateDirectory); err != nil {
+	if err := daemon.Ensure(ctx, stateDirectory); err != nil {
 		return errors.Join(firstErr, err)
 	}
 	return nil
-}
-
-func parseSetupOptions(args []string) (setupOptions, error) {
-	options := setupOptions{runtime: setupRuntimePi}
-	seenRuntime := false
-	seenRoot := false
-	for index := 0; index < len(args); index++ {
-		switch args[index] {
-		case "--runtime":
-			if seenRuntime || index+1 >= len(args) {
-				return setupOptions{}, errors.New("--runtime requires one value")
-			}
-			seenRuntime = true
-			index++
-			options.runtime = args[index]
-		case "--project-root":
-			if seenRoot || index+1 >= len(args) {
-				return setupOptions{}, errors.New("--project-root requires one value")
-			}
-			seenRoot = true
-			index++
-			options.projectRoot = args[index]
-		default:
-			return setupOptions{}, fmt.Errorf("unsupported argument %q", args[index])
-		}
-	}
-	if options.runtime != setupRuntimePi {
-		return setupOptions{}, fmt.Errorf("unsupported runtime %q", options.runtime)
-	}
-	if seenRoot && options.projectRoot == "" {
-		return setupOptions{}, errors.New("--project-root must not be empty")
-	}
-	return options, nil
-}
-
-func writeSetupFailure(stderr io.Writer, err error) int {
-	if err == nil {
-		err = errors.New("setup failed")
-	}
-	_, _ = fmt.Fprintf(stderr, "mnemon agency setup: %v\n", err)
-	return 1
 }

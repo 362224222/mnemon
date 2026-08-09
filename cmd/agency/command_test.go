@@ -4,190 +4,114 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
-	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
-func TestPublicRunOwnsTheMnemonAgencyNamespace(t *testing.T) {
-	t.Parallel()
+func TestAgencyHelpAndVersion(t *testing.T) {
 	for _, test := range []struct {
+		name string
 		args []string
 		want string
 	}{
-		{args: nil, want: helpText},
-		{args: []string{"--version"}, want: "mnemon agency version test-version\n"},
+		{name: "empty", want: "Available Commands:"},
+		{name: "help", args: []string{"--help"}, want: "Available Commands:"},
+		{name: "version flag", args: []string{"--version"}, want: "mnemon agency version test-version\n"},
 	} {
-		var stdout, stderr bytes.Buffer
-		exit := Run(context.Background(), test.args, strings.NewReader(""), &stdout, &stderr,
-			"test-version")
-		if exit != 0 || stdout.String() != test.want || stderr.Len() != 0 {
-			t.Fatalf("Run(%q) = exit %d stdout %q stderr %q", test.args, exit,
-				stdout.String(), stderr.String())
-		}
-	}
-}
-
-func TestRunHasOnlyTheAgencySurface(t *testing.T) {
-	t.Parallel()
-	command := func(args ...string) (string, string, int) {
-		var stdout, stderr bytes.Buffer
-		exit := runWithCommandRunners(context.Background(), args, strings.NewReader(""),
-			&stdout, &stderr, "dev", commandRunners{})
-		return stdout.String(), stderr.String(), exit
-	}
-	help, stderr, exit := command()
-	if exit != 0 || stderr != "" || help != helpText {
-		t.Fatalf("empty invocation = (%q, %q, %d)", help, stderr, exit)
-	}
-	for _, argument := range []string{"-h", "--help", "help"} {
-		stdout, stderr, exit := command(argument)
-		if exit != 0 || stdout != help || stderr != "" {
-			t.Fatalf("help %q = (%q, %q, %d)", argument, stdout, stderr, exit)
-		}
-	}
-	for _, argument := range []string{"--version", "version"} {
-		stdout, stderr, exit := command(argument)
-		if exit != 0 || stdout != "mnemon agency version dev\n" || stderr != "" {
-			t.Fatalf("version %q = (%q, %q, %d)", argument, stdout, stderr, exit)
-		}
-	}
-	lower := strings.ToLower(help)
-	for _, required := range []string{"mnemon agency setup", "mnemon agency peer prepare",
-		"mnemon agency serve"} {
-		if !strings.Contains(lower, required) {
-			t.Fatalf("help lacks product command %q", required)
-		}
-	}
-	for _, forbidden := range []string{"r5", "channel", "teamwork", "codex", "eject",
-		"doctor", "status", "reset", "managed", "review", "workflow"} {
-		if strings.Contains(lower, forbidden) {
-			t.Fatalf("help contains retired or case-specific vocabulary %q", forbidden)
-		}
-	}
-}
-
-func TestRunRoutesServeAndReportsItsFailure(t *testing.T) {
-	serveFailure := fmt.Errorf("serve failed")
-	var received []string
-	serve := func(ctx context.Context, args []string) error {
-		if ctx == nil {
-			t.Fatal("serve received nil context")
-		}
-		received = append([]string(nil), args...)
-		return serveFailure
-	}
-	var stdout, stderr bytes.Buffer
-	exit := runWithCommandRunners(context.Background(),
-		[]string{"serve", "--state-dir", "/workspace/.mnemon/agency"},
-		strings.NewReader(""), &stdout, &stderr, "dev", commandRunners{serve: serve})
-	if exit != 1 || stdout.Len() != 0 ||
-		!reflect.DeepEqual(received, []string{"--state-dir", "/workspace/.mnemon/agency"}) ||
-		stderr.String() != "mnemon agency: serve failed\n" {
-		t.Fatalf("serve route = exit %d args %#v stdout %q stderr %q",
-			exit, received, stdout.String(), stderr.String())
-	}
-}
-
-func TestRunRoutesPeerBootstrapAndOnlyItsArguments(t *testing.T) {
-	var received []string
-	peer := func(ctx context.Context, args []string, stdin io.Reader,
-		stdout, stderr io.Writer,
-	) int {
-		if ctx == nil || stdin == nil || stderr == nil {
-			t.Fatal("peer composition is incomplete")
-		}
-		received = append([]string(nil), args...)
-		_, _ = io.WriteString(stdout, "peer receipt\n")
-		return 9
-	}
-	args := []string{"peer", "enroll", "--alias", "peer-b", "--project-root", "/workspace"}
-	var stdout, stderr bytes.Buffer
-	exit := runWithCommandRunners(context.Background(), args, strings.NewReader("card"),
-		&stdout, &stderr, "dev", commandRunners{peer: peer})
-	want := args[1:]
-	if exit != 9 || !reflect.DeepEqual(received, want) ||
-		stdout.String() != "peer receipt\n" || stderr.Len() != 0 {
-		t.Fatalf("peer route = exit %d args %#v stdout %q stderr %q",
-			exit, received, stdout.String(), stderr.String())
-	}
-}
-
-func TestRunRoutesSetupAndOnlyItsArguments(t *testing.T) {
-	var received []string
-	setup := func(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-		if ctx == nil || stderr == nil {
-			t.Fatal("setup composition is incomplete")
-		}
-		received = append([]string(nil), args...)
-		_, _ = io.WriteString(stdout, "setup receipt\n")
-		return 7
-	}
-	var stdout, stderr bytes.Buffer
-	exit := runWithCommandRunners(context.Background(), []string{"setup", "--runtime", "pi",
-		"--project-root", "/workspace"}, strings.NewReader("ignored"), &stdout, &stderr,
-		"dev", commandRunners{setup: setup})
-	want := []string{"--runtime", "pi", "--project-root", "/workspace"}
-	if exit != 7 || !reflect.DeepEqual(received, want) ||
-		stdout.String() != "setup receipt\n" || stderr.Len() != 0 {
-		t.Fatalf("setup route = exit %d args %#v stdout %q stderr %q",
-			exit, received, stdout.String(), stderr.String())
-	}
-}
-
-func TestRunRoutesOnlyHiddenR7AgentTerminalCommands(t *testing.T) {
-	for _, args := range [][]string{{"hook", "attach", "--json"},
-		{"agent", "current", "--json"}, {"agent", "submit", "--json"},
-		{"artifact", "capture", "--json"}, {"artifact", "read", "artifact:offered"}} {
-		args := args
-		t.Run(strings.Join(args[:2], "_"), func(t *testing.T) {
-			var received []string
-			terminal := func(ctx context.Context, got []string, stdin io.Reader,
-				stdout, stderr io.Writer,
-			) int {
-				if ctx == nil || stdin == nil || stderr == nil {
-					t.Fatal("terminal composition is incomplete")
-				}
-				received = append([]string(nil), got...)
-				_, _ = io.WriteString(stdout, "terminal receipt\n")
-				return 8
-			}
-			var stdout, stderr bytes.Buffer
-			exit := runWithCommandRunners(context.Background(), args, strings.NewReader("input"),
-				&stdout, &stderr, "dev", commandRunners{terminal: terminal})
-			if exit != 8 || !reflect.DeepEqual(received, args) ||
-				stdout.String() != "terminal receipt\n" || stderr.Len() != 0 {
-				t.Fatalf("terminal route = exit %d args %#v stdout %q stderr %q",
-					exit, received, stdout.String(), stderr.String())
+		t.Run(test.name, func(t *testing.T) {
+			stdout, stderr, exit := executeAgency(test.args, "", "test-version")
+			if exit != 0 || stderr != "" || !strings.Contains(stdout, test.want) {
+				t.Fatalf("Run(%q) = exit %d stdout %q stderr %q", test.args, exit, stdout, stderr)
 			}
 		})
 	}
 }
 
-func TestRunRejectsEveryRetiredOrUnknownCommand(t *testing.T) {
-	for _, command := range []string{"channel", "teamwork", "status", "doctor", "eject",
-		"reset", "agency", "sync", "daemon"} {
-		var stdout, stderr bytes.Buffer
-		exit := runWithCommandRunners(context.Background(), []string{command},
-			strings.NewReader(""), &stdout, &stderr, "dev", commandRunners{
-				setup: func(context.Context, []string, io.Writer, io.Writer) int {
-					t.Fatal("unknown command invoked setup")
-					return 1
-				},
-				terminal: func(context.Context, []string, io.Reader, io.Writer, io.Writer) int {
-					t.Fatal("unknown command invoked terminal")
-					return 1
-				},
-				peer: func(context.Context, []string, io.Reader, io.Writer, io.Writer) int {
-					t.Fatal("unknown command invoked peer")
-					return 1
-				},
-			})
-		want := fmt.Sprintf("mnemon agency: unknown command %q\n", command)
-		if exit != 2 || stdout.Len() != 0 || stderr.String() != want {
-			t.Fatalf("unknown %q = exit %d stdout %q stderr %q",
-				command, exit, stdout.String(), stderr.String())
+func TestAgencyCommandsDeclareTheirOwnHelp(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want []string
+	}{
+		{args: []string{"--help"}, want: []string{"peer", "serve", "setup"}},
+		{args: []string{"setup", "--help"}, want: []string{"--project-root", "--runtime"}},
+		{args: []string{"peer", "--help"}, want: []string{"enroll", "prepare"}},
+		{args: []string{"peer", "prepare", "--help"}, want: []string{"--advertise", "--listen", "--project-root"}},
+		{args: []string{"peer", "enroll", "--help"}, want: []string{"--alias", "--project-root"}},
+		{args: []string{"serve", "--help"}, want: []string{"--state-dir"}},
+	} {
+		stdout, stderr, exit := executeAgency(test.args, "", "dev")
+		if exit != 0 || stderr != "" {
+			t.Fatalf("Run(%q) = exit %d stdout %q stderr %q", test.args, exit, stdout, stderr)
+		}
+		for _, text := range test.want {
+			if !strings.Contains(stdout, text) {
+				t.Errorf("Run(%q) help lacks %q\n%s", test.args, text, stdout)
+			}
 		}
 	}
+}
+
+func TestAgencyHelpHidesMachineAndRetiredCommands(t *testing.T) {
+	stdout, stderr, exit := executeAgency([]string{"--help"}, "", "dev")
+	if exit != 0 || stderr != "" {
+		t.Fatalf("help = exit %d stderr %q", exit, stderr)
+	}
+	lower := strings.ToLower(stdout)
+	for _, forbidden := range []string{"hook", "artifact", "r5", "channel", "teamwork",
+		"codex", "eject", "doctor", "status", "reset", "managed", "review", "workflow"} {
+		if strings.Contains(lower, forbidden) {
+			t.Errorf("help contains private or retired vocabulary %q", forbidden)
+		}
+	}
+}
+
+func TestAgencyRejectsUnknownCommandsAsUsageErrors(t *testing.T) {
+	for _, command := range []string{"channel", "teamwork", "status", "doctor", "eject",
+		"reset", "sync", "daemon", "unknown"} {
+		stdout, stderr, exit := executeAgency([]string{command}, "", "dev")
+		if exit != 2 || stdout != "" || !strings.Contains(stderr, "unknown command") {
+			t.Errorf("unknown %q = exit %d stdout %q stderr %q", command, exit, stdout, stderr)
+		}
+	}
+}
+
+func TestHiddenTerminalKeepsItsExactGrammarAndExitStatus(t *testing.T) {
+	for _, test := range []struct {
+		args  []string
+		input string
+	}{
+		{args: []string{"hook", "attach", "--json"}, input: "{}"},
+		{args: []string{"agent", "current"}},
+		{args: []string{"agent", "submit"}},
+		{args: []string{"artifact", "capture"}},
+		{args: []string{"artifact", "read", ""}},
+	} {
+		stdout, stderr, exit := executeAgency(test.args, test.input, "dev")
+		if exit != 2 || stderr != "" || !strings.Contains(stdout, `"code":"invalid_argument"`) {
+			t.Fatalf("hidden %q = exit %d stdout %q stderr %q", test.args, exit, stdout, stderr)
+		}
+	}
+}
+
+func executeAgency(args []string, input, version string) (string, string, int) {
+	var stdout, stderr bytes.Buffer
+	root := &cobra.Command{Use: "mnemon", SilenceErrors: true, SilenceUsage: true}
+	root.AddCommand(New(version))
+	root.SetArgs(append([]string{"agency"}, args...))
+	root.SetIn(strings.NewReader(input))
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	_, err := root.ExecuteContextC(context.Background())
+	if err == nil {
+		return stdout.String(), stderr.String(), 0
+	}
+	if err.Error() != "" {
+		_, _ = fmt.Fprintln(&stderr, err)
+	}
+	if code, ok := ExitCode(err); ok {
+		return stdout.String(), stderr.String(), code
+	}
+	return stdout.String(), stderr.String(), 2
 }

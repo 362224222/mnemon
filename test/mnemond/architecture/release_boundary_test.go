@@ -207,7 +207,7 @@ func assertCommandHelpSeparation(t *testing.T, root string) {
 	}
 
 	agency := commandHelp(t, root, "agency")
-	if got, want := agencyUsageCommands(agency), []string{"peer", "serve", "setup"}; !slices.Equal(got, want) {
+	if got, want := cobraTopLevelCommands(agency), []string{"peer", "serve", "setup"}; !slices.Equal(got, want) {
 		t.Errorf("mnemon agency top-level commands = %v, want %v", got, want)
 	}
 }
@@ -233,24 +233,6 @@ func cobraTopLevelCommands(help []byte) []string {
 		}
 	}
 	return commands
-}
-
-func agencyUsageCommands(help []byte) []string {
-	lines := strings.Split(string(help), "\n")
-	var commands []string
-	for _, line := range lines {
-		if !strings.HasPrefix(line, "  mnemon agency ") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 3 || fields[0] != "mnemon" || fields[1] != "agency" ||
-			strings.HasPrefix(fields[2], "-") {
-			continue
-		}
-		commands = append(commands, fields[2])
-	}
-	slices.Sort(commands)
-	return slices.Compact(commands)
 }
 
 func commandHelp(t *testing.T, root string, args ...string) []byte {

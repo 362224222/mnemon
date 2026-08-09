@@ -1,175 +1,77 @@
-// Package agency implements the mnemon agency command tree.
+// Package agency declares the mnemon agency command tree.
 //
-// It owns only process composition. Canonical Agency state, admission, and the
-// private Agent action terminal remain owned by internal packages.
+// Commands compose existing Agency services. Canonical state and admission
+// remain owned by internal packages.
 package agency
 
 import (
-	"context"
 	"errors"
-	"fmt"
-	"io"
-	"time"
 
 	"github.com/mnemon-dev/mnemon/internal/agencyclient"
 	"github.com/mnemon-dev/mnemon/internal/daemon"
+	"github.com/spf13/cobra"
 )
 
-const (
-	gracefulShutdownBudget = 5 * time.Second
-	helpText               = `mnemon agency manages one project-local Mnemon Agency authority.
-
-Usage:
-  mnemon agency setup [--runtime pi] [--project-root DIR]
-  mnemon agency peer prepare --listen HOST:PORT --advertise HOST:PORT [--project-root DIR]
-  mnemon agency peer enroll --alias NAME [--project-root DIR] < peer-card.json
-  mnemon agency serve --state-dir DIR
-  mnemon agency --help
-  mnemon agency --version
-
-Agent action commands are installed through the project-local Mnemon Agency guide
-and are intentionally absent from ordinary help.
-`
-)
-
-type setupRunner func(context.Context, []string, io.Writer, io.Writer) int
-type terminalRunner func(context.Context, []string, io.Reader, io.Writer, io.Writer) int
-type peerRunner func(context.Context, []string, io.Reader, io.Writer, io.Writer) int
-type serveRunner func(context.Context, []string) error
-
-type commandRunners struct {
-	setup    setupRunner
-	terminal terminalRunner
-	peer     peerRunner
-	serve    serveRunner
+type commandFailure struct {
+	code int
+	err  error
 }
 
-type daemonRuntime interface {
-	Serve(context.Context) error
-	Close(context.Context) error
+func (failure commandFailure) Error() string {
+	if failure.err == nil {
+		return ""
+	}
+	return failure.err.Error()
 }
 
-type daemonOpener func(context.Context, string) (daemonRuntime, error)
-
-// Run executes the Agency command subtree. Args begin after "mnemon agency".
-// The caller owns signal handling and process exit.
-func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer,
-	version string,
-) int {
-	return runWithCommandRunners(ctx, args, stdin, stdout, stderr, version, commandRunners{
-		setup: func(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-			return runSetup(ctx, args, stdout, stderr, productionSetupDependencies())
-		},
-		terminal: func(ctx context.Context, args []string, stdin io.Reader,
-			stdout, stderr io.Writer,
-		) int {
-			return agencyclient.Run(ctx, args, stdin, stdout, stderr, daemon.Ensure)
-		},
-		peer: func(ctx context.Context, args []string, stdin io.Reader,
-			stdout, stderr io.Writer,
-		) int {
-			return runPeer(ctx, args, stdin, stdout, stderr, productionPeerDependencies())
-		},
-		serve: func(ctx context.Context, args []string) error {
-			return runServe(ctx, args, openDaemon)
-		},
-	})
+// ExitCode reports the process status carried by an Agency command failure.
+// Ordinary Cobra validation errors are intentionally not classified here.
+func ExitCode(err error) (int, bool) {
+	var failure commandFailure
+	if !errors.As(err, &failure) {
+		return 0, false
+	}
+	return failure.code, true
 }
 
-func runWithCommandRunners(ctx context.Context, args []string, stdin io.Reader,
-	stdout, stderr io.Writer, version string, runners commandRunners,
-) int {
-	if ctx == nil || stdin == nil || stdout == nil || stderr == nil {
-		return 1
+// New returns a fresh Agency command tree for the Mnemon product root.
+func New(version string) *cobra.Command {
+	command := &cobra.Command{
+		Use:     "agency",
+		Short:   "Manage durable Agent work and peer collaboration",
+		Long:    "Mnemon Agency adds durable project-local responsibility and admitted effects to an existing Agent Runtime.",
+		Version: version,
+		Args:    cobra.NoArgs,
+		RunE:    showCommandHelp,
 	}
-	if len(args) == 0 {
-		return writeHelp(stdout)
+	command.SetVersionTemplate("mnemon agency version {{.Version}}\n")
+	command.AddCommand(setupCommand(), peerCommand(), serveCommand())
+
+	// These machine surfaces keep the exact grammar owned by agencyclient.
+	for _, name := range []string{"hook", "agent", "artifact"} {
+		command.AddCommand(&cobra.Command{
+			Use:                name,
+			Hidden:             true,
+			DisableFlagParsing: true,
+			RunE:               runTerminal,
+		})
 	}
-	switch args[0] {
-	case "setup":
-		if runners.setup == nil {
-			return 1
-		}
-		return runners.setup(ctx, args[1:], stdout, stderr)
-	case "peer":
-		if runners.peer == nil {
-			return 1
-		}
-		return runners.peer(ctx, args[1:], stdin, stdout, stderr)
-	case "hook", "agent", "artifact":
-		if runners.terminal == nil {
-			return 1
-		}
-		return runners.terminal(ctx, args, stdin, stdout, stderr)
-	case "serve":
-		if runners.serve == nil {
-			return 1
-		}
-		if err := runners.serve(ctx, args[1:]); err != nil {
-			_, _ = fmt.Fprintf(stderr, "mnemon agency: %v\n", err)
-			return 1
-		}
-		return 0
-	default:
-		return runMetaCommand(args, stdout, stderr, version)
-	}
+	return command
 }
 
-func runMetaCommand(args []string, stdout, stderr io.Writer, version string) int {
-	switch args[0] {
-	case "-h", "--help", "help":
-		if len(args) != 1 {
-			fmt.Fprintln(stderr, "mnemon agency: help accepts no arguments")
-			return 2
-		}
-		return writeHelp(stdout)
-	case "--version", "version":
-		if len(args) != 1 {
-			fmt.Fprintln(stderr, "mnemon agency: version accepts no arguments")
-			return 2
-		}
-		if _, err := fmt.Fprintf(stdout, "mnemon agency version %s\n", version); err != nil {
-			return 1
-		}
-		return 0
-	default:
-		fmt.Fprintf(stderr, "mnemon agency: unknown command %q\n", args[0])
-		return 2
+func showCommandHelp(command *cobra.Command, _ []string) error {
+	if err := command.Help(); err != nil {
+		return commandFailure{code: 1, err: err}
 	}
+	return nil
 }
 
-func writeHelp(stdout io.Writer) int {
-	if _, err := io.WriteString(stdout, helpText); err != nil {
-		return 1
+func runTerminal(command *cobra.Command, args []string) error {
+	code := agencyclient.Run(command.Context(), append([]string{command.Name()}, args...),
+		command.InOrStdin(), command.OutOrStdout(), command.ErrOrStderr(), daemon.Ensure)
+	if code != 0 {
+		// agencyclient has already emitted the bounded machine diagnostic.
+		return commandFailure{code: code}
 	}
-	return 0
-}
-
-func openDaemon(ctx context.Context, stateDirectory string) (daemonRuntime, error) {
-	return daemon.OpenProvisioned(ctx, stateDirectory)
-}
-
-func runServe(ctx context.Context, args []string, open daemonOpener) error {
-	if ctx == nil || open == nil {
-		return errors.New("mnemon agency serve is unavailable")
-	}
-	options, err := parseServeOptions(args)
-	if err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	runtime, err := open(ctx, options.stateDirectory)
-	if err != nil {
-		return err
-	}
-	if runtime == nil {
-		return errors.New("Mnemon Agency daemon opener returned no runtime")
-	}
-	serveErr := runtime.Serve(ctx)
-	closeContext, cancel := context.WithTimeout(context.Background(), gracefulShutdownBudget)
-	closeErr := runtime.Close(closeContext)
-	cancel()
-	return errors.Join(serveErr, closeErr)
+	return nil
 }
