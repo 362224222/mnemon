@@ -22,27 +22,74 @@ type liveReport struct {
 	Version   int       `json:"version"`
 	Status    string    `json:"status"`
 	Model     string    `json:"model"`
-	Rounds    int       `json:"rounds"`
+	Thinking  string    `json:"thinking"`
 	Run       runReport `json:"run"`
 	Isolation struct {
-		Passed bool `json:"passed"`
+		Passed                      bool `json:"passed"`
+		FreshRuntimeBetweenEpisodes bool `json:"fresh_runtime_between_episodes"`
 	} `json:"isolation"`
 	World struct {
-		Baseline         loadSummary        `json:"baseline"`
-		Recovery         loadSummary        `json:"recovery"`
-		Stability        loadSummary        `json:"stability"`
-		IncidentAfter    domainResult       `json:"incident_after"`
-		IncidentCharges  domainChargeResult `json:"incident_charges"`
-		RecoveryCharges  domainChargeResult `json:"recovery_charges"`
-		StabilityCharges domainChargeResult `json:"stability_charges"`
+		Episodes []episodeReport `json:"episodes"`
 	} `json:"world"`
 	Protocol struct {
 		AcceptedPeerEffects int                         `json:"accepted_peer_effects"`
 		ByReceiver          []peerEffectSummary         `json:"by_receiver"`
 		DeliveryQuiescence  []deliveryQuiescenceSummary `json:"delivery_quiescence"`
+		Attention           []attentionEnvelope         `json:"attention_envelopes"`
+		Evolution           evolutionSummary            `json:"evolution"`
 	} `json:"protocol"`
 	Turns                      []turnSummary `json:"turns"`
 	RawProviderStreamsRetained bool          `json:"raw_provider_streams_retained"`
+}
+
+type episodeReport struct {
+	ID               string              `json:"id"`
+	Baseline         loadSummary         `json:"baseline"`
+	SyntheticProbes  syntheticProbeAudit `json:"synthetic_probes"`
+	Recovery         loadSummary         `json:"recovery"`
+	Stability        loadSummary         `json:"stability"`
+	IncidentAfter    domainResult        `json:"incident_after"`
+	IncidentCharges  domainChargeResult  `json:"incident_charges"`
+	RecoveryCharges  domainChargeResult  `json:"recovery_charges"`
+	StabilityCharges domainChargeResult  `json:"stability_charges"`
+}
+
+type evolutionSummary struct {
+	Boundary              evolutionBoundarySummary `json:"boundary"`
+	Effects               []evolutionNodeSummary   `json:"effects"`
+	AcceptedReferenceUses int                      `json:"accepted_reference_uses"`
+	Demonstrated          bool                     `json:"demonstrated"`
+}
+
+type evolutionBoundarySummary struct {
+	Nodes           []evolutionBoundaryNode `json:"nodes"`
+	ActiveHeadCount int                     `json:"active_head_count"`
+}
+
+type evolutionBoundaryNode struct {
+	Role                       string                   `json:"role"`
+	ConsolidationAfterSequence uint64                   `json:"consolidation_after_sequence"`
+	MaxOriginSequence          uint64                   `json:"max_origin_sequence"`
+	ActiveHeads                []evolutionReferenceHead `json:"active_heads"`
+}
+
+type evolutionReferenceHead struct {
+	EventID     string `json:"event_id"`
+	EventDigest string `json:"event_digest"`
+}
+
+type evolutionNodeSummary struct {
+	Role                  string                 `json:"role"`
+	BoundarySequence      uint64                 `json:"boundary_sequence"`
+	ActiveHeadCount       int                    `json:"active_head_count"`
+	AcceptedReferenceUses int                    `json:"accepted_reference_uses"`
+	Matches               []evolutionMatchReport `json:"matches"`
+}
+
+type evolutionMatchReport struct {
+	EventID          string `json:"event_id"`
+	ReferenceEventID string `json:"reference_event_id"`
+	ReferenceDigest  string `json:"reference_digest"`
 }
 
 type runReport struct {
@@ -50,23 +97,6 @@ type runReport struct {
 	StartedAt       string `json:"started_at"`
 	FinishedAt      string `json:"finished_at"`
 	CandidateDigest string `json:"candidate_digest"`
-}
-
-type turnSummary struct {
-	Role                 string `json:"role"`
-	Turn                 string `json:"turn"`
-	CapturedAt           string `json:"captured_at"`
-	HookCues             int    `json:"hook_cues"`
-	BashCalls            int    `json:"bash_calls"`
-	CurrentReads         int    `json:"current_reads"`
-	SubmitAttempts       int    `json:"submit_attempts"`
-	IntentSubmits        int    `json:"intent_submits"`
-	AcceptedReceipts     int    `json:"accepted_receipts"`
-	RejectedReceipts     int    `json:"rejected_receipts"`
-	SubmitDenials        int    `json:"submit_denials"`
-	PostAcceptDenials    int    `json:"post_accept_denials"`
-	PrivateBindingProbes int    `json:"private_binding_probes"`
-	AgentEnd             bool   `json:"agent_end"`
 }
 
 type peerEffectSummary struct {
@@ -155,9 +185,11 @@ func loadReport(path string) (liveReport, error) {
 }
 
 func validateReport(report liveReport) error {
-	if report.Schema != "mnemon.r7.domain-ops.live-report" || report.Version != 1 ||
-		report.Status != "passed" || report.Model == "" || report.Rounds < 1 || report.Rounds > 8 ||
-		report.RawProviderStreamsRetained || !report.Isolation.Passed {
+	if report.Schema != "mnemon.r7.domain-ops.live-report" || report.Version != 7 ||
+		report.Status != "passed" || report.Model == "" ||
+		!validThinkingLevel(report.Thinking) ||
+		report.RawProviderStreamsRetained || !report.Isolation.Passed ||
+		!report.Isolation.FreshRuntimeBetweenEpisodes {
 		return errors.New("sanitized live report has invalid identity or terminal status")
 	}
 	if _, err := agency.NewOpaqueHandle(report.Model); err != nil {
@@ -180,73 +212,34 @@ func validateReport(report liveReport) error {
 	if err := validateWorld(report); err != nil {
 		return err
 	}
+	attention, err := validateReportProtocol(report)
+	if err != nil {
+		return err
+	}
+	return validateTurns(report.Turns, attention.Turns)
+}
+
+func validThinkingLevel(value string) bool {
+	return slices.Contains([]string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}, value)
+}
+
+func validateReportProtocol(report liveReport) (attentionValidation, error) {
 	if err := validateProtocolSummary(report.Protocol.AcceptedPeerEffects,
 		report.Protocol.ByReceiver); err != nil {
-		return err
+		return attentionValidation{}, err
 	}
-	if err := validateDeliveryQuiescence(report.Rounds,
-		report.Protocol.DeliveryQuiescence); err != nil {
-		return err
+	attention, err := validateAttention(report.Protocol.Attention)
+	if err != nil {
+		return attentionValidation{}, err
 	}
-	return validateTurns(report.Rounds, report.Turns)
-}
-
-func validateWorld(report liveReport) error {
-	baseline := report.World.Baseline
-	if baseline.Sent != 4 || baseline.Accepted != 4 || baseline.Failed != 0 ||
-		len(baseline.Receipts) != 4 || baseline.Observed.Ledger != (ledgerStatus{
-		Charges: 8, ActiveCharges: 8, UniqueBusinesses: 4, DuplicateBusinesses: 4,
-	}) {
-		return errors.New("sanitized live report does not prove the initial incident")
+	if err := validateDeliveryQuiescence(
+		report.Protocol.DeliveryQuiescence, attention.Barriers); err != nil {
+		return attentionValidation{}, err
 	}
-	if !validFreshSummary(report.World.Recovery, 6) ||
-		!validFreshSummary(report.World.Stability, 6) {
-		return errors.New("sanitized live report does not prove recovery and stability")
+	if err := validateEvolutionSummary(report.Protocol.Evolution); err != nil {
+		return attentionValidation{}, err
 	}
-	incident := report.World.IncidentAfter
-	if incident.Role != "data" || incident.Result != (ledgerStatus{
-		Charges: 8, ActiveCharges: 4, VoidedCharges: 4,
-		UniqueBusinesses: 4, DuplicateBusinesses: 0,
-	}) {
-		return errors.New("sanitized live report does not prove historical reconciliation")
-	}
-	checks := []struct {
-		summary loadSummary
-		charges domainChargeResult
-		copies  int
-		voided  int
-	}{
-		{report.World.Baseline, report.World.IncidentCharges, 2, 1},
-		{report.World.Recovery, report.World.RecoveryCharges, 1, 0},
-		{report.World.Stability, report.World.StabilityCharges, 1, 0},
-	}
-	for _, check := range checks {
-		if err := validateServiceReceiptEvidence(check.summary, check.charges,
-			check.copies, check.voided); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validFreshSummary(summary loadSummary, count int) bool {
-	if summary.Sent != count || summary.Accepted != count || summary.Failed != 0 ||
-		len(summary.Receipts) != count || summary.Observed.Ledger != (ledgerStatus{
-		Charges: count, ActiveCharges: count, UniqueBusinesses: count,
-	}) {
-		return false
-	}
-	seen := make(map[string]struct{}, count)
-	for _, receipt := range summary.Receipts {
-		if receipt.BusinessID == "" || receipt.CaptureID <= 0 {
-			return false
-		}
-		if _, duplicate := seen[receipt.BusinessID]; duplicate {
-			return false
-		}
-		seen[receipt.BusinessID] = struct{}{}
-	}
-	return true
+	return attention, nil
 }
 
 func validateProtocolSummary(total int, values []peerEffectSummary) error {
@@ -276,11 +269,16 @@ func validateProtocolSummary(total int, values []peerEffectSummary) error {
 	return nil
 }
 
-func validateDeliveryQuiescence(rounds int, values []deliveryQuiescenceSummary) error {
-	want := make(map[string]struct{}, rounds+1)
-	want["initial-lead"] = struct{}{}
-	for round := 1; round <= rounds; round++ {
-		want[fmt.Sprintf("round-%d", round)] = struct{}{}
+func validateDeliveryQuiescence(values []deliveryQuiescenceSummary,
+	attention map[string]struct{},
+) error {
+	want := make(map[string]struct{}, 3+len(attention))
+	for episode := 1; episode <= 2; episode++ {
+		want[fmt.Sprintf("episode-%d-initial-lead", episode)] = struct{}{}
+	}
+	want["episode-1-post-outcome-lead"] = struct{}{}
+	for phase := range attention {
+		want[phase] = struct{}{}
 	}
 	if len(values) != len(want) {
 		return errors.New("sanitized live report has an incomplete delivery barrier summary")
@@ -308,12 +306,10 @@ func validateDeliveryQuiescence(rounds int, values []deliveryQuiescenceSummary) 
 	return nil
 }
 
-func validateTurns(rounds int, turns []turnSummary) error {
-	expected := map[string]string{"initial-lead": "lead"}
-	for round := 1; round <= rounds; round++ {
-		for _, role := range domainRoles {
-			expected[fmt.Sprintf("round-%d-%s", round, role)] = role
-		}
+func validateTurns(turns []turnSummary, attention map[string]string) error {
+	expected := expectedTurnRoles()
+	for turn, role := range attention {
+		expected[turn] = role
 	}
 	if len(turns) != len(expected) {
 		return fmt.Errorf("sanitized live report has %d turns, want %d", len(turns), len(expected))
@@ -324,31 +320,23 @@ func validateTurns(rounds int, turns []turnSummary) error {
 			return errors.New("sanitized live report contains an unknown role/turn pair")
 		}
 		delete(expected, turn.Turn)
-		values := []int{turn.HookCues, turn.BashCalls, turn.CurrentReads, turn.SubmitAttempts,
-			turn.IntentSubmits,
-			turn.AcceptedReceipts, turn.RejectedReceipts, turn.SubmitDenials,
-			turn.PostAcceptDenials,
-			turn.PrivateBindingProbes}
-		if _, err := parseReportTime("turn captured_at", turn.CapturedAt); err != nil {
+		if err := validateTurnSummary(turn); err != nil {
 			return err
-		}
-		if !turn.AgentEnd || turn.HookCues < 1 || slices.ContainsFunc(values,
-			func(value int) bool { return value < 0 || value > 256 }) {
-			return errors.New("sanitized live report contains an invalid bounded turn")
-		}
-		if turn.PrivateBindingProbes != 0 || turn.CurrentReads > turn.BashCalls ||
-			turn.AcceptedReceipts > 1 ||
-			turn.PostAcceptDenials > turn.SubmitDenials ||
-			(turn.PostAcceptDenials > 0 && turn.AcceptedReceipts != 1) ||
-			turn.IntentSubmits != turn.AcceptedReceipts+turn.RejectedReceipts ||
-			turn.SubmitAttempts != turn.IntentSubmits+turn.SubmitDenials {
-			return errors.New("sanitized live report contains inconsistent successful CLI observations")
 		}
 	}
 	if len(expected) != 0 {
 		return errors.New("sanitized live report omits an expected attention turn")
 	}
 	return nil
+}
+
+func expectedTurnRoles() map[string]string {
+	expected := make(map[string]string, 3)
+	for episode := 1; episode <= 2; episode++ {
+		expected[fmt.Sprintf("episode-%d-initial-lead", episode)] = "lead"
+	}
+	expected["episode-1-post-outcome-lead"] = "lead"
+	return expected
 }
 
 func parseReportTime(label, value string) (time.Time, error) {

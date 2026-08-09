@@ -11,11 +11,12 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
-func TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface(t *testing.T) {
+func TestLoadHasOneFixedCueOneBoundedReceiptAndNoAuthorityOrSecretSurface(t *testing.T) {
 	projection, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +24,8 @@ func TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface(t *testing.T) {
 	guide, cue, extension := projection.Guide(), projection.HookCue(), projection.PiExtension()
 	if len(guide) == 0 || len(guide) > MaxGuideBytes || cue == "" || len(cue) > MaxCueBytes ||
 		len(extension) == 0 || len(extension) > MaxExtensionBytes {
-		t.Fatalf("asset sizes = guide %d, cue %d, extension %d", len(guide), len(cue), len(extension))
+		t.Fatalf("asset sizes = guide %d, cue %d, extension %d",
+			len(guide), len(cue), len(extension))
 	}
 	if !strings.Contains(cue, ".pi/skills/mnemond/SKILL.md") {
 		t.Fatal("fixed cue does not name the installed, bounded guide projection")
@@ -41,8 +43,9 @@ func TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface(t *testing.T) {
 			t.Fatalf("Pi extension lacks %q", required)
 		}
 	}
-	if strings.Count(source, "content:") != 1 || !strings.Contains(source, cue) {
-		t.Fatal("fixed cue is not the extension's unique model-content source")
+	if strings.Count(source, "content: HOOK_CUE") != 1 ||
+		strings.Count(source, "text: receiptText") != 1 || !strings.Contains(source, cue) {
+		t.Fatal("extension does not expose exactly one fixed cue and one bounded Receipt surface")
 	}
 	for _, forbidden := range []string{`pi.on("turn_end"`, `pi.on("agent_end"`} {
 		if strings.Contains(source, forbidden) {
@@ -54,7 +57,7 @@ func TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface(t *testing.T) {
 		"review", "workflow", "case", "contract-net", "blackboard", "memory.wiki",
 		"--event-id", "--operation-id", "--principal", "--fence", "--peer-id",
 		"deepseek", "api_key", "api-key", "authorization:", "bearer ", "sk-",
-		"process.env", "content: output", "content: result", "json.parse(",
+		"process.env", "content: output", "content: result", "text: output", "text: result", "json.parse(",
 		"model:", "provider:",
 	} {
 		if strings.Contains(all, forbidden) {
@@ -70,17 +73,212 @@ func TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface(t *testing.T) {
 
 func assertGuideTerminalSurface(t *testing.T, guide string) {
 	t.Helper()
+	normalized := strings.Join(strings.Fields(guide), " ")
 	for _, required := range []string{
-		"`mnemon-harness` is already on",
-		"mnemon-harness agent current --json",
+		"mnemond_current {}",
+		"Choose one `allowed_intents` shape, submit once",
 		"mnemon-harness artifact capture --json < PATH",
 		"mnemon-harness artifact read \"$HANDLE\"",
-		"mnemon-harness agent submit --json",
+		"exactly one nonempty",
+		"no Markdown",
 		"VIEW_TARGET", "VIEW_REPLY_TARGET", "CURRENT_HANDLE", "CAPTURE_HANDLE",
 	} {
-		if !strings.Contains(guide, required) {
+		if !strings.Contains(normalized, required) {
 			t.Errorf("guide lacks complete, bounded terminal surface %q", required)
 		}
+	}
+	for _, required := range []string{
+		"Advance only when unseen evidence could change the decision",
+		"self anchors the outcome. Sending and final text schedule nothing",
+		"`reply_required` is inbound duty; `reply_observation_pending` means an outbound result is unobserved. Pending is evidence, not a rule",
+		"Completed needs a verified local Artifact", "Otherwise no response is owed",
+		"When `reply_required` and current asks for evidence, action, or decision, return one correlated terminal disposition",
+		"including declined/unresolved; never close silently", "`self` creates a duty, never a keepalive",
+		"`related` is bounded, read-only, never a subject", "`truncated` means this View omitted evidence",
+		"Summarize/cite only shown Events; never invent a handle",
+		"bounded summary and any shown Artifact",
+		"A reply proves only its contribution; require direct outcome evidence for global completion",
+		"Receipts/replies are evidence, not requests", "References stay local; share Artifact through targeted work",
+		"Reference changes future View and creates no duty. Current stays open; otherwise self-anchor surviving work",
+	} {
+		if !strings.Contains(normalized, required) {
+			t.Errorf("guide lacks response convergence rule %q", required)
+		}
+	}
+	if strings.Contains(guide, "$INTENT_JSON") {
+		t.Error("guide relies on an undefined cross-tool shell variable")
+	}
+}
+
+func TestGuideResponseExampleAtomicallyClosesAndReturnsCorrelatedEvidence(t *testing.T) {
+	projection, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`(?m)^(\{"kind":"work\.response"[^\n]+\})$`).
+		FindStringSubmatch(string(projection.Guide()))
+	if len(match) != 2 {
+		t.Fatal("guide lacks one complete work.response example")
+	}
+	intent, err := agency.ParseAgentIntentJSON([]byte(match[1]))
+	if err != nil {
+		t.Fatalf("guide work.response is not a valid AgentIntent: %v", err)
+	}
+	successors := intent.Successors()
+	if intent.Consequence() != agency.ConsequenceResolveCompleted ||
+		intent.SubjectHandling().IsZero() || len(successors) != 1 || successors[0].IsSelf() ||
+		successors[0].Alias().IsZero() || intent.CorrelationHandle().IsZero() || len(intent.Artifacts()) == 0 {
+		t.Fatal("guide work.response does not close its subject while returning correlated evidence")
+	}
+	bindGuideTerminalIntent(t, intent, "completed")
+}
+
+func TestGuideDeclineExampleReturnsCorrelatedDisposition(t *testing.T) {
+	projection, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`(?m)^(\{"kind":"work\.declined"[^\n]+\})$`).
+		FindStringSubmatch(string(projection.Guide()))
+	if len(match) != 2 {
+		t.Fatal("guide lacks one complete work.declined example")
+	}
+	intent, err := agency.ParseAgentIntentJSON([]byte(match[1]))
+	if err != nil {
+		t.Fatalf("guide work.declined is not a valid AgentIntent: %v", err)
+	}
+	if intent.Consequence() != agency.ConsequenceResolveDeclined ||
+		intent.SubjectHandling().IsZero() || len(intent.Successors()) != 1 ||
+		intent.Successors()[0].IsSelf() || intent.Successors()[0].Alias().IsZero() ||
+		intent.CorrelationHandle().IsZero() {
+		t.Fatal("guide work.declined does not close while returning a correlated disposition")
+	}
+	bindGuideTerminalIntent(t, intent, "declined")
+}
+
+func bindGuideTerminalIntent(t *testing.T, intent agency.AgentIntent, suffix string) {
+	t.Helper()
+	operation, err := agency.NewOperationKey("operation:guide-" + suffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates := guideTerminalCandidates(t, intent, operation, suffix)
+	view := guideTerminalView(t, intent)
+	if _, err = agency.BindIntent(agency.BoundIntentSpec{Intent: intent,
+		OperationKey: operation, View: view, Candidates: candidates}); err != nil {
+		t.Fatalf("copyable guide terminal Intent cannot bind to imported View: %v", err)
+	}
+}
+
+func guideTerminalView(t *testing.T, intent agency.AgentIntent) agency.ViewAuthority {
+	t.Helper()
+	principal, err := agency.NewAgentPrincipalID("agent:guide-responder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachmentID, err := agency.NewAttachmentID("attachment:guide-responder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuedAt := time.Unix(1, 0).UTC()
+	attachment, err := agency.NewAttachment(attachmentID, principal, false,
+		issuedAt, issuedAt.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := guideEventRef(t, "event:guide-current", "guide current")
+	handlingID, err := agency.NewHandlingID("handling:guide-current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject, err := agency.NewSubjectBinding(intent.SubjectHandling(), handlingID, head, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replyEvent := guideEventRef(t, "event:guide-request", "guide request")
+	replyOffer, err := agency.NewProvenanceOffer(intent.CorrelationHandle(), replyEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := intent.Successors()
+	if len(targets) != 1 {
+		t.Fatal("guide terminal Intent does not have one reply target")
+	}
+	routeID, err := agency.NewRouteID("route:guide-requester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteAlias, err := agency.NewOpaqueHandle("peer:guide-requester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := agency.ResolveRemoteTarget(targets[0], routeID, remoteAlias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replyDigest := agency.Sum([]byte("guide request Delivery")).String()
+	replyDelivery, err := agency.ParseDeliveryID("delivery:" + strings.TrimPrefix(replyDigest, "sha256:"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := agency.NewViewAuthority(agency.MachineViewSpec{
+		Attachment: attachment, Consequences: []agency.Consequence{intent.Consequence()},
+		Subjects: []agency.SubjectBinding{subject}, Targets: []agency.ResolvedTarget{resolved},
+		ReplyTo: intent.CorrelationHandle(), ReplyTarget: targets[0], ReplyDelivery: replyDelivery,
+		Provenance: []agency.ProvenanceOffer{replyOffer},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return view
+}
+
+func guideTerminalCandidates(t *testing.T, intent agency.AgentIntent,
+	operation agency.OperationKey, suffix string,
+) []agency.CapturedCandidate {
+	t.Helper()
+	candidates := make([]agency.CapturedCandidate, 0, len(intent.Artifacts()))
+	for _, input := range intent.Artifacts() {
+		candidate, err := agency.NewCapturedCandidate(operation, input,
+			agency.Sum([]byte("guide "+suffix+" evidence")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates
+}
+
+func guideEventRef(t *testing.T, idValue, content string) agency.EventRef {
+	t.Helper()
+	id, err := agency.NewEventID(idValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := agency.NewEventRef(id, agency.Sum([]byte(content)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ref
+}
+
+func TestGuideProgressExampleAdvancesExistingAnchorWithoutSuccessor(t *testing.T) {
+	projection, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`(?m)^(\{"kind":"work\.progress"[^\n]+\})$`).
+		FindStringSubmatch(string(projection.Guide()))
+	if len(match) != 2 {
+		t.Fatal("guide lacks one complete work.progress example")
+	}
+	intent, err := agency.ParseAgentIntentJSON([]byte(match[1]))
+	if err != nil {
+		t.Fatalf("guide work.progress is not a valid AgentIntent: %v", err)
+	}
+	if intent.Consequence() != agency.ConsequenceAdvanceHandling ||
+		intent.SubjectHandling().IsZero() || len(intent.Successors()) != 0 {
+		t.Fatal("guide work.progress does not advance only its existing local anchor")
 	}
 }
 
@@ -143,6 +341,32 @@ func TestGuideTracksCanonicalAgentIntentFieldsAndClosedShapes(t *testing.T) {
 	}
 }
 
+func TestGuideFirstSubmitExampleIsAValidCompleteIntent(t *testing.T) {
+	projection, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	guide := string(projection.Guide())
+	match := regexp.MustCompile(`(?m)^(\{"kind":"work\.request"[^\n]+\})$`).
+		FindStringSubmatch(guide)
+	if len(match) != 2 {
+		t.Fatal("guide lacks one complete root Intent example")
+	}
+	intent, err := agency.ParseAgentIntentJSON([]byte(match[1]))
+	if err != nil {
+		t.Fatalf("guide's first submit example is not a valid AgentIntent: %v", err)
+	}
+	if intent.Consequence() != agency.ConsequenceCreateHandlings || len(intent.Successors()) == 0 {
+		t.Fatal("guide's first submit example is not a complete root Intent")
+	}
+	for _, forbidden := range []string{`VIEW_OFFERED_CONSEQUENCE`, `"kind":"MEANING"`,
+		`"reference_key":"NEW_KEY"`} {
+		if strings.Contains(guide, forbidden) {
+			t.Fatalf("guide contains an invalid copyable placeholder %q", forbidden)
+		}
+	}
+}
+
 func TestPiHookTimeoutCoversEnsureAndCleanupWithinOneFixedBound(t *testing.T) {
 	projection, err := Load()
 	if err != nil {
@@ -192,6 +416,60 @@ func TestPiHookRetriesOnePrivateBoundaryAndEmitsNoCueOnFailure(t *testing.T) {
 	}
 }
 
+func TestPiHookSeparatesExplorationFromBoundedEffectSettlement(t *testing.T) {
+	projection, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(projection.PiExtension())
+	for _, required := range []string{
+		"const MAX_TOOL_CALL_ATTEMPTS_PER_RUN = 16;",
+		`pi.on("tool_call"`, `pi.on("turn_start"`, `pi.on("agent_settled"`,
+		"toolCallAttempts < MAX_TOOL_CALL_ATTEMPTS_PER_RUN",
+		"savedActiveTools = [...pi.getActiveTools()];",
+		"ownsToolOverride = true;",
+		"savedActiveTools.includes(EFFECT_SETTLEMENT_TOOL)",
+		"settlementAllowed ? [EFFECT_SETTLEMENT_TOOL] : []",
+		"return { block: true, reason: ATTENTION_EXHAUSTED_REASON };",
+		"postBudgetTurns > MAX_EFFECT_SETTLEMENT_ATTEMPTS - effectSettlementAttempts",
+		"if (postSettlementFinalTurns > 1) abortOnce(ctx);",
+		"pi.setActiveTools(savedActiveTools);",
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("Pi bounded attention lacks %q", required)
+		}
+	}
+	if strings.Count(source, `pi.on("agent_settled"`) != 1 ||
+		strings.Contains(source, `pi.on("agent_end"`) {
+		t.Fatal("Pi attention may reset only after the complete run settles")
+	}
+	if strings.Count(source, "resetAttention()") != 4 ||
+		!strings.Contains(source, "if (!resetAttention()) return undefined;") {
+		t.Fatal("Pi attention is not reset at run start, settlement, and shutdown")
+	}
+	before := regexp.MustCompile(`(?s)pi\.on\("before_agent_start".*?if \(governedRun\) return undefined;.*?if \(!resetAttention\(\)\) return undefined;.*?` +
+		`if \(!attachBoundary\(boundary\)\) return undefined;.*?governedRun = true;`)
+	if !before.MatchString(source) {
+		t.Fatal("Pi attachment failure can inherit or activate a governed tool budget")
+	}
+	restore := regexp.MustCompile(`(?s)try \{\s*pi\.setActiveTools\(savedActiveTools\);\s*` +
+		`ownsToolOverride = false;\s*savedActiveTools = undefined;\s*return true;\s*` +
+		`} catch \{.*?return false;\s*}`)
+	if !restore.MatchString(source) {
+		t.Fatal("Pi failed restore can discard the exact tool snapshot or open a new run")
+	}
+	reason := regexp.MustCompile(`(?s)const ATTENTION_EXHAUSTED_REASON =\s*"([^"]+)";`).
+		FindStringSubmatch(source)
+	if len(reason) != 2 || len(reason[1]) > 192 {
+		t.Fatalf("Pi attention diagnostic is absent or unbounded: %q", reason)
+	}
+	for _, forbidden := range []string{"accepted", "completed", "receipt", "event", "handling"} {
+		if strings.Contains(strings.ToLower(reason[1]), forbidden) {
+			t.Fatalf("Pi attention diagnostic claims protocol meaning %q", forbidden)
+		}
+	}
+}
+
 func TestInstallPiIsProjectLocalExactAndPreservesAdjacentFiles(t *testing.T) {
 	workspace := testWorkspace(t)
 	legacy := filepath.Join(workspace, ".pi", "skills", "mnemon", "SKILL.md")
@@ -213,6 +491,7 @@ func TestInstallPiIsProjectLocalExactAndPreservesAdjacentFiles(t *testing.T) {
 	}
 	assertFile(t, receipt.GuidePath, projection.Guide(), projectedMode)
 	assertFile(t, receipt.ExtensionPath, projection.PiExtension(), projectedMode)
+	assertFile(t, receipt.CurrentExtensionPath, projection.PiCurrentExtension(), projectedMode)
 	assertFile(t, receipt.JournalPath, mustPlan(t, workspace).journalBytes, journalMode)
 	assertFile(t, legacy, []byte("legacy memory\n"), 0o644)
 	assertFile(t, custom, []byte("custom extension\n"), 0o644)
@@ -228,7 +507,8 @@ func TestInstallPiExactReplayDoesNotRewriteOwnedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths := []string{first.GuidePath, first.ExtensionPath, first.JournalPath}
+	paths := []string{first.GuidePath, first.ExtensionPath, first.CurrentExtensionPath,
+		first.JournalPath}
 	identities := make([]os.FileInfo, len(paths))
 	for index, path := range paths {
 		identities[index], err = os.Lstat(path)
@@ -251,6 +531,7 @@ func TestInstallPiExactReplayDoesNotRewriteOwnedFiles(t *testing.T) {
 func TestInstallPiRecoversEveryDurableInterruption(t *testing.T) {
 	stages := []string{
 		"after_journal",
+		"after_file:.pi/extensions/mnemond-current.ts",
 		"after_file:.pi/extensions/mnemond.ts",
 		"after_file:.pi/skills/mnemond/SKILL.md",
 	}
@@ -458,6 +739,7 @@ func (info foreignOwnerInfo) Sys() any {
 func assertInstallPaths(t *testing.T, workspace string, receipt InstallReceipt) {
 	t.Helper()
 	if receipt.GuidePath != filepath.Join(workspace, ".pi", "skills", "mnemond", "SKILL.md") ||
+		receipt.CurrentExtensionPath != filepath.Join(workspace, ".pi", "extensions", "mnemond-current.ts") ||
 		receipt.ExtensionPath != filepath.Join(workspace, ".pi", "extensions", "mnemond.ts") ||
 		receipt.JournalPath != filepath.Join(workspace, ".mnemon", "harness", "attach", "pi",
 			"ownership.json") {

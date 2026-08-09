@@ -13,6 +13,144 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
+func TestAgentSubmitReturnsBoundedInputDiagnostics(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		code    controlErrorCode
+		message string
+	}{
+		{name: "syntax", input: "{", code: codeInvalidArgument,
+			message: "exactly one JSON object"},
+		{name: "required", input: `{"kind":"work","payload":"brief"}`,
+			code: codeInvalidArgument, message: "include kind, payload, and consequence"},
+		{name: "unknown", input: `{"kind":"work","payload":"brief","consequence":"handling.create","extra":true}`,
+			code: codeInvalidArgument, message: "contains a non-canonical field"},
+		{name: "duplicate", input: `{"kind":"work","kind":"work","payload":"brief","consequence":"handling.create"}`,
+			code: codeInvalidArgument, message: "contains a duplicate JSON field"},
+		{name: "shape", input: `{"kind":"work","payload":"brief","consequence":"not.closed"}`,
+			code: codeInvalidArgument, message: "copied exactly from the current View allowed_intents"},
+		{name: "root-shape", input: `{"kind":"work","payload":"brief","consequence":"handling.create"}`,
+			code: codeInvalidArgument, message: "requires at least one View-offered successor"},
+		{name: "subject-shape", input: `{"kind":"work","payload":"brief","consequence":"handling.advance"}`,
+			code: codeInvalidArgument, message: "requires current.facts.handle as subject_handling"},
+		{name: "reference-publish-shape",
+			input: `{"kind":"work","payload":"brief","consequence":"reference.publish","reference_key":"knowledge.current"}`,
+			code:  codeInvalidArgument, message: "requires one new reference_key, exactly one Artifact"},
+		{name: "reference-supersede-shape",
+			input: `{"kind":"work","payload":"brief","consequence":"reference.supersede","reference_head":"reference:head"}`,
+			code:  codeInvalidArgument, message: "requires one View-offered reference_head, exactly one Artifact"},
+		{name: "reference-retract-shape",
+			input: `{"kind":"work","payload":"brief","consequence":"reference.retract","reference_head":"reference:head","artifacts":[{"kind":"view_handle","handle":"artifact:offered"}]}`,
+			code:  codeInvalidArgument, message: "requires one View-offered reference_head, no Artifact"},
+		{name: "target-shape",
+			input: `{"kind":"work","payload":"brief","consequence":"handling.create","successors":[{"self":true,"alias":"target:peer"}]}`,
+			code:  codeInvalidArgument, message: "exactly one of self:true or one View-offered alias"},
+		{name: "artifact-kind",
+			input: `{"kind":"work","payload":"brief","consequence":"reference.publish","reference_key":"knowledge.current","artifacts":[{"kind":"other","handle":"artifact:candidate"}]}`,
+			code:  codeInvalidArgument, message: "Artifact kind must be exactly candidate or view_handle"},
+		{name: "field-bound",
+			input: `{"kind":"work","payload":"` + strings.Repeat("x", agency.MaxSemanticPayloadBytes+1) +
+				`","consequence":"handling.create"}`,
+			code: codeContentTooLarge, message: "exceeds a closed field or collection bound"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newAppFixture(t)
+			fixture.attach(t)
+			var output bytes.Buffer
+			exit := fixture.app(strings.NewReader(test.input), &output).
+				Run(context.Background(), []string{"agent", "submit", "--json"})
+			if exit != test.code.exitStatus() ||
+				!strings.Contains(output.String(), `"code":"`+string(test.code)+`"`) ||
+				!strings.Contains(output.String(), test.message) {
+				t.Fatalf("submit diagnostic = exit %d output %q", exit, output.String())
+			}
+			fixture.client.mu.Lock()
+			submitCalls := len(fixture.client.submitOperations)
+			fixture.client.mu.Unlock()
+			if submitCalls != 0 {
+				t.Fatalf("invalid input reached authority %d times", submitCalls)
+			}
+		})
+	}
+}
+
+func TestAgentSubmitCommandAndStdinDiagnosticsAreActionable(t *testing.T) {
+	fixture := newAppFixture(t)
+	fixture.attach(t)
+	for _, test := range []struct {
+		name    string
+		args    []string
+		message string
+	}{
+		{name: "json passed as argument",
+			args:    []string{"agent", "submit", "--json", `{}`},
+			message: "use exactly mnemon-harness agent submit --json and provide Intent JSON on stdin"},
+		{name: "empty stdin", args: []string{"agent", "submit", "--json"},
+			message: "provide exactly one Intent JSON object on stdin with a quoted heredoc"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			exit := fixture.app(strings.NewReader(""), &output).Run(context.Background(), test.args)
+			if exit != codeInvalidArgument.exitStatus() && exit != codeContentRequired.exitStatus() {
+				t.Fatalf("submit diagnostic exit = %d output %q", exit, output.String())
+			}
+			if !strings.Contains(output.String(), test.message) {
+				t.Fatalf("submit diagnostic output = %q, want %q", output.String(), test.message)
+			}
+		})
+	}
+}
+
+func TestAgentSubmitReportsUncapturedCandidateAsArtifactInput(t *testing.T) {
+	fixture := newAppFixture(t)
+	fixture.attach(t)
+	if exit := fixture.app(strings.NewReader(""), io.Discard).
+		Run(context.Background(), []string{"agent", "current", "--json"}); exit != 0 {
+		t.Fatalf("Current exit = %d", exit)
+	}
+
+	var output bytes.Buffer
+	exit := fixture.app(bytes.NewReader(candidateRootIntent(t, "artifact:not-captured")), &output).
+		Run(context.Background(), []string{"agent", "submit", "--json"})
+	if exit != codeArtifactInvalid.exitStatus() ||
+		!strings.Contains(output.String(), `"code":"artifact_invalid"`) ||
+		!strings.Contains(output.String(), "not returned by capture") ||
+		!strings.Contains(output.String(), "use view_handle") ||
+		strings.Contains(output.String(), string(codeAuthenticationFailed)) {
+		t.Fatalf("uncaptured candidate diagnostic = exit %d output %q", exit, output.String())
+	}
+	fixture.client.mu.Lock()
+	submitCalls := len(fixture.client.submitOperations)
+	fixture.client.mu.Unlock()
+	if submitCalls != 0 {
+		t.Fatalf("uncaptured candidate reached authority %d times", submitCalls)
+	}
+	if exit := fixture.app(strings.NewReader("captured after correction"), io.Discard).
+		Run(context.Background(), []string{"artifact", "capture", "--json"}); exit != 0 {
+		t.Fatalf("capture after candidate diagnostic exit = %d", exit)
+	}
+	output.Reset()
+	exit = fixture.app(bytes.NewReader(candidateRootIntent(t, "artifact:test-candidate")), &output).
+		Run(context.Background(), []string{"agent", "submit", "--json"})
+	if exit != 0 || !strings.Contains(output.String(), `"outcome":"accepted"`) {
+		t.Fatalf("corrected candidate submit = exit %d output %q", exit, output.String())
+	}
+}
+
+func TestIntentInputDiagnosticDoesNotEchoUnknownValidationText(t *testing.T) {
+	err := &agency.ValidationError{Category: agency.ErrInvariant,
+		Field: "secret-field-sentinel", Problem: "secret-problem-sentinel"}
+	diagnostic := intentInputControlError(err)
+	if strings.Contains(diagnostic.Message, "secret-field-sentinel") ||
+		strings.Contains(diagnostic.Message, "secret-problem-sentinel") ||
+		diagnostic.Code != codeInvalidArgument ||
+		!strings.Contains(diagnostic.Message, "invalid canonical field or structural shape") {
+		t.Fatalf("unknown validation diagnostic = %#v", diagnostic)
+	}
+}
+
 func TestCaptureKeepsDigestPrivateAndSubmitReplaysAfterPresentationLoss(t *testing.T) {
 	fixture := newAppFixture(t)
 	fixture.attach(t)
@@ -536,8 +674,8 @@ func referencePublishIntent(t *testing.T, artifactHandle string) []byte {
 }
 
 func subjectViewForTest() []byte {
-	return []byte(`{"schema":"mnemon.agent.view","version":4,` +
-		`"view":"view:test","current":{"facts":{"handle":"r7:subject:test","reply_to":"r7:subject:test"},` +
+	return []byte(`{"schema":"mnemon.agent.view","version":7,` +
+		`"view":"view:test","current":{"facts":{"handle":"r7:subject:test","reply_to":"r7:subject:test","reply_required":false,"reply_observation_pending":false},` +
 		`"semantic":{"kind":"review.request","payload":"review"}},` +
 		`"outstanding":{"open_total":1,"related_total":0,"related_projected":0,"truncated":false},` +
 		`"allowed_intents":[]}`)

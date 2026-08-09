@@ -12,17 +12,29 @@ import (
 )
 
 type failureReport struct {
-	Schema  string    `json:"schema"`
-	Version int       `json:"version"`
-	Status  string    `json:"status"`
-	Model   string    `json:"model"`
-	Run     runReport `json:"run"`
-	Failure struct {
+	Schema   string    `json:"schema"`
+	Version  int       `json:"version"`
+	Status   string    `json:"status"`
+	Model    string    `json:"model"`
+	Thinking string    `json:"thinking"`
+	Run      runReport `json:"run"`
+	Failure  struct {
 		Code       string `json:"code"`
 		ObservedAt string `json:"observed_at"`
 	} `json:"failure"`
-	Turns                      []turnSummary `json:"turns"`
-	RawProviderStreamsRetained bool          `json:"raw_provider_streams_retained"`
+	World                      []failureWorldSnapshot `json:"world"`
+	Attention                  *attentionEnvelope     `json:"attention_envelope"`
+	Turns                      []turnSummary          `json:"turns"`
+	RawProviderStreamsRetained bool                   `json:"raw_provider_streams_retained"`
+}
+
+type failureWorldSnapshot struct {
+	Episode             string `json:"episode"`
+	Charges             int    `json:"charges"`
+	ActiveCharges       int    `json:"active_charges"`
+	VoidedCharges       int    `json:"voided_charges"`
+	UniqueBusinesses    int    `json:"unique_businesses"`
+	DuplicateBusinesses int    `json:"duplicate_businesses"`
 }
 
 func loadFailureReport(path string) (failureReport, error) {
@@ -37,9 +49,9 @@ func loadFailureReport(path string) (failureReport, error) {
 }
 
 func validateFailureReport(report failureReport) error {
-	if report.Schema != "mnemon.r7.domain-ops.failure-report" || report.Version != 1 ||
+	if report.Schema != "mnemon.r7.domain-ops.failure-report" || report.Version != 7 ||
 		report.Status != "failed" || report.RawProviderStreamsRetained ||
-		report.Model == "" || report.Failure.Code == "" {
+		report.Model == "" || !validThinkingLevel(report.Thinking) || report.Failure.Code == "" {
 		return errors.New("sanitized failure report has invalid identity or status")
 	}
 	for label, value := range map[string]string{"model": report.Model,
@@ -63,11 +75,38 @@ func validateFailureReport(report failureReport) error {
 	if err != nil || observedAt.Before(startedAt) || observedAt.After(finishedAt) {
 		return errors.New("sanitized failure report has invalid failure time")
 	}
-	return validateCompletedTurnSubset(report.Turns)
+	if err := validateCompletedTurnSubset(report.Turns); err != nil {
+		return err
+	}
+	if err := validateFailureWorld(report.World); err != nil {
+		return err
+	}
+	return validateFailedAttention(report.Failure.Code, report.Attention, report.Turns)
+}
+
+func validateFailureWorld(values []failureWorldSnapshot) error {
+	if len(values) > 2 {
+		return errors.New("sanitized failure report contains too many world snapshots")
+	}
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if !slices.Contains([]string{"episode-1", "episode-2"}, value.Episode) ||
+			value.Charges < 0 || value.Charges > 1000000 || value.ActiveCharges < 0 ||
+			value.VoidedCharges < 0 || value.UniqueBusinesses < 0 ||
+			value.DuplicateBusinesses < 0 || value.ActiveCharges+value.VoidedCharges != value.Charges ||
+			value.UniqueBusinesses > value.Charges || value.DuplicateBusinesses > value.UniqueBusinesses {
+			return errors.New("sanitized failure report contains an invalid world snapshot")
+		}
+		if _, duplicate := seen[value.Episode]; duplicate {
+			return errors.New("sanitized failure report repeats a world snapshot")
+		}
+		seen[value.Episode] = struct{}{}
+	}
+	return nil
 }
 
 func validateCompletedTurnSubset(turns []turnSummary) error {
-	if len(turns) > 1+8*len(domainRoles) {
+	if len(turns) > 3+2*attentionTurnLimit {
 		return errors.New("sanitized failure report contains too many completed turns")
 	}
 	seen := make(map[string]struct{}, len(turns))
@@ -79,23 +118,9 @@ func validateCompletedTurnSubset(turns []turnSummary) error {
 			return errors.New("sanitized failure report repeats a turn")
 		}
 		seen[turn.Turn] = struct{}{}
-		values := []int{turn.HookCues, turn.BashCalls, turn.CurrentReads, turn.SubmitAttempts,
-			turn.IntentSubmits,
-			turn.AcceptedReceipts, turn.RejectedReceipts, turn.SubmitDenials,
-			turn.PostAcceptDenials,
-			turn.PrivateBindingProbes}
-		if _, err := parseReportTime("turn captured_at", turn.CapturedAt); err != nil {
-			return err
-		}
-		if !turn.AgentEnd || turn.HookCues < 1 || slices.ContainsFunc(values,
-			func(value int) bool { return value < 0 || value > 256 }) ||
-			turn.PrivateBindingProbes != 0 || turn.CurrentReads > turn.BashCalls ||
-			turn.AcceptedReceipts > 1 ||
-			turn.PostAcceptDenials > turn.SubmitDenials ||
-			(turn.PostAcceptDenials > 0 && turn.AcceptedReceipts != 1) ||
-			turn.IntentSubmits != turn.AcceptedReceipts+turn.RejectedReceipts ||
-			turn.SubmitAttempts != turn.IntentSubmits+turn.SubmitDenials {
-			return errors.New("sanitized failure report contains an invalid completed turn")
+		if err := validateTurnSummary(turn); err != nil {
+			return fmt.Errorf("sanitized failure report contains invalid completed turn %q for role %q: %w",
+				turn.Turn, turn.Role, err)
 		}
 	}
 	return nil
@@ -122,26 +147,38 @@ func writeFailureTrace(destination io.Writer, report failureReport,
 	if err := appendRuntimeFacts(writer, report.Turns); err != nil {
 		return err
 	}
+	if err := validateTurnEventBindings(report.Turns, nodes); err != nil {
+		return err
+	}
 	if _, err := appendArtifactFacts(writer, nodes); err != nil {
 		return err
 	}
-	eventFacts, ordered, err := appendEventFacts(writer, nodes)
+	eventFacts, ordered, err := appendEventFacts(writer, nodes, report.Turns)
 	if err != nil {
 		return err
 	}
 	if err := appendDomainEffectFacts(writer, nodes, eventFacts, ordered); err != nil {
 		return err
 	}
-	if _, err := appendReceiptFacts(writer, nodes, eventFacts); err != nil {
+	receiptFacts, err := appendReceiptFacts(writer, nodes, eventFacts)
+	if err != nil {
 		return err
 	}
-	if _, err := appendDeliveryFacts(writer, nodes, eventFacts); err != nil {
+	readmittedFacts, err := appendDeliveryFacts(writer, nodes, eventFacts)
+	if err != nil {
 		return err
 	}
-	return finishFailedTrace(writer, report.Failure.Code, observedAt, finishedAt)
+	attentionFacts, err := appendFailedAttentionFacts(writer, report.Attention, observedAt)
+	if err != nil {
+		return err
+	}
+	return finishFailedTrace(writer, report.Failure.Code, attentionFacts, receiptFacts,
+		readmittedFacts, observedAt, finishedAt)
 }
 
-func finishFailedTrace(writer *observer.Writer, code string, observedAt, finishedAt time.Time) error {
+func finishFailedTrace(writer *observer.Writer, code string, attentionFacts []string,
+	receiptFacts, readmittedFacts []string, observedAt, finishedAt time.Time,
+) error {
 	failureFact := hashedFactID("failed-run", code)
 	if _, err := writer.Append(observer.Fact{ID: failureFact, CapturedAt: observedAt,
 		Source: observer.Source{Class: observer.SourceOracle, Node: "runner"},
@@ -149,15 +186,29 @@ func finishFailedTrace(writer *observer.Writer, code string, observedAt, finishe
 		Fields: observer.FactFields{GateID: "scenario.run", Status: "fail", Code: code}}); err != nil {
 		return err
 	}
+	evidence := append([]string{failureFact}, attentionFacts...)
 	gates := []observer.Gate{{ID: "scenario.run", Status: observer.GateFail,
-		Evidence: []string{failureFact}}}
+		Evidence: evidence}}
 	for _, gate := range []string{"scenario.recovery", "scenario.service-receipts",
-		"r7.operation-receipts", "r7.peer-accepted-effect", "r7.delivery-quiescence",
-		"scenario.isolation"} {
+		"r7.delivery-quiescence", "scenario.isolation", "scenario.evolution"} {
 		gates = append(gates, observer.Gate{ID: gate, Status: observer.GateUnknown})
 	}
+	gates = append(gates,
+		observedProtocolGate("r7.operation-receipts", receiptFacts),
+		observedProtocolGate("r7.peer-accepted-effect", readmittedFacts))
 	gates = append(gates, observer.Gate{ID: "r8.applicability",
 		Status: observer.GateNotApplicable})
 	return writer.Finish(observer.Result{Status: observer.ResultFailed,
 		FinishedAt: finishedAt, Gates: gates})
+}
+
+func observedProtocolGate(id string, facts []string) observer.Gate {
+	if len(facts) == 0 {
+		return observer.Gate{ID: id, Status: observer.GateUnknown}
+	}
+	if len(facts) > 32 {
+		facts = facts[:32]
+	}
+	return observer.Gate{ID: id, Status: observer.GatePass,
+		Evidence: append([]string{}, facts...)}
 }

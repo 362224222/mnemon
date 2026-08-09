@@ -95,19 +95,30 @@ type FactFields struct {
 	Action           string   `json:"action,omitempty"`
 	Alpha            *int     `json:"alpha,omitempty"`
 	ArtifactCount    *int     `json:"artifact_count,omitempty"`
+	AttemptCount     *int     `json:"attempt_count,omitempty"`
+	BatchedCount     *int     `json:"batched_unattributed_count,omitempty"`
 	Authenticated    *bool    `json:"authenticated,omitempty"`
 	BypassedHook     *bool    `json:"bypassed_hook,omitempty"`
 	ByteSize         *int64   `json:"byte_size,omitempty"`
 	Code             string   `json:"code,omitempty"`
+	Count            *int     `json:"count,omitempty"`
 	Consequence      string   `json:"consequence,omitempty"`
 	DurationMillis   *int64   `json:"duration_ms,omitempty"`
+	Episode          string   `json:"episode,omitempty"`
 	GateID           string   `json:"gate_id,omitempty"`
+	GoalDigest       string   `json:"goal_digest,omitempty"`
+	GoalSatisfied    *bool    `json:"goal_satisfied,omitempty"`
+	HasCurrent       *bool    `json:"has_current,omitempty"`
 	HookCue          *bool    `json:"hook_cue,omitempty"`
 	InvalidVotes     *int     `json:"invalid_votes,omitempty"`
+	InvalidCount     *int     `json:"invalid_result_count,omitempty"`
 	MarginAfter      *int     `json:"margin_after,omitempty"`
 	MarginBefore     *int     `json:"margin_before,omitempty"`
 	NoVote           *bool    `json:"no_vote,omitempty"`
 	NoVotes          *int     `json:"no_votes,omitempty"`
+	OccupiedClaims   *int     `json:"occupied_claims,omitempty"`
+	OpenTotal        *int     `json:"open_total,omitempty"`
+	OpenUnclaimed    *int     `json:"open_unclaimed,omitempty"`
 	Outcome          string   `json:"outcome,omitempty"`
 	PayloadBytes     *int     `json:"payload_bytes,omitempty"`
 	Phase            string   `json:"phase,omitempty"`
@@ -115,15 +126,24 @@ type FactFields struct {
 	PreferenceBefore string   `json:"preference_before,omitempty"`
 	Recolored        *bool    `json:"recolored,omitempty"`
 	Replayed         *bool    `json:"replayed,omitempty"`
+	ReplyRequired    *bool    `json:"reply_required,omitempty"`
 	Result           string   `json:"result,omitempty"`
+	RelatedProjected *int     `json:"related_projected,omitempty"`
+	RelatedTotal     *int     `json:"related_total,omitempty"`
+	Role             string   `json:"role,omitempty"`
 	Round            *int     `json:"round,omitempty"`
 	SampleSize       *int     `json:"sample_size,omitempty"`
 	SemanticKind     string   `json:"semantic_kind,omitempty"`
 	State            string   `json:"state,omitempty"`
 	Status           string   `json:"status,omitempty"`
+	SuccessCount     *int     `json:"success_count,omitempty"`
 	TargetCount      *int     `json:"target_count,omitempty"`
+	ToolErrorCount   *int     `json:"tool_error_count,omitempty"`
 	Targets          []string `json:"targets,omitempty"`
 	TimedOut         *bool    `json:"timed_out,omitempty"`
+	Truncated        *bool    `json:"truncated,omitempty"`
+	TurnLimit        *int     `json:"turn_limit,omitempty"`
+	TurnsUsed        *int     `json:"turns_used,omitempty"`
 	ViewNonempty     *bool    `json:"view_nonempty,omitempty"`
 	VotesA           *int     `json:"votes_a,omitempty"`
 	VotesB           *int     `json:"votes_b,omitempty"`

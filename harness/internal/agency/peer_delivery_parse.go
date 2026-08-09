@@ -33,8 +33,8 @@ func ParsePeerDeliveryCanonicalJSON(data []byte, enrolledRoute RouteID) (ParsedP
 }
 
 func peerDeliveryFromWire(wire peerDeliveryWire, enrolledRoute RouteID) (PeerDelivery, error) {
-	if wire.SchemaVersion != 1 {
-		return PeerDelivery{}, invalid("PeerDelivery schema version", "must be 1")
+	if wire.SchemaVersion != 3 {
+		return PeerDelivery{}, invalid("PeerDelivery schema version", "must be 3")
 	}
 	encodedID, err := ParseDeliveryID(wire.DeliveryID)
 	if err != nil {
@@ -52,6 +52,10 @@ func peerDeliveryFromWire(wire peerDeliveryWire, enrolledRoute RouteID) (PeerDel
 	if err != nil {
 		return PeerDelivery{}, err
 	}
+	originConsequence, err := parseConsequence(wire.Origin.Consequence)
+	if err != nil {
+		return PeerDelivery{}, err
+	}
 	causation, err := parsePeerEventRefs("PeerDelivery origin causation", wire.Origin.Causation)
 	if err != nil {
 		return PeerDelivery{}, err
@@ -59,6 +63,13 @@ func peerDeliveryFromWire(wire peerDeliveryWire, enrolledRoute RouteID) (PeerDel
 	correlation, err := parsePeerOptionalEventRef("PeerDelivery origin correlation", wire.Origin.Correlation)
 	if err != nil {
 		return PeerDelivery{}, err
+	}
+	var inReplyToDelivery DeliveryID
+	if wire.InReplyToDelivery != "" {
+		inReplyToDelivery, err = ParseDeliveryID(wire.InReplyToDelivery)
+		if err != nil {
+			return PeerDelivery{}, err
+		}
 	}
 	target, err := NewOpaqueHandle(wire.TargetAlias)
 	if err != nil {
@@ -83,8 +94,10 @@ func peerDeliveryFromWire(wire peerDeliveryWire, enrolledRoute RouteID) (PeerDel
 	delivery, err := NewPeerDelivery(enrolledRoute, PeerDeliverySpec{
 		OriginEvent: originEvent, OriginSequence: wire.Origin.Sequence,
 		OriginAcceptedAt: originAcceptedAt, OriginSource: originSource,
+		OriginConsequence: originConsequence, OriginTargetCount: wire.Origin.TargetCount,
 		OriginCausation: causation, OriginCorrelation: correlation,
-		TargetAlias: target, Kind: kind, Payload: payload, Artifacts: artifacts,
+		InReplyToDelivery: inReplyToDelivery,
+		TargetAlias:       target, Kind: kind, Payload: payload, Artifacts: artifacts,
 		CausalDepth: wire.CausalDepth, ExpiresAt: expiresAt,
 	})
 	if err != nil {

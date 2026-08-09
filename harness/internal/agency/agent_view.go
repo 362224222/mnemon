@@ -4,11 +4,12 @@ import "sort"
 
 const (
 	AgentViewSchema              = "mnemon.agent.view"
-	AgentViewVersion             = 4
+	AgentViewVersion             = 7
 	MaxAgentViewCanonicalBytes   = 16 << 10
 	MaxAgentViewReferences       = 8
 	MaxAgentViewCurrentArtifacts = MaxArtifactInputs
-	MaxAgentViewRelatedOpen      = 1
+	MaxAgentViewRelated          = 1
+	MaxAgentViewRelatedTotal     = 128
 	// Current plus projected related semantics never exceed one accepted
 	// Event payload. This keeps related evidence from making an otherwise
 	// readable responsibility exceed the canonical View budget.
@@ -110,7 +111,7 @@ func NewAgentView(spec AgentViewSpec) (AgentView, error) {
 		Version:        AgentViewVersion,
 		View:           spec.Handle.String(),
 		Current:        current,
-		RelatedOpen:    related,
+		Related:        related,
 		Outstanding:    projectOutstanding(spec.Outstanding),
 		References:     references,
 		Targets:        projectTargetAliases(spec.Authority.targets),
@@ -149,7 +150,8 @@ func (view AgentView) CanonicalJSON() []byte { return copyBytes(view.canonical) 
 func projectCurrent(spec *AgentViewCurrentSpec, authority ViewAuthority) (*agentViewCurrentWire, map[string]struct{}, error) {
 	artifacts := make(map[string]struct{})
 	if spec == nil {
-		if len(authority.subjects) != 0 || !authority.replyTarget.IsZero() {
+		if len(authority.subjects) != 0 || !authority.replyTo.IsZero() ||
+			!authority.replyTarget.IsZero() || !authority.replyDelivery.IsZero() {
 			return nil, nil, invariant("Agent View current", "sealed subject must be projected")
 		}
 		return nil, artifacts, nil
@@ -162,6 +164,9 @@ func projectCurrent(spec *AgentViewCurrentSpec, authority ViewAuthority) (*agent
 	}
 	if _, offered := authority.subjects[spec.Subject.String()]; !offered || len(authority.subjects) != 1 {
 		return nil, nil, invariant("Agent View current", "subject was not the sealed current subject")
+	}
+	if spec.ReplyTo != authority.replyTo {
+		return nil, nil, invariant("Agent View current", "reply-to does not match sealed reply authority")
 	}
 	if _, offered := authority.provenance[spec.ReplyTo.String()]; !offered {
 		return nil, nil, invariant("Agent View current", "reply-to was not offered as provenance")
@@ -185,7 +190,8 @@ func projectCurrent(spec *AgentViewCurrentSpec, authority ViewAuthority) (*agent
 	sort.Slice(artifactWires, func(i, j int) bool { return artifactWires[i].Handle < artifactWires[j].Handle })
 	return &agentViewCurrentWire{
 		Facts: agentViewCurrentFactsWire{Handle: spec.Subject.String(), ReplyTo: spec.ReplyTo.String(),
-			ReplyTarget: replyTarget, Artifacts: artifactWires},
+			ReplyRequired: replyTarget != "", ReplyTarget: replyTarget,
+			ReplyObservationPending: authority.replyObservationPending, Artifacts: artifactWires},
 		Semantic: agentViewSemanticWire{Kind: spec.Kind.String(), Payload: spec.Payload.String()},
 	}, artifacts, nil
 }

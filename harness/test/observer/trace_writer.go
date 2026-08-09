@@ -16,6 +16,7 @@ type Writer struct {
 	destination io.Writer
 	digest      hash.Hash
 	seen        map[string]struct{}
+	gateFacts   map[string]gateAssertion
 	count       int
 	closed      bool
 	failure     error
@@ -76,6 +77,7 @@ func NewWriter(destination io.Writer, run Run) (*Writer, error) {
 		destination: destination,
 		digest:      sha256.New(),
 		seen:        make(map[string]struct{}),
+		gateFacts:   make(map[string]gateAssertion),
 	}
 	line := runLine{
 		Schema: traceSchema, Version: traceVersion, Record: "run", RunID: run.ID,
@@ -114,6 +116,10 @@ func (writer *Writer) Append(fact Fact) (int, error) {
 	}
 	writer.count = sequence
 	writer.seen[fact.ID] = struct{}{}
+	if fact.Kind == "test.gate.checked" {
+		writer.gateFacts[fact.ID] = gateAssertion{ID: fact.Fields.GateID,
+			Status: GateStatus(fact.Fields.Status)}
+	}
 	return sequence, nil
 }
 

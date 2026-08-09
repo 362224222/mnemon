@@ -17,13 +17,15 @@ import (
 
 const (
 	authorityApplicationID = 0x4d4e5237
-	authoritySchemaVersion = 9
+	authoritySchemaVersion = 12
 )
 
 type evidence struct {
-	Report   liveReport
-	Scenario scenarioEvidence
-	Nodes    []nodeEvidence
+	Report             liveReport
+	Scenario           scenarioEvidence
+	Nodes              []nodeEvidence
+	ConsolidationNodes []nodeEvidence
+	BoundaryNodes      []nodeEvidence
 }
 
 type nodeEvidence struct {
@@ -73,19 +75,36 @@ type referenceEvidence struct {
 }
 
 type deliveryEvidence struct {
-	Node              string
-	Direction         string
-	ID                string
-	State             string
-	CapturedAt        time.Time
-	OriginEventID     string
-	OriginEventDigest string
-	LocalEventID      string
-	LocalEventDigest  string
-	Accepted          bool
+	Node                    string
+	Direction               string
+	ID                      string
+	RouteID                 string
+	State                   string
+	CapturedAt              time.Time
+	EnvelopeDigest          string
+	OriginEventID           string
+	OriginEventDigest       string
+	OriginSequence          uint64
+	OriginAcceptedAt        time.Time
+	OriginSource            string
+	OriginConsequence       string
+	OriginTargetCount       int
+	OriginCausalDepth       uint16
+	OriginSemanticKind      string
+	OriginPayloadBytes      int
+	OriginArtifacts         []string
+	OriginCausation         []eventRefWire
+	OriginCorrelation       *eventRefWire
+	InReplyToDeliveryID     string
+	ReplyAnchorHandlingID   string
+	ExpectedReplyRootID     string
+	ExpectedReplyRootDigest string
+	LocalEventID            string
+	LocalEventDigest        string
+	Accepted                bool
 }
 
-func loadEvidence(reportPath, authorityRoot string) (evidence, error) {
+func loadEvidence(reportPath, authorityRoot, consolidationRoot, boundaryRoot string) (evidence, error) {
 	report, err := loadReport(reportPath)
 	if err != nil {
 		return evidence{}, err
@@ -94,7 +113,16 @@ func loadEvidence(reportPath, authorityRoot string) (evidence, error) {
 	if err != nil {
 		return evidence{}, err
 	}
-	proof := evidence{Report: report, Nodes: nodes}
+	consolidation, err := loadAuthorityNodes(consolidationRoot)
+	if err != nil {
+		return evidence{}, fmt.Errorf("load consolidation authority: %w", err)
+	}
+	boundary, err := loadAuthorityNodes(boundaryRoot)
+	if err != nil {
+		return evidence{}, fmt.Errorf("load evolution boundary authority: %w", err)
+	}
+	proof := evidence{Report: report, Nodes: nodes,
+		ConsolidationNodes: consolidation, BoundaryNodes: boundary}
 	if err := validateCombinedEvidence(proof); err != nil {
 		return evidence{}, err
 	}

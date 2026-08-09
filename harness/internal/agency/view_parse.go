@@ -35,7 +35,8 @@ func ParseViewAuthorityCanonicalJSON(data []byte, attachment Attachment) (ViewAu
 }
 
 func machineViewSpecFromWire(wire machineViewWire, attachment Attachment) (MachineViewSpec, error) {
-	spec := MachineViewSpec{Attachment: attachment}
+	spec := MachineViewSpec{Attachment: attachment,
+		ReplyObservationPending: wire.ReplyObservationPending}
 	var err error
 	if spec.Consequences, err = parseViewConsequences(wire.Consequences); err != nil {
 		return MachineViewSpec{}, err
@@ -49,8 +50,18 @@ func machineViewSpecFromWire(wire machineViewWire, attachment Attachment) (Machi
 	if spec.Targets, err = parseViewTargets(wire.Targets); err != nil {
 		return MachineViewSpec{}, err
 	}
+	if wire.ReplyTo != "" {
+		if spec.ReplyTo, err = NewOpaqueHandle(wire.ReplyTo); err != nil {
+			return MachineViewSpec{}, err
+		}
+	}
 	if spec.ReplyTarget, err = parseViewReplyTarget(wire.ReplyTarget); err != nil {
 		return MachineViewSpec{}, err
+	}
+	if wire.ReplyDelivery != "" {
+		if spec.ReplyDelivery, err = ParseDeliveryID(wire.ReplyDelivery); err != nil {
+			return MachineViewSpec{}, err
+		}
 	}
 	if spec.Artifacts, err = parseViewArtifacts(wire.Artifacts); err != nil {
 		return MachineViewSpec{}, err
@@ -102,7 +113,8 @@ func parseViewSubjects(wires []viewSubjectWire) ([]SubjectBinding, error) {
 		if err != nil {
 			return nil, err
 		}
-		binding, err := NewSubjectBinding(handle, handlingID, head, wire.Binding.Fence)
+		binding, err := NewSubjectBinding(handle, handlingID, head, wire.Binding.Fence,
+			wire.Binding.ObservationRevision)
 		if err != nil {
 			return nil, err
 		}

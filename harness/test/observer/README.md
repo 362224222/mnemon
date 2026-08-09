@@ -6,7 +6,7 @@ runs. It is deliberately outside `daemon`, `authority`, `peerlink`, and
 preference.
 
 Open `index.html` directly in a browser, then load one or more
-`mnemon.test.trace` JSONL files with the file picker or drag-and-drop surface.
+`mnemon.test.trace` v2 JSONL files with the file picker or drag-and-drop surface.
 No server, package installation, build, network access, or browser storage is
 required. The two synthetic `.trace` files under `fixtures/` exercise the R7
 collaboration and R8 coloring views without masquerading as generated run
@@ -84,7 +84,14 @@ coloring and statistics. Kinds required by the visual evidence contract also
 carry their minimum display fields: accepted Events name their semantic kind
 and consequence, resolved Handlings carry an outcome, and R8 seeds, rounds,
 votes, and observations carry the exact preference evidence rendered by the
-coloring view.
+coloring view. Attention snapshots report the exact authority predicates
+`open_unclaimed` and `occupied_claims`. Goal-based final assertions bind the
+goal projection digest and observed result: an outcome may retain open
+responsibility but cannot retain an occupied claim, exhaustion and quiescence
+cannot claim goal satisfaction, and quiescence additionally proves that no open
+work remains on that node. The dedicated `test.attention.occupied` kind carries
+no goal observation: it preserves the authority safety boundary before any
+external goal I/O can hide it, without mislabeling the claim as a live Runtime.
 
 The result footer covers the exact preceding JSONL bytes, including their line
 terminators, with `trace_digest`. Its `record_count` counts only `fact` lines.

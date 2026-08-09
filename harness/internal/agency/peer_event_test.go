@@ -111,7 +111,7 @@ func assertPeerEventCanonical(t *testing.T, event Event, target AgentPrincipalID
 	if !bytes.Equal(reencoded, event.CanonicalJSON()) || digest != event.Digest() {
 		t.Fatal("canonical peer Event JSON round trip differs")
 	}
-	if wire.SchemaVersion != 2 || wire.Machine.Consequence != ConsequenceCreateHandlings.String() {
+	if wire.SchemaVersion != 3 || wire.Machine.Consequence != ConsequenceCreateHandlings.String() {
 		t.Fatalf("canonical peer Event has the wrong schema or effect: %s", event.CanonicalJSON())
 	}
 	if len(wire.Machine.Targets) != 1 || wire.Machine.Targets[0].Destination != "local" ||
@@ -176,6 +176,7 @@ func TestNewPeerEventKeepsOnlyDirectCauseFromMaximumRemoteChain(t *testing.T) {
 	delivery, err := NewPeerDelivery(route, PeerDeliverySpec{
 		OriginEvent: mustEventRef(t, "event:provenance-origin", "origin"), OriginSequence: 1,
 		OriginAcceptedAt: testTime, OriginSource: mustPrincipal(t, "agent:origin"),
+		OriginConsequence: ConsequenceCreateHandlings, OriginTargetCount: 2,
 		OriginCausation: remoteChain, TargetAlias: mustHandle(t, "remote/target"),
 		Kind: mustLabel(t, "opaque.request"), CausalDepth: 1, ExpiresAt: testTime.Add(time.Hour),
 	})

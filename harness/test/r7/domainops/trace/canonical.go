@@ -14,9 +14,10 @@ type eventRefWire struct {
 }
 
 type subjectWire struct {
-	HandlingID string       `json:"handling_id"`
-	Head       eventRefWire `json:"head"`
-	Fence      uint64       `json:"fence"`
+	HandlingID          string       `json:"handling_id"`
+	Head                eventRefWire `json:"head"`
+	Fence               uint64       `json:"fence"`
+	ObservationRevision uint64       `json:"observation_revision"`
 }
 
 type expectedReferenceWire struct {
@@ -46,6 +47,7 @@ type eventWire struct {
 		Subject           *subjectWire           `json:"subject,omitempty"`
 		ExpectedReference *expectedReferenceWire `json:"expected_reference,omitempty"`
 		Targets           []targetWire           `json:"targets,omitempty"`
+		InReplyToDelivery string                 `json:"in_reply_to_delivery_id,omitempty"`
 	} `json:"machine"`
 	Semantic struct {
 		Kind    string `json:"kind"`
@@ -59,27 +61,29 @@ type eventWire struct {
 }
 
 type eventEvidence struct {
-	Node            string
-	ID              string
-	Digest          string
-	AcceptedAt      time.Time
-	OriginSequence  uint64
-	CausalDepth     uint16
-	SourcePrincipal string
-	OperationKey    string
-	RequestDigest   string
-	SemanticKind    string
-	PayloadBytes    int
-	Consequence     string
-	Targets         []string
-	SubjectHandling string
-	SubjectHead     *eventRefWire
-	ReferenceKey    string
-	ReferenceHead   string
-	ReferenceDigest string
-	Artifacts       []string
-	Causation       []eventRefWire
-	Correlation     *eventRefWire
+	Node                string
+	ID                  string
+	Digest              string
+	AcceptedAt          time.Time
+	OriginSequence      uint64
+	CausalDepth         uint16
+	SourcePrincipal     string
+	OperationKey        string
+	RequestDigest       string
+	SemanticKind        string
+	PayloadBytes        int
+	Consequence         string
+	Targets             []string
+	SubjectHandling     string
+	SubjectHead         *eventRefWire
+	ObservationRevision uint64
+	ReferenceKey        string
+	ReferenceHead       string
+	ReferenceDigest     string
+	Artifacts           []string
+	Causation           []eventRefWire
+	Correlation         *eventRefWire
+	InReplyToDelivery   string
 }
 
 type storedEventRow struct {
@@ -131,16 +135,23 @@ func parseStoredEvent(node string, row storedEventRow) (eventEvidence, error) {
 		RequestDigest: row.RequestDigest,
 		SemanticKind:  wire.Semantic.Kind, PayloadBytes: len([]byte(wire.Semantic.Payload)),
 		Consequence: wire.Machine.Consequence, Targets: targets,
-		SubjectHandling: subject, SubjectHead: subjectHead, ReferenceKey: referenceKey,
+		SubjectHandling: subject, SubjectHead: subjectHead,
+		ObservationRevision: func() uint64 {
+			if wire.Machine.Subject == nil {
+				return 0
+			}
+			return wire.Machine.Subject.ObservationRevision
+		}(), ReferenceKey: referenceKey,
 		ReferenceHead: referenceHead, ReferenceDigest: referenceDigest,
-		Artifacts:   append([]string{}, wire.Evidence.Artifacts...),
-		Causation:   append([]eventRefWire{}, wire.Evidence.Causation...),
-		Correlation: cloneEventRef(wire.Evidence.Correlation),
+		Artifacts:         append([]string{}, wire.Evidence.Artifacts...),
+		Causation:         append([]eventRefWire{}, wire.Evidence.Causation...),
+		Correlation:       cloneEventRef(wire.Evidence.Correlation),
+		InReplyToDelivery: wire.Machine.InReplyToDelivery,
 	}, nil
 }
 
 func validateStoredEvent(node string, row storedEventRow, wire eventWire) (time.Time, error) {
-	if wire.SchemaVersion != 2 || wire.Machine.EventID != row.ID ||
+	if wire.SchemaVersion != 3 || wire.Machine.EventID != row.ID ||
 		wire.Machine.OriginSequence != uint64(row.OriginSequence) ||
 		wire.Machine.CausalDepth != uint16(row.CausalDepth) ||
 		wire.Machine.SourcePrincipal != row.SourcePrincipal ||
@@ -182,6 +193,12 @@ func validateEventScalarValues(row storedEventRow, wire eventWire) error {
 		func() error { _, err := agency.NewSemanticLabel(wire.Semantic.Kind); return err },
 		func() error { _, err := agency.NewSemanticPayload(wire.Semantic.Payload); return err },
 	}
+	if wire.Machine.InReplyToDelivery != "" {
+		checks = append(checks, func() error {
+			_, err := agency.ParseDeliveryID(wire.Machine.InReplyToDelivery)
+			return err
+		})
+	}
 	for _, check := range checks {
 		if err := check(); err != nil {
 			return err
@@ -210,22 +227,64 @@ func validateEventEvidence(artifacts []string, causation []eventRefWire,
 }
 
 func validateEventShape(wire eventWire) error {
-	machine := wire.Machine
-	if err := validateEventTargets(machine.Targets); err != nil {
+	if err := validateEventTargets(wire.Machine.Targets); err != nil {
 		return err
 	}
-	switch machine.Consequence {
+	switch wire.Machine.Consequence {
 	case "handling.create":
-		return validateRootEvent(machine.Subject, machine.ExpectedReference, machine.Targets)
+		return validateCreateEventShape(wire)
 	case "handling.advance", "handling.resolve.completed", "handling.resolve.declined",
 		"handling.resolve.unresolved":
-		return validateSubjectEvent(machine.Subject, machine.ExpectedReference)
+		return validateSubjectBoundEventShape(wire)
 	case "reference.publish", "reference.supersede", "reference.retract":
-		return validateReferenceEvent(machine.Consequence, machine.Subject,
-			machine.ExpectedReference, machine.Targets, wire.Evidence.Artifacts)
+		return validateReferenceBoundEventShape(wire)
+	case "observation.completed", "observation.declined", "observation.unresolved":
+		return validateTerminalObservationEventShape(wire)
 	default:
 		return errors.New("Event has an unknown closed consequence")
 	}
+}
+
+func validateCreateEventShape(wire eventWire) error {
+	machine := wire.Machine
+	if machine.InReplyToDelivery != "" {
+		return errors.New("root Event carries a reply binding")
+	}
+	return validateRootEvent(machine.Subject, machine.ExpectedReference, machine.Targets)
+}
+
+func validateSubjectBoundEventShape(wire eventWire) error {
+	machine := wire.Machine
+	if err := validateSubjectEvent(machine.Subject, machine.ExpectedReference); err != nil {
+		return err
+	}
+	if machine.InReplyToDelivery == "" {
+		return nil
+	}
+	if machine.Consequence == "handling.advance" || len(machine.Targets) != 1 ||
+		machine.Targets[0].Destination != "remote" || wire.Evidence.Correlation == nil {
+		return errors.New("terminal reply Event has an invalid authority shape")
+	}
+	return nil
+}
+
+func validateReferenceBoundEventShape(wire eventWire) error {
+	machine := wire.Machine
+	if machine.InReplyToDelivery != "" {
+		return errors.New("Reference Event carries a reply binding")
+	}
+	return validateReferenceEvent(machine.Consequence, machine.Subject,
+		machine.ExpectedReference, machine.Targets, wire.Evidence.Artifacts)
+}
+
+func validateTerminalObservationEventShape(wire eventWire) error {
+	machine := wire.Machine
+	if machine.Subject != nil || machine.ExpectedReference != nil || len(machine.Targets) != 0 ||
+		machine.InReplyToDelivery == "" || wire.Evidence.Correlation == nil ||
+		len(wire.Evidence.Causation) != 1 {
+		return errors.New("terminal observation Event has an invalid authority shape")
+	}
+	return nil
 }
 
 func validateEventTargets(targets []targetWire) error {

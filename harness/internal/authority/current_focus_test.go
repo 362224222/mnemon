@@ -18,7 +18,7 @@ func TestImportedCurrentProjectsOneAuthenticatedReplyTarget(t *testing.T) {
 
 	requestDelivery := fixture.admitOrigin(t)
 	local := decodeFocusView(t, fixture.origin.current(t))
-	if local.Current == nil || local.Current.Facts.ReplyTarget != "" {
+	if local.Current == nil || local.Current.Facts.ReplyRequired || local.Current.Facts.ReplyTarget != "" {
 		t.Fatalf("local current reply target = %#v, want omitted", local.Current)
 	}
 	fixture.admitReceiver(t, requestDelivery)
@@ -32,7 +32,7 @@ func TestImportedCurrentProjectsOneAuthenticatedReplyTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	public := decodeFocusView(t, receiverView)
-	if public.Current == nil ||
+	if public.Current == nil || !public.Current.Facts.ReplyRequired ||
 		public.Current.Facts.ReplyTarget != fixture.receiverRoute.PublicAlias.String() {
 		t.Fatalf("imported current reply target = %#v, want %s",
 			public.Current, fixture.receiverRoute.PublicAlias.String())
@@ -62,7 +62,7 @@ func TestImportedCurrentProjectsOneAuthenticatedReplyTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := decodeFocusView(t, replayed); got.Current == nil ||
+	if got := decodeFocusView(t, replayed); got.Current == nil || !got.Current.Facts.ReplyRequired ||
 		got.Current.Facts.ReplyTarget != fixture.receiverRoute.PublicAlias.String() {
 		t.Fatalf("replayed imported reply target = %#v", got.Current)
 	}
@@ -76,11 +76,309 @@ func TestImportedCurrentProjectsOneAuthenticatedReplyTarget(t *testing.T) {
 			t.Fatal(err)
 		}
 		view := decodeFocusView(t, fixture.receiver.current(t))
-		if view.Current == nil || view.Current.Facts.ReplyTarget != "" ||
+		if view.Current == nil || view.Current.Facts.ReplyRequired || view.Current.Facts.ReplyTarget != "" ||
 			containsString(view.Targets, fixture.receiverRoute.PublicAlias.String()) {
 			t.Fatalf("revoked route projection = current:%#v targets:%v", view.Current, view.Targets)
 		}
 	})
+}
+
+func TestPeerRouteProjectionIsScopedToAttachmentPrincipal(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:route-projection-owner")
+	route := peerRouteSpec(t, fixture.principal, "projection-scope")
+	mustEnrollPeerRoute(t, fixture, route)
+
+	owner := decodeFocusView(t, fixture.current(t))
+	if !containsString(owner.Targets, route.PublicAlias.String()) {
+		t.Fatalf("owner View targets = %v; want route %s", owner.Targets, route.PublicAlias.String())
+	}
+
+	other := mustPrincipal(t, "principal:route-projection-other")
+	if err := fixture.store.EnrollPrincipal(fixture.ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, other,
+		nextAttachmentBoundary(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := NewCurrentOperation(mustOperation(t, "operation:other-route-view"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := fixture.store.Current(fixture.ctx, proof, operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected := decodeFocusView(t, view)
+	if containsString(projected.Targets, route.PublicAlias.String()) {
+		t.Fatalf("other Principal View leaked route target: %v", projected.Targets)
+	}
+}
+
+func TestOrdinaryImportedWorkCannotBecomeNoReplyBySemanticKind(t *testing.T) {
+	fixture := newPeerRoundTripFixture(t)
+	original := fixture.admitOrigin(t)
+	ordinary := rebuildPeerDelivery(t, fixture.originRoute.RouteID, original,
+		original.OriginEvent(), agency.EventRef{}, agency.ConsequenceCreateHandlings, 2,
+		mustLabel(t, "work.response"))
+	fixture.admitReceiver(t, ordinary)
+	view := decodeFocusView(t, fixture.receiver.current(t))
+	if view.Current == nil || !view.Current.Facts.ReplyRequired ||
+		view.Current.Facts.ReplyTarget != fixture.receiverRoute.PublicAlias.String() {
+		t.Fatalf("ordinary imported work projection = %#v; semantic kind changed reply role",
+			view.Current)
+	}
+}
+
+func TestImportedHandlingKeepsReplyContextAcrossLocalAdvance(t *testing.T) {
+	fixture := newPeerRoundTripFixture(t)
+	request := fixture.admitOrigin(t)
+	fixture.admitReceiver(t, request)
+
+	firstView := fixture.receiver.current(t)
+	first := requireReplyContext(t, firstView, fixture.receiverRoute.PublicAlias.String(), "")
+	advance := subjectRequest(t, firstView, "operation:reply-context-advance",
+		agency.ConsequenceAdvanceHandling, "local work remains in progress", nil)
+	result, err := fixture.receiver.store.Admit(fixture.receiver.ctx, fixture.receiver.proof, advance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+
+	continuedView := fixture.receiver.current(t)
+	continued := requireReplyContext(t, continuedView, first.Current.Facts.ReplyTarget,
+		"local work remains in progress")
+	admitReplyFromContinuedHandling(t, fixture, continuedView, continued)
+	reply := requireOnePendingDelivery(t, fixture.receiver)
+	requireOriginCorrelation(t, reply, request.OriginEvent())
+	if reply.CausalDepth() != request.CausalDepth()+1 {
+		t.Fatalf("continued reply causal depth = %d; want %d",
+			reply.CausalDepth(), request.CausalDepth()+1)
+	}
+	requireRevokedRouteOmitsReplyTarget(t, fixture)
+	requireCorruptHandlingCreationFailsClosed(t, fixture)
+}
+
+func TestSubjectAdvanceUsesCurrentHandlingAsLocalAnchor(t *testing.T) {
+	for _, test := range []struct {
+		name               string
+		addSelfSuccessor   bool
+		wantLocalHandlings int
+	}{
+		{name: "remote successor only", wantLocalHandlings: 1},
+		{name: "separate self responsibility", addSelfSuccessor: true, wantLocalHandlings: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newPeerRoundTripFixture(t)
+			delivery := fixture.admitOrigin(t)
+			fixture.admitReceiver(t, delivery)
+
+			view := fixture.receiver.current(t)
+			public := requireReplyContext(t, view,
+				fixture.receiverRoute.PublicAlias.String(), "")
+			remote, err := agency.AliasTarget(mustHandle(t, public.Current.Facts.ReplyTarget))
+			if err != nil {
+				t.Fatal(err)
+			}
+			successors := []agency.TargetRef{remote}
+			if test.addSelfSuccessor {
+				successors = append([]agency.TargetRef{agency.SelfTarget()}, successors...)
+			}
+			intent := mustIntent(t, agency.IntentSpec{
+				Kind:              mustLabel(t, "opaque.result"),
+				Payload:           mustPayload(t, "bounded progress for the requester"),
+				Consequence:       agency.ConsequenceAdvanceHandling,
+				SubjectHandling:   mustHandle(t, public.Current.Facts.Handle),
+				Successors:        successors,
+				CorrelationHandle: mustHandle(t, public.Current.Facts.ReplyTo),
+			})
+			request, err := view.Bind(intent,
+				mustOperation(t, "operation:advance-anchor-"+strings.ReplaceAll(test.name, " ", "-")), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := fixture.receiver.store.Admit(fixture.receiver.ctx,
+				fixture.receiver.proof, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+			if got := countRows(t, fixture.receiver.store, "handlings"); got != test.wantLocalHandlings {
+				t.Fatalf("local Handlings after advance = %d, want %d",
+					got, test.wantLocalHandlings)
+			}
+			if got := countRows(t, fixture.receiver.store, "peer_outbox"); got != 1 {
+				t.Fatalf("remote successors after advance = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestImportedHandlingCanResolveLocallyWithoutReplyDelivery(t *testing.T) {
+	fixture := newPeerRoundTripFixture(t)
+	delivery := fixture.admitOrigin(t)
+	fixture.admitReceiver(t, delivery)
+
+	view := fixture.receiver.current(t)
+	requireReplyContext(t, view, fixture.receiverRoute.PublicAlias.String(), "")
+	beforeOutbox := countRows(t, fixture.receiver.store, "peer_outbox")
+	request := subjectRequest(t, view, "operation:local-imported-decline",
+		agency.ConsequenceResolveDeclined, "no further local work is justified", nil)
+	result, err := fixture.receiver.store.Admit(fixture.receiver.ctx, fixture.receiver.proof, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+	if got := countRows(t, fixture.receiver.store, "peer_outbox"); got != beforeOutbox {
+		t.Fatalf("local resolve created %d peer outbox rows; want %d", got, beforeOutbox)
+	}
+	assertHandlingOutcomeCount(t, fixture.receiver, "declined", 1)
+	if next := decodeFocusView(t, fixture.receiver.current(t)); next.Current != nil {
+		t.Fatalf("locally resolved imported Handling remained current: %#v", next.Current)
+	}
+	assertOriginAnchorOpen(t, fixture.origin)
+}
+
+func TestCorrelatedResponseCanBeConsumedWithoutReplyEcho(t *testing.T) {
+	fixture := newPeerRoundTripFixture(t)
+	requestDelivery := fixture.admitOrigin(t)
+	fixture.admitReceiver(t, requestDelivery)
+	admitCorrelatedPeerResponse(t, &fixture, requestDelivery)
+
+	anchorView := fixture.origin.current(t)
+	anchor := decodeFocusView(t, anchorView)
+	if anchor.Current == nil {
+		t.Fatal("origin request anchor was not selected")
+	}
+	advance := subjectRequest(t, anchorView, "operation:consume-response-anchor",
+		agency.ConsequenceAdvanceHandling, "request anchor considered", nil)
+	result, err := fixture.origin.store.Admit(fixture.origin.ctx, fixture.origin.proof, advance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+
+	responseView := fixture.origin.current(t)
+	response := decodeFocusView(t, responseView)
+	if response.Current == nil || response.Current.Semantic.Kind != "review.response" {
+		t.Fatalf("correlated response was not selected: %#v", response.Current)
+	}
+	beforeOutbox := countRows(t, fixture.origin.store, "peer_outbox")
+	resolve := subjectRequest(t, responseView, "operation:consume-response-locally",
+		agency.ConsequenceResolveUnresolved, "response consumed without follow-up", nil)
+	result, err = fixture.origin.store.Admit(fixture.origin.ctx, fixture.origin.proof, resolve)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+	if got := countRows(t, fixture.origin.store, "peer_outbox"); got != beforeOutbox {
+		t.Fatalf("consuming a correlated response changed peer outbox rows from %d to %d",
+			beforeOutbox, got)
+	}
+	assertHandlingOutcomeCount(t, fixture.origin, "unresolved", 1)
+	assertHandlingStateCount(t, fixture.origin, "open", 1)
+}
+
+func assertHandlingOutcomeCount(t *testing.T, fixture *authorityFixture, outcome string, want int) {
+	t.Helper()
+	var got int
+	if err := fixture.store.db.QueryRow(`SELECT COUNT(*) FROM handlings
+		WHERE state = 'terminal' AND outcome = ?`, outcome).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("terminal/%s Handlings = %d; want %d", outcome, got, want)
+	}
+}
+
+func assertHandlingStateCount(t *testing.T, fixture *authorityFixture, state string, want int) {
+	t.Helper()
+	var got int
+	if err := fixture.store.db.QueryRow(`SELECT COUNT(*) FROM handlings
+		WHERE state = ?`, state).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("%s Handlings = %d; want %d", state, got, want)
+	}
+}
+
+func requireReplyContext(t *testing.T, view BoundView, wantTarget, wantPayload string) focusViewWire {
+	t.Helper()
+	result := decodeFocusView(t, view)
+	if result.Current == nil || result.Current.Facts.ReplyTo == "" ||
+		(result.Current.Facts.ReplyRequired != (wantTarget != "")) ||
+		result.Current.Facts.ReplyTarget != wantTarget ||
+		(wantPayload != "" && result.Current.Semantic.Payload != wantPayload) {
+		t.Fatalf("imported reply context = %#v; want target %q payload %q",
+			result.Current, wantTarget, wantPayload)
+	}
+	return result
+}
+
+func admitReplyFromContinuedHandling(t *testing.T, fixture peerRoundTripFixture,
+	view BoundView, public focusViewWire,
+) {
+	t.Helper()
+	target, err := agency.AliasTarget(mustHandle(t, public.Current.Facts.ReplyTarget))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := mustIntent(t, agency.IntentSpec{
+		Kind:              mustLabel(t, "opaque.result"),
+		Payload:           mustPayload(t, "bounded work could not be completed"),
+		Consequence:       agency.ConsequenceAdvanceHandling,
+		SubjectHandling:   mustHandle(t, public.Current.Facts.Handle),
+		Successors:        []agency.TargetRef{target},
+		CorrelationHandle: mustHandle(t, public.Current.Facts.ReplyTo),
+	})
+	response, err := view.Bind(intent,
+		mustOperation(t, "operation:reply-context-result"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := fixture.receiver.store.Admit(fixture.receiver.ctx, fixture.receiver.proof, response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+}
+
+func requireRevokedRouteOmitsReplyTarget(t *testing.T, fixture peerRoundTripFixture) {
+	t.Helper()
+	if _, err := fixture.receiver.store.RevokePeerRoute(fixture.receiver.ctx,
+		fixture.receiverRoute.RouteID); err != nil {
+		t.Fatal(err)
+	}
+	revoked := decodeFocusView(t, fixture.receiver.current(t))
+	if revoked.Current == nil || revoked.Current.Facts.ReplyTo == "" ||
+		revoked.Current.Facts.ReplyTarget != "" ||
+		containsString(revoked.Targets, fixture.receiverRoute.PublicAlias.String()) {
+		t.Fatalf("reply context after route revocation = current:%#v targets:%v",
+			revoked.Current, revoked.Targets)
+	}
+}
+
+func requireCorruptHandlingCreationFailsClosed(t *testing.T, fixture peerRoundTripFixture) {
+	t.Helper()
+	resultSQL, err := fixture.receiver.store.db.Exec(`UPDATE handlings
+		SET created_sequence = (SELECT MAX(origin_sequence) + 1 FROM events)
+		WHERE state = 'open'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := requireOneRow(resultSQL, "corrupt Handling creation sequence"); err != nil {
+		t.Fatal(err)
+	}
+	operation, err := NewCurrentOperation(mustOperation(t, "operation:corrupt-reply-context"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.receiver.store.Current(fixture.receiver.ctx, fixture.receiver.proof,
+		operation); err == nil || !strings.Contains(err.Error(), "corrupt Handling creation authority") {
+		t.Fatalf("Current with corrupt Handling creation sequence = %v", err)
+	}
 }
 
 func containsString(values []string, want string) bool {
@@ -97,7 +395,7 @@ func TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult(t *test
 	requestDelivery := fixture.admitOrigin(t)
 	fixture.admitReceiver(t, requestDelivery)
 	frozenOperation, frozen := freezeOriginFocusView(t, &fixture)
-	if got := decodeFocusView(t, frozen); len(got.RelatedOpen) != 0 || got.Outstanding.OpenTotal != 1 {
+	if got := decodeFocusView(t, frozen); len(got.Related) != 0 || got.Outstanding.OpenTotal != 1 {
 		t.Fatalf("frozen origin View = %#v", got)
 	}
 	admitCorrelatedPeerResponse(t, &fixture, requestDelivery)
@@ -107,7 +405,7 @@ func TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := decodeFocusView(t, replayed); len(got.RelatedOpen) != 0 ||
+	if got := decodeFocusView(t, replayed); len(got.Related) != 0 ||
 		got.Outstanding.OpenTotal != 1 {
 		t.Fatalf("frozen Current absorbed a later Event: %#v", got)
 	}
@@ -117,11 +415,11 @@ func TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult(t *test
 	if public.Current == nil || public.Current.Semantic.Payload != "consider the bounded request" {
 		t.Fatalf("oldest anchor was not retained as Current: %#v", public.Current)
 	}
-	if len(public.RelatedOpen) != 1 ||
-		public.RelatedOpen[0].Semantic.Kind != "review.response" ||
-		public.RelatedOpen[0].Semantic.Payload != "the bounded request was reviewed" ||
-		public.RelatedOpen[0].Facts.Relation != "correlation" {
-		t.Fatalf("correlated response projection = %#v", public.RelatedOpen)
+	if len(public.Related) != 1 ||
+		public.Related[0].Semantic.Kind != "review.response" ||
+		public.Related[0].Semantic.Payload != "the bounded request was reviewed" ||
+		public.Related[0].Facts.Relation != "correlation" {
+		t.Fatalf("correlated response projection = %#v", public.Related)
 	}
 	if public.Outstanding.OpenTotal != 2 || public.Outstanding.RelatedTotal != 1 ||
 		public.Outstanding.RelatedProjected != 1 || public.Outstanding.Truncated {
@@ -130,7 +428,7 @@ func TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult(t *test
 
 	illegal := mustIntent(t, agency.IntentSpec{Kind: mustLabel(t, "review.illegal"),
 		Consequence:     agency.ConsequenceAdvanceHandling,
-		SubjectHandling: mustHandle(t, public.RelatedOpen[0].Facts.Event)})
+		SubjectHandling: mustHandle(t, public.Related[0].Facts.Event)})
 	if _, err := fresh.Bind(illegal, mustOperation(t, "operation:focus-illegal"), nil); !errors.Is(err, agency.ErrInvariant) {
 		t.Fatalf("related Event became writable subject: %v", err)
 	}
@@ -271,11 +569,11 @@ func TestCurrentKeepsEscapedCurrentAndOmitsRelatedBeyondEncodedBudget(t *testing
 	if public.Current == nil || public.Current.Semantic.Payload != payload {
 		t.Fatalf("escaped Current was not readable: %#v", public.Current)
 	}
-	if len(public.RelatedOpen) != 0 || public.Outstanding.OpenTotal != 2 ||
+	if len(public.Related) != 0 || public.Outstanding.OpenTotal != 2 ||
 		public.Outstanding.RelatedTotal != 1 || public.Outstanding.RelatedProjected != 0 ||
 		!public.Outstanding.Truncated {
 		t.Fatalf("escaped focus projection = related %d outstanding %#v",
-			len(public.RelatedOpen), public.Outstanding)
+			len(public.Related), public.Outstanding)
 	}
 	if len(fresh.AgentView().CanonicalJSON()) > agency.MaxAgentViewCanonicalBytes {
 		t.Fatalf("escaped Current View exceeds canonical bound: %d",
@@ -321,6 +619,7 @@ func admitCorrelatedPeerResponse(t *testing.T, fixture *peerRoundTripFixture,
 	receiverView := fixture.receiver.current(t)
 	receiverPublic := decodeFocusView(t, receiverView)
 	if receiverPublic.Current == nil || receiverPublic.Current.Facts.ReplyTo == "" ||
+		!receiverPublic.Current.Facts.ReplyRequired ||
 		receiverPublic.Current.Facts.ReplyTo == receiverPublic.Current.Facts.Handle ||
 		receiverPublic.Current.Facts.ReplyTarget != fixture.receiverRoute.PublicAlias.String() {
 		t.Fatal("receiver did not claim the imported request")
@@ -387,25 +686,28 @@ func admitSignedResponse(t *testing.T, fixture *peerRoundTripFixture, delivery a
 type focusViewWire struct {
 	Current *struct {
 		Facts struct {
-			Handle      string `json:"handle"`
-			ReplyTo     string `json:"reply_to"`
-			ReplyTarget string `json:"reply_target"`
+			Handle                  string `json:"handle"`
+			ReplyTo                 string `json:"reply_to"`
+			ReplyRequired           bool   `json:"reply_required"`
+			ReplyTarget             string `json:"reply_target"`
+			ReplyObservationPending bool   `json:"reply_observation_pending"`
 		} `json:"facts"`
 		Semantic struct {
 			Kind    string `json:"kind"`
 			Payload string `json:"payload"`
 		} `json:"semantic"`
 	} `json:"current"`
-	RelatedOpen []struct {
+	Related []struct {
 		Facts struct {
 			Event    string `json:"event"`
 			Relation string `json:"relation"`
+			Outcome  string `json:"outcome"`
 		} `json:"facts"`
 		Semantic struct {
 			Kind    string `json:"kind"`
 			Payload string `json:"payload"`
 		} `json:"semantic"`
-	} `json:"related_open"`
+	} `json:"related"`
 	Outstanding struct {
 		OpenTotal        int  `json:"open_total"`
 		RelatedTotal     int  `json:"related_total"`

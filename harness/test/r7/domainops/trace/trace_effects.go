@@ -12,6 +12,7 @@ func appendDomainEffectFacts(writer *observer.Writer, nodes []nodeEvidence,
 	eventFacts map[string]string, ordered []eventEvidence,
 ) error {
 	handlingsByNodeSequence := make(map[string][]handlingEvidence)
+	createdHandlingFacts := make(map[string]struct{})
 	referencesByNodeEvent := make(map[string]referenceEvidence)
 	for _, node := range nodes {
 		for _, handling := range node.Handlings {
@@ -24,33 +25,40 @@ func appendDomainEffectFacts(writer *observer.Writer, nodes []nodeEvidence,
 	}
 	for _, event := range ordered {
 		if err := appendEventDomainEffect(writer, event, eventFacts[event.ID],
-			handlingsByNodeSequence, referencesByNodeEvent); err != nil {
+			handlingsByNodeSequence, createdHandlingFacts, referencesByNodeEvent); err != nil {
 			return err
+		}
+	}
+	for _, node := range nodes {
+		for _, handling := range node.Handlings {
+			if _, exists := createdHandlingFacts[node.Role+"\x00"+handling.ID]; !exists {
+				return fmt.Errorf("Handling %q has no observable creating Event", handling.ID)
+			}
 		}
 	}
 	return nil
 }
 
 func appendEventDomainEffect(writer *observer.Writer, event eventEvidence, eventFact string,
-	handlings map[string][]handlingEvidence, references map[string]referenceEvidence,
+	handlings map[string][]handlingEvidence, created map[string]struct{},
+	references map[string]referenceEvidence,
 ) error {
 	switch event.Consequence {
 	case "handling.create":
-		key := fmt.Sprintf("%s:%d", event.Node, event.OriginSequence)
-		for _, handling := range handlings[key] {
-			if err := appendHandlingFact(writer, event, handling.ID,
-				"r7.handling.created", "open", "", eventFact); err != nil {
-				return err
-			}
-		}
-		return nil
+		return appendCreatedHandlingFacts(writer, event, eventFact, handlings, created)
 	case "handling.advance":
-		return appendHandlingFact(writer, event, event.SubjectHandling,
-			"r7.handling.advanced", "open", "", eventFact)
+		if err := appendHandlingFact(writer, event, event.SubjectHandling,
+			"r7.handling.advanced", "open", "", eventFact); err != nil {
+			return err
+		}
+		return appendCreatedHandlingFacts(writer, event, eventFact, handlings, created)
 	case "handling.resolve.completed", "handling.resolve.declined", "handling.resolve.unresolved":
 		outcome := event.Consequence[len("handling.resolve."):]
-		return appendHandlingFact(writer, event, event.SubjectHandling,
-			"r7.handling.resolved", "terminal", outcome, eventFact)
+		if err := appendHandlingFact(writer, event, event.SubjectHandling,
+			"r7.handling.resolved", "terminal", outcome, eventFact); err != nil {
+			return err
+		}
+		return appendCreatedHandlingFacts(writer, event, eventFact, handlings, created)
 	case "reference.publish", "reference.supersede", "reference.retract":
 		reference, exists := references[event.Node+"\x00"+event.ID]
 		if !exists {
@@ -60,6 +68,23 @@ func appendEventDomainEffect(writer *observer.Writer, event eventEvidence, event
 	default:
 		return nil
 	}
+}
+
+func appendCreatedHandlingFacts(writer *observer.Writer, event eventEvidence, cause string,
+	handlings map[string][]handlingEvidence, created map[string]struct{},
+) error {
+	key := fmt.Sprintf("%s:%d", event.Node, event.OriginSequence)
+	for _, handling := range handlings[key] {
+		if handling.ID == event.SubjectHandling {
+			continue
+		}
+		if err := appendHandlingFact(writer, event, handling.ID,
+			"r7.handling.created", "open", "", cause); err != nil {
+			return err
+		}
+		created[event.Node+"\x00"+handling.ID] = struct{}{}
+	}
+	return nil
 }
 
 func appendReferenceFact(writer *observer.Writer, event eventEvidence,

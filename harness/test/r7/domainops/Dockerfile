@@ -23,10 +23,12 @@ ENTRYPOINT ["domain-world"]
 FROM node:22-alpine3.22 AS agent
 
 ARG PI_VERSION=0.83.0
-RUN apk add --no-cache bash ca-certificates jq && \
+RUN apk add --no-cache bash ca-certificates jq sqlite && \
     npm install -g --ignore-scripts --no-audit --no-fund \
       "@earendil-works/pi-coding-agent@${PI_VERSION}" && \
     adduser -D -u 10001 agent && mkdir -p /workspace && chown agent:agent /workspace
+COPY --chown=10001:10001 test/r7/runtime/pi/delegate.ts \
+  test/r7/runtime/pi/delegate-runtime.mjs /opt/mnemon/pi-delegate/
 COPY --from=build --chown=10001:10001 /out/domainctl /usr/local/bin/domainctl
 COPY --from=build --chown=10001:10001 /out/mnemon-harness /usr/local/bin/mnemon-harness
 COPY --from=build --chown=10001:10001 /out/mnemond /usr/local/bin/mnemond

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,10 +20,13 @@ const (
 )
 
 type serviceWorld struct {
-	gatewayURL     string
-	monitorURL     string
-	ledgerURL      string
-	eastPaymentURL string
+	gatewayURL      string
+	monitorURL      string
+	ledgerURL       string
+	eastCallbackURL string
+	westCallbackURL string
+	eastPaymentURL  string
+	westPaymentURL  string
 }
 
 func TestDefaultEastFaultReturnsSuccessAndDuplicatesCharge(t *testing.T) {
@@ -107,7 +111,7 @@ func TestGatewayHistoryIsReadOnlyAndBounded(t *testing.T) {
 	}
 
 	for index := 1; index <= world.GatewayHistoryLimit+3; index++ {
-		businessID := fmt.Sprintf("bounded-%03d", index)
+		businessID := maxWidthBusinessID(index)
 		if _, err := checkout(gateway.URL, businessID); err != nil {
 			t.Fatalf("bounded checkout %q: %v", businessID, err)
 		}
@@ -117,12 +121,18 @@ func TestGatewayHistoryIsReadOnlyAndBounded(t *testing.T) {
 		t.Fatalf("history entries = %d, want hard limit %d", len(history.Entries),
 			world.GatewayHistoryLimit)
 	}
-	if history.Entries[0].BusinessID != "bounded-004" ||
-		history.Entries[len(history.Entries)-1].BusinessID != "bounded-035" {
+	lastBoundedBusiness := maxWidthBusinessID(world.GatewayHistoryLimit + 3)
+	if history.Entries[0].BusinessID != maxWidthBusinessID(4) ||
+		history.Entries[len(history.Entries)-1].BusinessID != lastBoundedBusiness {
 		t.Fatalf("bounded history retained wrong window: first=%q last=%q",
 			history.Entries[0].BusinessID,
 			history.Entries[len(history.Entries)-1].BusinessID)
 	}
+}
+
+func maxWidthBusinessID(index int) string {
+	suffix := fmt.Sprintf("-%03d", index)
+	return strings.Repeat("b", 96-len(suffix)) + suffix
 }
 
 func TestDistinctRemediationsSatisfySameOutcomeOracle(t *testing.T) {
@@ -165,6 +175,65 @@ func TestDistinctRemediationsSatisfySameOutcomeOracle(t *testing.T) {
 	}
 }
 
+func TestSecondRegionalVariantSatisfiesTheSameOutcomeOracle(t *testing.T) {
+	remediations := []struct {
+		name  string
+		apply func(*testing.T, serviceWorld)
+	}{
+		{
+			name: "route_new_traffic_to_recovered_region",
+			apply: func(t *testing.T, services serviceWorld) {
+				postAccepted(t, services.gatewayURL+"/admin/route", map[string]string{
+					"route": "east",
+				})
+			},
+		},
+		{
+			name: "stabilize_second_region_retry_configuration",
+			apply: func(t *testing.T, services serviceWorld) {
+				postAccepted(t, services.westPaymentURL+"/admin/config", world.PaymentConfig{
+					TimeoutMillis: 500,
+					StableKeys:    true,
+					Retries:       2,
+				})
+			},
+		},
+	}
+
+	for _, remediation := range remediations {
+		remediation := remediation
+		t.Run(remediation.name, func(t *testing.T) {
+			services := newServiceWorld(t)
+			// Establish a healthy alternative before injecting the second,
+			// region-reversed incident. The later oracle is intentionally the
+			// same one used by the first incident and does not inspect the repair.
+			postAccepted(t, services.eastPaymentURL+"/admin/config", world.PaymentConfig{
+				TimeoutMillis: 500,
+				StableKeys:    true,
+				Retries:       2,
+			})
+			postAccepted(t, services.westCallbackURL+"/admin/latency", map[string]int64{
+				"latency_ms": 150,
+			})
+			postAccepted(t, services.westPaymentURL+"/admin/config", world.PaymentConfig{
+				TimeoutMillis: 50,
+				StableKeys:    false,
+				Retries:       2,
+			})
+			postAccepted(t, services.gatewayURL+"/admin/route", map[string]string{
+				"route": "west",
+			})
+
+			prefix := "second-variant-" + remediation.name
+			customerCapture := induceIncident(t, services, prefix)
+			remediation.apply(t, services)
+			voidDuplicateCharges(t, services.ledgerURL, prefix, customerCapture)
+
+			assertRecoveredOutcome(t, services, prefix, 3)
+		})
+	}
+}
+
 func newServiceWorld(t *testing.T) serviceWorld {
 	t.Helper()
 
@@ -195,10 +264,13 @@ func newServiceWorld(t *testing.T) serviceWorld {
 	t.Cleanup(monitor.Close)
 
 	return serviceWorld{
-		gatewayURL:     gateway.URL,
-		monitorURL:     monitor.URL,
-		ledgerURL:      ledger.URL,
-		eastPaymentURL: eastPayment.URL,
+		gatewayURL:      gateway.URL,
+		monitorURL:      monitor.URL,
+		ledgerURL:       ledger.URL,
+		eastCallbackURL: eastCallback.URL,
+		westCallbackURL: westCallback.URL,
+		eastPaymentURL:  eastPayment.URL,
+		westPaymentURL:  westPayment.URL,
 	}
 }
 

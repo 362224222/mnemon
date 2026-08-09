@@ -28,7 +28,15 @@ func (s *Store) AdmitPeerDelivery(ctx context.Context,
 			return early, ErrArtifactUnavailable
 		}
 	}
-	return s.commitPeerAdmission(ctx, deliveryID, checks)
+	successorCount := 1
+	if early.delivery.RequiresTerminalReplyMatch() {
+		successorCount = 0
+	}
+	handlingIDs, err := newHandlingIDs(successorCount)
+	if err != nil {
+		return PeerAdmissionResult{}, err
+	}
+	return s.commitPeerAdmission(ctx, deliveryID, checks, handlingIDs)
 }
 
 func (s *Store) preflightPeerAdmission(ctx context.Context, deliveryID agency.DeliveryID) (
@@ -100,13 +108,9 @@ func expirePeerInboxDeliveryTx(ctx context.Context, tx *sql.Tx, deliveryID agenc
 }
 
 func (s *Store) commitPeerAdmission(ctx context.Context, deliveryID agency.DeliveryID,
-	checks []artifactCheck,
+	checks []artifactCheck, handlingIDs []agency.HandlingID,
 ) (PeerAdmissionResult, error) {
 	eventID, err := newEventID()
-	if err != nil {
-		return PeerAdmissionResult{}, err
-	}
-	handlingIDs, err := newHandlingIDs(1)
 	if err != nil {
 		return PeerAdmissionResult{}, err
 	}
@@ -196,6 +200,18 @@ func preparePeerAdmissionTx(ctx context.Context, tx *sql.Tx, deliveryID agency.D
 	if err != nil {
 		return preparedPeerAdmission{}, false, err
 	}
+	if verified.Delivery().RequiresTerminalReplyMatch() {
+		_, matched, err := matchOpenTerminalReplyAnchorTx(ctx, tx, verified, route.RouteID())
+		if err != nil {
+			return preparedPeerAdmission{}, false, err
+		}
+		if !matched {
+			rejected, err := settleRejectedPeerInboxTx(ctx, tx, result.delivery,
+				"peer.terminal_reply_unmatched",
+				"terminal reply does not match an open local responsibility", now)
+			return preparedPeerAdmission{result: rejected}, true, err
+		}
+	}
 	return preparedPeerAdmission{result: result, verified: verified}, false, nil
 }
 
@@ -230,6 +246,9 @@ func commitAcceptedPeerAdmissionTx(ctx context.Context, tx *sql.Tx,
 	now time.Time,
 ) (PeerAdmissionResult, error) {
 	delivery := prepared.result.delivery
+	if len(handlingIDs) != prepared.verified.SuccessorCount() {
+		return PeerAdmissionResult{}, errors.New("admit PeerDelivery: effect cardinality changed")
+	}
 	event, err := commitDomainAdmissionTx(ctx, tx, peerDomainAdmission(prepared.verified),
 		eventID, handlingIDs, now)
 	if err != nil {

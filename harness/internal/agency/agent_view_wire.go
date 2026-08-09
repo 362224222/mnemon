@@ -7,7 +7,7 @@ type agentViewWire struct {
 	Version        int                        `json:"version"`
 	View           string                     `json:"view"`
 	Current        *agentViewCurrentWire      `json:"current,omitempty"`
-	RelatedOpen    []agentViewRelatedWire     `json:"related_open,omitempty"`
+	Related        []agentViewRelatedWire     `json:"related,omitempty"`
 	Outstanding    agentViewOutstandingWire   `json:"outstanding"`
 	References     []agentViewReferenceWire   `json:"references,omitempty"`
 	Targets        []string                   `json:"targets,omitempty"`
@@ -21,10 +21,12 @@ type agentViewCurrentWire struct {
 }
 
 type agentViewCurrentFactsWire struct {
-	Handle      string                  `json:"handle"`
-	ReplyTo     string                  `json:"reply_to"`
-	ReplyTarget string                  `json:"reply_target,omitempty"`
-	Artifacts   []agentViewArtifactWire `json:"artifacts,omitempty"`
+	Handle                  string                  `json:"handle"`
+	ReplyTo                 string                  `json:"reply_to"`
+	ReplyRequired           bool                    `json:"reply_required"`
+	ReplyTarget             string                  `json:"reply_target,omitempty"`
+	ReplyObservationPending bool                    `json:"reply_observation_pending"`
+	Artifacts               []agentViewArtifactWire `json:"artifacts,omitempty"`
 }
 
 type agentViewSemanticWire struct {

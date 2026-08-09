@@ -152,11 +152,13 @@ func stageFreshPeerDeliveryTx(ctx context.Context, tx *sql.Tx, route PeerRoutePr
 	case !now.Before(delivery.ExpiresAt()):
 		result, err = insertExpiredPeerInboxTx(ctx, tx, route, delivery, signature, now)
 	default:
+		inReplyTo := peerInboxReplyValue(delivery)
 		_, err = tx.ExecContext(ctx, `INSERT INTO peer_inbox(
-			delivery_id, route_id, envelope_digest, delivery_json, delivery_signature,
-			state, expires_at, received_at) VALUES(?, ?, ?, ?, ?, 'staged', ?, ?)`,
+			delivery_id, route_id, in_reply_to_delivery_id, envelope_digest,
+			delivery_json, delivery_signature, state, expires_at, received_at)
+			VALUES(?, ?, ?, ?, ?, ?, 'staged', ?, ?)`,
 			delivery.ID().String(),
-			route.RouteID().String(), delivery.EnvelopeDigest().String(), delivery.CanonicalJSON(),
+			route.RouteID().String(), inReplyTo, delivery.EnvelopeDigest().String(), delivery.CanonicalJSON(),
 			append([]byte(nil), signature...), formatTime(delivery.ExpiresAt()), formatTime(now))
 		result = PeerAdmissionResult{state: PeerAdmissionStateStaged, delivery: delivery}
 	}
@@ -177,11 +179,12 @@ func insertRejectedPeerInboxTx(ctx context.Context, tx *sql.Tx, route PeerRouteP
 	if err != nil {
 		return PeerAdmissionResult{}, err
 	}
+	inReplyTo := peerInboxReplyValue(delivery)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO peer_inbox(
-		delivery_id, route_id, envelope_digest, delivery_json, delivery_signature,
+		delivery_id, route_id, in_reply_to_delivery_id, envelope_digest, delivery_json, delivery_signature,
 		state, expires_at, received_at, receipt_digest, receipt_json, settled_at)
-		VALUES(?, ?, ?, ?, ?, 'settled', ?, ?, ?, ?, ?)`, delivery.ID().String(),
-		route.RouteID().String(), delivery.EnvelopeDigest().String(), delivery.CanonicalJSON(),
+		VALUES(?, ?, ?, ?, ?, ?, 'settled', ?, ?, ?, ?, ?)`, delivery.ID().String(),
+		route.RouteID().String(), inReplyTo, delivery.EnvelopeDigest().String(), delivery.CanonicalJSON(),
 		append([]byte(nil), signature...), formatTime(delivery.ExpiresAt()), formatTime(now),
 		receipt.Digest().String(), receipt.CanonicalJSON(), formatTime(now)); err != nil {
 		return PeerAdmissionResult{}, fmt.Errorf("stage PeerDelivery: persist rejection: %w", err)
@@ -193,15 +196,25 @@ func insertRejectedPeerInboxTx(ctx context.Context, tx *sql.Tx, route PeerRouteP
 func insertExpiredPeerInboxTx(ctx context.Context, tx *sql.Tx, route PeerRouteProjection,
 	delivery agency.PeerDelivery, signature []byte, now time.Time,
 ) (PeerAdmissionResult, error) {
+	inReplyTo := peerInboxReplyValue(delivery)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO peer_inbox(
-		delivery_id, route_id, envelope_digest, delivery_json, delivery_signature,
-		state, expires_at, received_at, settled_at) VALUES(?, ?, ?, ?, ?, 'expired', ?, ?, ?)`,
-		delivery.ID().String(), route.RouteID().String(), delivery.EnvelopeDigest().String(),
+		delivery_id, route_id, in_reply_to_delivery_id, envelope_digest, delivery_json,
+		delivery_signature, state, expires_at, received_at, settled_at)
+		VALUES(?, ?, ?, ?, ?, ?, 'expired', ?, ?, ?)`,
+		delivery.ID().String(), route.RouteID().String(), inReplyTo, delivery.EnvelopeDigest().String(),
 		delivery.CanonicalJSON(), append([]byte(nil), signature...),
 		formatTime(delivery.ExpiresAt()), formatTime(now), formatTime(now)); err != nil {
 		return PeerAdmissionResult{}, fmt.Errorf("stage PeerDelivery: persist expiry: %w", err)
 	}
 	return PeerAdmissionResult{state: PeerAdmissionStateExpired, delivery: delivery}, nil
+}
+
+func peerInboxReplyValue(delivery agency.PeerDelivery) any {
+	inReplyTo, present := delivery.InReplyToDelivery()
+	if !present {
+		return nil
+	}
+	return inReplyTo.String()
 }
 
 func peerRouteByRemotePeerTx(ctx context.Context, tx *sql.Tx,
@@ -235,11 +248,12 @@ func peerInboxResultTx(ctx context.Context, tx *sql.Tx,
 ) (PeerAdmissionResult, bool, error) {
 	var routeValue, envelopeValue, state, expiresValue string
 	var canonical, receiptJSON []byte
-	var localEventID, receiptDigest sql.NullString
-	err := tx.QueryRowContext(ctx, `SELECT route_id, envelope_digest, delivery_json, state, expires_at,
-		local_event_id, receipt_digest, receipt_json FROM peer_inbox WHERE delivery_id = ?`,
-		deliveryID.String()).Scan(&routeValue, &envelopeValue, &canonical, &state, &expiresValue,
-		&localEventID, &receiptDigest, &receiptJSON)
+	var inReplyTo, localEventID, receiptDigest sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT route_id, in_reply_to_delivery_id, envelope_digest,
+		delivery_json, state, expires_at, local_event_id, receipt_digest, receipt_json
+		FROM peer_inbox WHERE delivery_id = ?`, deliveryID.String()).Scan(&routeValue,
+		&inReplyTo, &envelopeValue, &canonical, &state, &expiresValue, &localEventID,
+		&receiptDigest, &receiptJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PeerAdmissionResult{}, false, nil
 	}
@@ -254,6 +268,9 @@ func peerInboxResultTx(ctx context.Context, tx *sql.Tx,
 	if err != nil || parsed.ID() != deliveryID || parsed.EnvelopeDigest().String() != envelopeValue {
 		return PeerAdmissionResult{}, false, errors.New("inspect peer inbox: corrupt envelope authority")
 	}
+	if !peerInboxReplyMatches(parsed.Delivery(), inReplyTo) {
+		return PeerAdmissionResult{}, false, errors.New("inspect peer inbox: reply binding diverges from signed envelope")
+	}
 	expiresAt, err := parseTime(expiresValue)
 	if err != nil || !expiresAt.Equal(parsed.Delivery().ExpiresAt()) {
 		return PeerAdmissionResult{}, false, errors.New("inspect peer inbox: expiry column diverges")
@@ -264,6 +281,11 @@ func peerInboxResultTx(ctx context.Context, tx *sql.Tx,
 		return PeerAdmissionResult{}, false, err
 	}
 	return result, true, nil
+}
+
+func peerInboxReplyMatches(delivery agency.PeerDelivery, stored sql.NullString) bool {
+	inReplyTo, present := delivery.InReplyToDelivery()
+	return stored.Valid == present && (!present || stored.String == inReplyTo.String())
 }
 
 func parsePeerInboxStateTx(ctx context.Context, tx *sql.Tx, delivery agency.PeerDelivery,

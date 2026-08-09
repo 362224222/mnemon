@@ -32,6 +32,11 @@ const (
 	currentProjectionSubject  = "subject"
 )
 
+var (
+	errCandidateNotCaptured = errors.New("Intent names an uncaptured Artifact candidate")
+	errCandidateRepeated    = errors.New("Intent repeats an Artifact candidate")
+)
+
 type capturedBinding struct {
 	Handle agency.OpaqueHandle
 	Digest agency.Digest
@@ -253,10 +258,10 @@ func (journal clientJournal) bindCandidates(intent agency.AgentIntent) (
 		handle := input.Handle().String()
 		digest, exists := byHandle[handle]
 		if !exists {
-			return nil, errors.New("Intent names an uncaptured Artifact candidate")
+			return nil, errCandidateNotCaptured
 		}
 		if _, duplicate := seen[handle]; duplicate {
-			return nil, errors.New("Intent repeats an Artifact candidate")
+			return nil, errCandidateRepeated
 		}
 		seen[handle] = struct{}{}
 		result = append(result, candidateBinding{Handle: input.Handle().String(),

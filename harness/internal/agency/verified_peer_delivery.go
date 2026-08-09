@@ -37,7 +37,8 @@ func (artifact VerifiedPeerArtifact) VerifiedAt() time.Time { return artifact.ve
 // VerifiedPeerDelivery is the only peer-originated admission candidate. It can
 // be constructed only from a strictly parsed envelope, machine-resolved local
 // source and target Principals, and the complete verified Artifact set. Its
-// effect is structurally fixed to exactly one new local Handling.
+// effect is structurally fixed to either one new local Handling or one
+// zero-target terminal-reply observation.
 type VerifiedPeerDelivery struct {
 	delivery  PeerDelivery
 	source    AgentPrincipalID
@@ -98,6 +99,26 @@ func (verified VerifiedPeerDelivery) Artifacts() []VerifiedPeerArtifact {
 // Consequence and SuccessorCount make the restricted peer effect explicit to
 // admission without exposing any field capable of selecting another effect.
 func (verified VerifiedPeerDelivery) Consequence() Consequence {
-	return ConsequenceCreateHandlings
+	if verified.delivery.inReplyToDelivery.IsZero() {
+		return ConsequenceCreateHandlings
+	}
+	switch verified.delivery.originConsequence {
+	case ConsequenceResolveCompleted:
+		return ConsequenceObserveCompleted
+	case ConsequenceResolveDeclined:
+		return ConsequenceObserveDeclined
+	case ConsequenceResolveUnresolved:
+		return ConsequenceObserveUnresolved
+	default:
+		return ConsequenceInvalid
+	}
 }
-func (verified VerifiedPeerDelivery) SuccessorCount() int { return 1 }
+func (verified VerifiedPeerDelivery) SuccessorCount() int {
+	if verified.delivery.inReplyToDelivery.IsZero() {
+		return 1
+	}
+	return 0
+}
+func (verified VerifiedPeerDelivery) InReplyToDelivery() (DeliveryID, bool) {
+	return verified.delivery.InReplyToDelivery()
+}

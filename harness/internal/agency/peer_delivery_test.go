@@ -16,6 +16,8 @@ func peerDeliveryFixture(t *testing.T, routeName string) (RouteID, PeerDelivery)
 		OriginSequence:    7,
 		OriginAcceptedAt:  testTime,
 		OriginSource:      mustPrincipal(t, "agent:origin"),
+		OriginConsequence: ConsequenceCreateHandlings,
+		OriginTargetCount: 2,
 		OriginCausation:   []EventRef{mustEventRef(t, "event:z", "z"), mustEventRef(t, "event:a", "a")},
 		OriginCorrelation: mustEventRef(t, "event:correlation", "correlation"),
 		TargetAlias:       mustHandle(t, "remote/target"),
@@ -33,10 +35,12 @@ func peerDeliveryFixture(t *testing.T, routeName string) (RouteID, PeerDelivery)
 
 func TestPeerDeliveryCanonicalRoundTripAndMachineRouteBinding(t *testing.T) {
 	route, delivery := peerDeliveryFixture(t, "route:peer-b")
-	const golden = `{"schema_version":1,"delivery_id":"delivery:dc695bca2f729bfca305cf3fcc8a3d2186a529f47871a17ec911518de9df77f2","origin":{"event":{"id":"event:origin","digest":"sha256:a475a88338ff719d76e28dba4faaf6fc1f171377056082b90ff2872377201d64"},"sequence":7,"accepted_at":"2026-08-03T08:00:00Z","source_principal":"agent:origin","causation":[{"id":"event:a","digest":"sha256:ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"},{"id":"event:z","digest":"sha256:594e519ae499312b29433b7dd8a97ff068defcba9755b6d5d00e84c524d67b06"}],"correlation":{"id":"event:correlation","digest":"sha256:577bf0c4f4ee4f887ec975d9f5356309244babf9fad24797025228a2092d78fd"}},"target_alias":"remote/target","kind":"opaque.request","payload":"Process the referenced Artifact.","artifacts":["sha256:13051e349c6f87a0f83427b2d742806fc8e01699c7429ce5b94acd0cece66dbc","sha256:6462d191923d0d849234de241cf341d949f88488593f29e3601b94bd645b7dee"],"causal_depth":1,"expires_at":"2026-08-03T09:00:00Z"}`
-	if string(delivery.CanonicalJSON()) != golden ||
-		delivery.EnvelopeDigest().String() != "sha256:a900064743d3fe804e288e67ce417adfe4a6326a58121d1c87caccbec771d885" {
-		t.Fatalf("PeerDelivery golden drift\n got: %s", delivery.CanonicalJSON())
+	const golden = `{"schema_version":2,"delivery_id":"delivery:dc695bca2f729bfca305cf3fcc8a3d2186a529f47871a17ec911518de9df77f2","origin":{"event":{"id":"event:origin","digest":"sha256:a475a88338ff719d76e28dba4faaf6fc1f171377056082b90ff2872377201d64"},"sequence":7,"accepted_at":"2026-08-03T08:00:00Z","source_principal":"agent:origin","consequence":"handling.create","target_count":2,"causation":[{"id":"event:a","digest":"sha256:ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"},{"id":"event:z","digest":"sha256:594e519ae499312b29433b7dd8a97ff068defcba9755b6d5d00e84c524d67b06"}],"correlation":{"id":"event:correlation","digest":"sha256:577bf0c4f4ee4f887ec975d9f5356309244babf9fad24797025228a2092d78fd"}},"target_alias":"remote/target","kind":"opaque.request","payload":"Process the referenced Artifact.","artifacts":["sha256:13051e349c6f87a0f83427b2d742806fc8e01699c7429ce5b94acd0cece66dbc","sha256:6462d191923d0d849234de241cf341d949f88488593f29e3601b94bd645b7dee"],"causal_depth":1,"expires_at":"2026-08-03T09:00:00Z"}`
+	if string(delivery.CanonicalJSON()) != strings.Replace(golden,
+		`"schema_version":2`, `"schema_version":3`, 1) ||
+		delivery.EnvelopeDigest().String() != "sha256:42f051f6ec300cb6fd64f56225f9f85629acceedc791489d5dc74684a98bdb2b" {
+		t.Fatalf("PeerDelivery golden drift\n got: %s\ndigest: %s",
+			delivery.CanonicalJSON(), delivery.EnvelopeDigest().String())
 	}
 	parsed, err := ParsePeerDeliveryCanonicalJSON(delivery.CanonicalJSON(), route)
 	if err != nil {
@@ -44,7 +48,9 @@ func TestPeerDeliveryCanonicalRoundTripAndMachineRouteBinding(t *testing.T) {
 	}
 	if parsed.ID() != delivery.ID() || parsed.EnvelopeDigest() != delivery.EnvelopeDigest() ||
 		!bytes.Equal(parsed.CanonicalJSON(), delivery.CanonicalJSON()) ||
-		!bytes.Equal(parsed.SigningMessage(), delivery.SigningMessage()) {
+		!bytes.Equal(parsed.SigningMessage(), delivery.SigningMessage()) ||
+		parsed.Delivery().OriginConsequence() != ConsequenceCreateHandlings ||
+		parsed.Delivery().OriginTargetCount() != 2 || parsed.Delivery().RequiresTerminalReplyMatch() {
 		t.Fatalf("parsed delivery differs\n got: %s\nwant: %s", parsed.CanonicalJSON(), delivery.CanonicalJSON())
 	}
 	if bytes.Contains(delivery.CanonicalJSON(), []byte(route.String())) {
@@ -74,6 +80,7 @@ func TestPeerDeliveryIDAndEnvelopeHaveSeparateDomains(t *testing.T) {
 	changed, err := NewPeerDelivery(route, PeerDeliverySpec{
 		OriginEvent: original.OriginEvent(), OriginSequence: original.OriginSequence(),
 		OriginAcceptedAt: original.OriginAcceptedAt(), OriginSource: original.OriginSource(),
+		OriginConsequence: original.OriginConsequence(), OriginTargetCount: uint8(original.OriginTargetCount()),
 		OriginCausation: original.OriginCausation(), TargetAlias: original.TargetAlias(),
 		Kind: original.Kind(), Payload: mustPayload(t, "Different bounded semantics."),
 		Artifacts: original.Artifacts(), CausalDepth: original.CausalDepth(), ExpiresAt: original.ExpiresAt(),
@@ -146,10 +153,13 @@ func TestPeerDeliveryRejectsInvalidBounds(t *testing.T) {
 	route, base := peerDeliveryFixture(t, "route:bounds")
 	baseSpec := peerDeliverySpecFrom(base)
 	for name, mutate := range map[string]func(*PeerDeliverySpec){
-		"zero sequence":     func(spec *PeerDeliverySpec) { spec.OriginSequence = 0 },
-		"zero depth":        func(spec *PeerDeliverySpec) { spec.CausalDepth = 0 },
-		"excess depth":      func(spec *PeerDeliverySpec) { spec.CausalDepth = MaxPeerCausalDepth + 1 },
-		"expired at origin": func(spec *PeerDeliverySpec) { spec.ExpiresAt = spec.OriginAcceptedAt },
+		"zero sequence":       func(spec *PeerDeliverySpec) { spec.OriginSequence = 0 },
+		"invalid consequence": func(spec *PeerDeliverySpec) { spec.OriginConsequence = ConsequenceInvalid },
+		"zero target count":   func(spec *PeerDeliverySpec) { spec.OriginTargetCount = 0 },
+		"excess target count": func(spec *PeerDeliverySpec) { spec.OriginTargetCount = MaxSuccessors + 1 },
+		"zero depth":          func(spec *PeerDeliverySpec) { spec.CausalDepth = 0 },
+		"excess depth":        func(spec *PeerDeliverySpec) { spec.CausalDepth = MaxPeerCausalDepth + 1 },
+		"expired at origin":   func(spec *PeerDeliverySpec) { spec.ExpiresAt = spec.OriginAcceptedAt },
 		"excess TTL": func(spec *PeerDeliverySpec) {
 			spec.ExpiresAt = spec.OriginAcceptedAt.Add(MaxPeerDeliveryTTL + time.Nanosecond)
 		},
@@ -163,6 +173,57 @@ func TestPeerDeliveryRejectsInvalidBounds(t *testing.T) {
 		})
 	}
 	assertPeerDeliveryCollectionBounds(t, route, baseSpec)
+}
+
+func TestPeerDeliveryIdentifiesOnlySoleTargetTerminalReplyCandidate(t *testing.T) {
+	route, base := peerDeliveryFixture(t, "route:terminal-role")
+	for _, test := range []struct {
+		name        string
+		consequence Consequence
+		targetCount uint8
+		want        bool
+	}{
+		{name: "terminal sole target", consequence: ConsequenceResolveDeclined, targetCount: 1, want: true},
+		{name: "terminal with anchor", consequence: ConsequenceResolveDeclined, targetCount: 2},
+		{name: "ordinary sole target", consequence: ConsequenceAdvanceHandling, targetCount: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := peerDeliverySpecFrom(base)
+			spec.OriginConsequence = test.consequence
+			spec.OriginTargetCount = test.targetCount
+			if test.want {
+				spec.InReplyToDelivery = mustDeliveryID(t, "delivery:terminal-request")
+			}
+			delivery, err := NewPeerDelivery(route, spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := delivery.RequiresTerminalReplyMatch(); got != test.want {
+				t.Fatalf("RequiresTerminalReplyMatch() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPeerDeliveryRejectsSoleTargetTerminalWithoutExactReplyAuthority(t *testing.T) {
+	route, base := peerDeliveryFixture(t, "route:terminal-authority")
+	for name, mutate := range map[string]func(*PeerDeliverySpec){
+		"missing correlation": func(spec *PeerDeliverySpec) {
+			spec.OriginCorrelation = EventRef{}
+			spec.InReplyToDelivery = mustDeliveryID(t, "delivery:request")
+		},
+		"missing in reply to": func(spec *PeerDeliverySpec) {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			spec := peerDeliverySpecFrom(base)
+			spec.OriginConsequence = ConsequenceResolveDeclined
+			spec.OriginTargetCount = 1
+			mutate(&spec)
+			if _, err := NewPeerDelivery(route, spec); !errors.Is(err, ErrInvariant) {
+				t.Fatalf("NewPeerDelivery() error = %v, want ErrInvariant", err)
+			}
+		})
+	}
 }
 
 func TestPeerDeliveryRejectsInvalidProvenance(t *testing.T) {
@@ -209,11 +270,16 @@ func TestPeerDeliveryRejectsOversizeCanonicalInputs(t *testing.T) {
 }
 
 func peerDeliverySpecFrom(base PeerDelivery) PeerDeliverySpec {
+	correlation, _ := base.OriginCorrelation()
+	inReplyToDelivery, _ := base.InReplyToDelivery()
 	return PeerDeliverySpec{
 		OriginEvent: base.OriginEvent(), OriginSequence: base.OriginSequence(),
 		OriginAcceptedAt: base.OriginAcceptedAt(), OriginSource: base.OriginSource(),
-		TargetAlias: base.TargetAlias(), Kind: base.Kind(), Payload: base.Payload(),
-		CausalDepth: base.CausalDepth(), ExpiresAt: base.ExpiresAt(),
+		OriginConsequence: base.OriginConsequence(), OriginTargetCount: uint8(base.OriginTargetCount()),
+		OriginCausation: base.OriginCausation(), OriginCorrelation: correlation,
+		InReplyToDelivery: inReplyToDelivery,
+		TargetAlias:       base.TargetAlias(), Kind: base.Kind(), Payload: base.Payload(),
+		Artifacts: base.Artifacts(), CausalDepth: base.CausalDepth(), ExpiresAt: base.ExpiresAt(),
 	}
 }
 
@@ -249,12 +315,25 @@ func FuzzParsePeerDeliveryCanonicalJSON(f *testing.F) {
 	payload, _ := NewSemanticPayload("bounded")
 	delivery, err := NewPeerDelivery(route, PeerDeliverySpec{
 		OriginEvent: origin, OriginSequence: 1, OriginAcceptedAt: testTime, OriginSource: source,
+		OriginConsequence: ConsequenceCreateHandlings, OriginTargetCount: 2,
 		TargetAlias: target, Kind: kind, Payload: payload, CausalDepth: 1, ExpiresAt: testTime.Add(time.Hour),
 	})
 	if err != nil {
 		f.Fatal(err)
 	}
 	f.Add(delivery.CanonicalJSON())
+	terminal, err := NewPeerDelivery(route, PeerDeliverySpec{
+		OriginEvent: origin, OriginSequence: 2, OriginAcceptedAt: testTime, OriginSource: source,
+		OriginConsequence: ConsequenceResolveDeclined, OriginTargetCount: 1,
+		OriginCorrelation: mustFuzzEventRef("event:fuzz-request", "request"),
+		InReplyToDelivery: DeliveryID{digest: Sum([]byte("delivery:fuzz-request"))},
+		TargetAlias:       target, Kind: kind, Payload: payload, CausalDepth: 1,
+		ExpiresAt: testTime.Add(time.Hour),
+	})
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(terminal.CanonicalJSON())
 	f.Fuzz(func(t *testing.T, data []byte) {
 		parsed, parseErr := ParsePeerDeliveryCanonicalJSON(data, route)
 		if parseErr != nil {
@@ -264,4 +343,10 @@ func FuzzParsePeerDeliveryCanonicalJSON(f *testing.F) {
 			t.Fatal("successful parser did not preserve exact canonical bytes")
 		}
 	})
+}
+
+func mustFuzzEventRef(idValue, body string) EventRef {
+	id, _ := NewEventID(idValue)
+	event, _ := NewEventRef(id, Sum([]byte(body)))
+	return event
 }

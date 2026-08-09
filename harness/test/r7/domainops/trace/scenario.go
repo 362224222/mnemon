@@ -17,7 +17,7 @@ import (
 
 const (
 	scenarioID              = "r7-domain-ops-live"
-	scenarioIdentityVersion = "mnemon.r7.domain-ops.scenario/v1"
+	scenarioIdentityVersion = "mnemon.r7.domain-ops.scenario/v2"
 	maxScenarioFileBytes    = 1 << 20
 	maxBinaryManifestBytes  = 4 << 10
 )
@@ -42,11 +42,15 @@ var scenarioFiles = []string{
 	"testdata/r7/domain-ops/world/gateway.go",
 	"testdata/r7/domain-ops/world/ledger.go",
 	"testdata/r7/domain-ops/world/monitor.go",
+	"testdata/r7/domain-ops/world/monitor_limit_test.go",
 	"testdata/r7/domain-ops/world/payment.go",
 	"testdata/r7/domain-ops/world/protocol.go",
+	"testdata/r7/domain-ops/world/protocol_test.go",
 }
 
 var candidateBinaryPaths = []string{
+	"/opt/mnemon/pi-delegate/delegate-runtime.mjs",
+	"/opt/mnemon/pi-delegate/delegate.ts",
 	"/usr/local/bin/domainctl",
 	"/usr/local/bin/mnemon-harness",
 	"/usr/local/bin/mnemond",

@@ -58,12 +58,13 @@ func (view BoundView) Bind(intent agency.AgentIntent, operation agency.Operation
 }
 
 type projectedClaim struct {
-	handlingID agency.HandlingID
-	head       agency.EventRef
-	fence      uint64
-	kind       agency.SemanticLabel
-	payload    agency.SemanticPayload
-	artifacts  []agency.Digest
+	handlingID          agency.HandlingID
+	head                agency.EventRef
+	fence               uint64
+	observationRevision uint64
+	kind                agency.SemanticLabel
+	payload             agency.SemanticPayload
+	artifacts           []agency.Digest
 }
 
 type projectedReference struct {
@@ -365,6 +366,11 @@ func scanProjectedClaim(ctx context.Context, tx *sql.Tx, row rowScanner) (*proje
 	if err != nil {
 		return nil, err
 	}
+	observationRevision, err := terminalObservationRevisionTx(ctx, tx, handlingID)
+	if err != nil {
+		return nil, err
+	}
 	return &projectedClaim{handlingID: handlingID, head: eventRef, fence: fence,
-		kind: kind, payload: payload, artifacts: artifacts}, nil
+		observationRevision: observationRevision,
+		kind:                kind, payload: payload, artifacts: artifacts}, nil
 }

@@ -22,15 +22,12 @@ func deriveLocalEventCausalDepthTx(ctx context.Context, tx *sql.Tx,
 	directRemotePredecessors := make(map[string]struct{})
 	if subject, present := request.Subject(); present {
 		refs = append(refs, subject.Head())
-		details, err := loadStoredEventDetailsTx(ctx, tx, subject.Head().ID().String())
-		if err != nil || details.ref != subject.Head() {
-			return 0, errors.New("admit Intent: subject causal authority is corrupt")
+		predecessors, err := subjectRemotePredecessorsTx(ctx, tx, subject)
+		if err != nil {
+			return 0, err
 		}
-		for _, predecessor := range details.causation {
+		for _, predecessor := range predecessors {
 			directRemotePredecessors[eventRefKey(predecessor)] = struct{}{}
-		}
-		if !details.correlation.IsZero() {
-			directRemotePredecessors[eventRefKey(details.correlation)] = struct{}{}
 		}
 	}
 	if expected, present := request.ExpectedReference(); present && !expected.IsAbsent() {
@@ -63,6 +60,27 @@ func deriveLocalEventCausalDepthTx(ctx context.Context, tx *sql.Tx,
 		}
 	}
 	return maximum, nil
+}
+
+func subjectRemotePredecessorsTx(ctx context.Context, tx *sql.Tx,
+	subject agency.SubjectBinding,
+) ([]agency.EventRef, error) {
+	details, err := loadStoredEventDetailsTx(ctx, tx, subject.Head().ID().String())
+	if err != nil || details.ref != subject.Head() {
+		return nil, errors.New("admit Intent: subject causal authority is corrupt")
+	}
+	result := append([]agency.EventRef(nil), details.causation...)
+	if !details.correlation.IsZero() {
+		result = append(result, details.correlation)
+	}
+	reply, err := currentReplyContextTx(ctx, tx, subject.HandlingID(), subject.Head())
+	if err != nil {
+		return nil, err
+	}
+	if reply.imported {
+		result = append(result, reply.root)
+	}
+	return result, nil
 }
 
 func eventRefKey(ref agency.EventRef) string {

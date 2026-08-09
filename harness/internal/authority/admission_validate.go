@@ -148,8 +148,10 @@ func validateBoundSubject(request agency.BoundIntent, claim *projectedClaim,
 		return nil
 	}
 	if claim == nil || subject.HandlingID() != claim.handlingID || subject.Head() != claim.head ||
-		subject.Fence() != claim.fence || !now.Before(claimUntil) {
-		return reject(rejectionStaleSubject, "subject claim, head, or fence is stale")
+		subject.Fence() != claim.fence ||
+		subject.ObservationRevision() != claim.observationRevision || !now.Before(claimUntil) {
+		return reject(rejectionStaleSubject,
+			"subject claim, head, fence, or observation revision is stale")
 	}
 	return nil
 }
@@ -190,12 +192,17 @@ func currentClaimForAdmissionTx(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return nil, time.Time{}, err
 	}
+	observationRevision, err := terminalObservationRevisionTx(ctx, tx, handlingID)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
 	claimUntil, err := parseTime(claimUntilValue)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
 	return &projectedClaim{handlingID: handlingID, head: eventRef, fence: fence,
-		kind: kind, payload: payload, artifacts: artifacts}, claimUntil, nil
+		observationRevision: observationRevision,
+		kind:                kind, payload: payload, artifacts: artifacts}, claimUntil, nil
 }
 
 func validateReferenceReadSetTx(ctx context.Context, tx *sql.Tx,

@@ -6,6 +6,14 @@
     },
     "facts": {
       "additionalProperties": false,
+      "dependentRequired": {
+        "goal_digest": [
+          "goal_satisfied"
+        ],
+        "goal_satisfied": [
+          "goal_digest"
+        ]
+      },
       "properties": {
         "action": {
           "enum": [
@@ -13,6 +21,8 @@
             "submit",
             "capture",
             "read",
+            "probe",
+            "mutation",
             "other"
           ]
         },
@@ -23,6 +33,16 @@
         },
         "artifact_count": {
           "maximum": 64,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "attempt_count": {
+          "maximum": 256,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "batched_unattributed_count": {
+          "maximum": 256,
           "minimum": 0,
           "type": "integer"
         },
@@ -40,6 +60,11 @@
         "code": {
           "$ref": "#/$defs/token"
         },
+        "count": {
+          "maximum": 256,
+          "minimum": 1,
+          "type": "integer"
+        },
         "consequence": {
           "enum": [
             "handling.create",
@@ -49,7 +74,10 @@
             "handling.resolve.unresolved",
             "reference.publish",
             "reference.supersede",
-            "reference.retract"
+            "reference.retract",
+            "observation.completed",
+            "observation.declined",
+            "observation.unresolved"
           ]
         },
         "duration_ms": {
@@ -57,14 +85,31 @@
           "minimum": 0,
           "type": "integer"
         },
+        "episode": {
+          "$ref": "#/$defs/token"
+        },
         "gate_id": {
           "$ref": "#/$defs/token"
+        },
+        "goal_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "goal_satisfied": {
+          "type": "boolean"
+        },
+        "has_current": {
+          "type": "boolean"
         },
         "hook_cue": {
           "type": "boolean"
         },
         "invalid_votes": {
           "maximum": 128,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "invalid_result_count": {
+          "maximum": 256,
           "minimum": 0,
           "type": "integer"
         },
@@ -82,6 +127,21 @@
           "type": "boolean"
         },
         "no_votes": {
+          "maximum": 64,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "occupied_claims": {
+          "maximum": 64,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "open_total": {
+          "maximum": 64,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "open_unclaimed": {
           "maximum": 64,
           "minimum": 0,
           "type": "integer"
@@ -126,6 +186,19 @@
         "replayed": {
           "type": "boolean"
         },
+        "reply_required": {
+          "type": "boolean"
+        },
+        "related_projected": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "related_total": {
+          "maximum": 128,
+          "minimum": 0,
+          "type": "integer"
+        },
         "result": {
           "enum": [
             "threshold_reached",
@@ -136,6 +209,9 @@
           "maximum": 1024,
           "minimum": 0,
           "type": "integer"
+        },
+        "role": {
+          "$ref": "#/$defs/token"
         },
         "sample_size": {
           "maximum": 64,
@@ -165,8 +241,18 @@
             "not_applicable"
           ]
         },
+        "success_count": {
+          "maximum": 256,
+          "minimum": 0,
+          "type": "integer"
+        },
         "target_count": {
           "maximum": 16,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tool_error_count": {
+          "maximum": 256,
           "minimum": 0,
           "type": "integer"
         },
@@ -179,6 +265,19 @@
         },
         "timed_out": {
           "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "turn_limit": {
+          "maximum": 256,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "turns_used": {
+          "maximum": 256,
+          "minimum": 0,
+          "type": "integer"
         },
         "view_nonempty": {
           "type": "boolean"
@@ -198,6 +297,49 @@
     },
     "gate": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "pass",
+                  "fail"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unknown"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "evidence": {
           "items": {
@@ -365,7 +507,7 @@
           "$ref": "#/$defs/timestamp"
         },
         "version": {
-          "const": 1
+          "const": 2
         }
       },
       "required": [
@@ -407,7 +549,10 @@
           "enum": [
             "runtime.turn.started",
             "runtime.hook.cue",
+            "runtime.delegate.invoked",
+            "runtime.domain.operation",
             "runtime.view.received",
+            "runtime.intent.denied",
             "runtime.intent.submitted",
             "runtime.turn.ended",
             "runtime.turn.timed_out",
@@ -434,6 +579,11 @@
             "r8.vote.observed",
             "r8.round.settled",
             "r8.observation.produced",
+            "test.attention.wave",
+            "test.attention.outcome",
+            "test.attention.exhausted",
+            "test.attention.quiescent",
+            "test.attention.occupied",
             "test.gate.checked"
           ]
         },
@@ -467,7 +617,7 @@
           "$ref": "#/$defs/token"
         },
         "version": {
-          "const": 1
+          "const": 2
         }
       },
       "required": [
@@ -494,6 +644,9 @@
                   "enum": [
                     "runtime.turn.started",
                     "runtime.hook.cue",
+                    "runtime.delegate.invoked",
+                    "runtime.domain.operation",
+                    "runtime.intent.denied",
                     "runtime.intent.submitted",
                     "runtime.turn.ended",
                     "runtime.turn.timed_out",
@@ -715,6 +868,11 @@
               "properties": {
                 "kind": {
                   "enum": [
+                    "test.attention.wave",
+                    "test.attention.outcome",
+                    "test.attention.exhausted",
+                    "test.attention.quiescent",
+                    "test.attention.occupied",
                     "test.gate.checked"
                   ]
                 },
@@ -740,6 +898,165 @@
             }
           ],
           "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "runtime.domain.operation"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "causes": {
+                    "maxItems": 0
+                  },
+                  "facts": {
+                    "properties": {
+                      "action": {
+                        "enum": [
+                          "read",
+                          "probe",
+                          "mutation"
+                        ]
+                      },
+                      "attempt_count": {
+                        "minimum": 1
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "attempt_count",
+                      "batched_unattributed_count",
+                      "invalid_result_count",
+                      "success_count",
+                      "tool_error_count"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "runtime.view.received"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "facts": {
+                    "allOf": [
+                      {
+                        "if": {
+                          "properties": {
+                            "has_current": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "has_current"
+                          ]
+                        },
+                        "then": {
+                          "required": [
+                            "reply_required"
+                          ]
+                        }
+                      },
+                      {
+                        "if": {
+                          "properties": {
+                            "has_current": {
+                              "const": false
+                            }
+                          },
+                          "required": [
+                            "has_current"
+                          ]
+                        },
+                        "then": {
+                          "not": {
+                            "required": [
+                              "reply_required"
+                            ]
+                          }
+                        }
+                      }
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "current"
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "has_current",
+                      "open_total",
+                      "related_projected",
+                      "related_total",
+                      "truncated"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "runtime.intent.denied"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "causes": {
+                    "maxItems": 0
+                  },
+                  "facts": {
+                    "properties": {
+                      "action": {
+                        "const": "submit"
+                      },
+                      "code": {
+                        "enum": [
+                          "invalid_argument",
+                          "content_required",
+                          "content_too_large",
+                          "artifact_invalid",
+                          "artifact_too_large",
+                          "authentication_failed",
+                          "context_required",
+                          "context_stale",
+                          "asset_revision_mismatch",
+                          "action_not_allowed",
+                          "operation_mismatch",
+                          "operation_pending",
+                          "mnemond_unavailable",
+                          "internal"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "code",
+                      "count"
+                    ]
+                  }
+                }
+              }
+            },
             {
               "if": {
                 "properties": {
@@ -929,6 +1246,240 @@
                   }
                 }
               }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "test.gate.checked"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "facts": {
+                    "properties": {
+                      "status": {
+                        "enum": [
+                          "pass",
+                          "fail",
+                          "unknown",
+                          "not_applicable"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "gate_id",
+                      "status"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "test.attention.wave"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "causes": {
+                    "maxItems": 0
+                  },
+                  "facts": {
+                    "properties": {
+                      "occupied_claims": {
+                        "const": 0
+                      }
+                    },
+                    "required": [
+                      "episode",
+                      "role",
+                      "round",
+                      "open_unclaimed",
+                      "occupied_claims",
+                      "turn_limit",
+                      "turns_used"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "test.attention.outcome"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "causes": {
+                    "maxItems": 0
+                  },
+                  "facts": {
+                    "properties": {
+                      "goal_satisfied": {
+                        "const": true
+                      },
+                      "occupied_claims": {
+                        "const": 0
+                      }
+                    },
+                    "required": [
+                      "episode",
+                      "role",
+                      "round",
+                      "open_unclaimed",
+                      "occupied_claims",
+                      "turn_limit",
+                      "turns_used",
+                      "goal_digest",
+                      "goal_satisfied"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "test.attention.quiescent"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "causes": {
+                    "maxItems": 0
+                  },
+                  "facts": {
+                    "properties": {
+                      "goal_satisfied": {
+                        "const": false
+                      },
+                      "occupied_claims": {
+                        "const": 0
+                      },
+                      "open_unclaimed": {
+                        "const": 0
+                      }
+                    },
+                    "required": [
+                      "episode",
+                      "role",
+                      "round",
+                      "open_unclaimed",
+                      "occupied_claims",
+                      "turn_limit",
+                      "turns_used",
+                      "goal_digest",
+                      "goal_satisfied"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "test.attention.exhausted"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "causes": {
+                    "maxItems": 0
+                  },
+                  "facts": {
+                    "properties": {
+                      "goal_satisfied": {
+                        "const": false
+                      },
+                      "occupied_claims": {
+                        "const": 0
+                      }
+                    },
+                    "required": [
+                      "episode",
+                      "role",
+                      "round",
+                      "open_unclaimed",
+                      "occupied_claims",
+                      "turn_limit",
+                      "turns_used",
+                      "goal_digest",
+                      "goal_satisfied"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "test.attention.occupied"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "causes": {
+                    "maxItems": 0
+                  },
+                  "facts": {
+                    "not": {
+                      "anyOf": [
+                        {
+                          "required": [
+                            "goal_digest"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "goal_satisfied"
+                          ]
+                        }
+                      ]
+                    },
+                    "required": [
+                      "episode",
+                      "role",
+                      "round",
+                      "open_unclaimed",
+                      "occupied_claims",
+                      "turn_limit",
+                      "turns_used"
+                    ]
+                  }
+                }
+              }
             }
           ]
         }
@@ -936,6 +1487,76 @@
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "passed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "gates": {
+                "contains": {
+                  "properties": {
+                    "status": {
+                      "const": "pass"
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ]
+                },
+                "items": {
+                  "properties": {
+                    "status": {
+                      "enum": [
+                        "pass",
+                        "not_applicable"
+                      ]
+                    }
+                  }
+                },
+                "minContains": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "gates": {
+                "contains": {
+                  "properties": {
+                    "status": {
+                      "const": "fail"
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ]
+                },
+                "minContains": 1
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "finished_at": {
           "$ref": "#/$defs/timestamp"
@@ -969,7 +1590,7 @@
           "$ref": "#/$defs/digest"
         },
         "version": {
-          "const": 1
+          "const": 2
         }
       },
       "required": [

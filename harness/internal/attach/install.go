@@ -26,11 +26,12 @@ var (
 
 // InstallReceipt identifies only the exact files owned by this projection.
 type InstallReceipt struct {
-	ExtensionPath string
-	GuidePath     string
-	JournalPath   string
-	Revision      string
-	Replayed      bool
+	CurrentExtensionPath string
+	ExtensionPath        string
+	GuidePath            string
+	JournalPath          string
+	Revision             string
+	Replayed             bool
 }
 
 type fileRecord struct {
@@ -162,6 +163,7 @@ func projectedFiles(workspace string, projection Projection) []projectedFile {
 	}{
 		{projection.Guide(), filepath.Join(".pi", "skills", "mnemond", "SKILL.md")},
 		{projection.PiExtension(), filepath.Join(".pi", "extensions", "mnemond.ts")},
+		{projection.PiCurrentExtension(), filepath.Join(".pi", "extensions", "mnemond-current.ts")},
 	}
 	files := make([]projectedFile, 0, len(sources))
 	for _, source := range sources {
@@ -186,6 +188,8 @@ func receiptFor(plan installPlan) InstallReceipt {
 	receipt := InstallReceipt{JournalPath: plan.journalPath, Revision: plan.journal.Revision}
 	for _, file := range plan.files {
 		switch file.record.Path {
+		case ".pi/extensions/mnemond-current.ts":
+			receipt.CurrentExtensionPath = file.path
 		case ".pi/extensions/mnemond.ts":
 			receipt.ExtensionPath = file.path
 		case ".pi/skills/mnemond/SKILL.md":

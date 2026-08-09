@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
-# Hermetic proof of the real service world. This script detects the incident
-# and verifies physical domain isolation; it deliberately performs no repair.
+# Hermetic proof of the real service world. This script detects both regional
+# variants and verifies physical domain isolation; it deliberately performs no
+# Agent repair.
 
 set -euo pipefail
 
@@ -10,7 +11,8 @@ harness_root=$(cd "$runner_dir/../../.." && pwd -P)
 case_root="$harness_root/testdata/r7/domain-ops"
 compose_file="$case_root/compose.yaml"
 project="mnr7-domain-ops-$$"
-prefix="incident-$$"
+first_prefix="incident-a-$$"
+second_prefix="incident-b-$$"
 runtime_dir=$(mktemp -d /tmp/mnr7-domain-ops.XXXXXX)
 
 fail() {
@@ -58,7 +60,7 @@ compose up -d --wait ledger callback-east callback-west payment-east payment-wes
 
 compose --profile tools run --rm --no-deps load \
   --gateway-url http://gateway:8080 --monitor-url http://monitor:8080 \
-  --prefix "$prefix" --count 4 --settle 1s >"$runtime_dir/incident.json"
+  --prefix "$first_prefix" --count 4 --settle 1s >"$runtime_dir/incident-a.json"
 
 jq -e '
   .sent == 4 and .accepted == 4 and .failed == 0 and
@@ -68,7 +70,7 @@ jq -e '
   .observed.ledger.voided_charges == 0 and
   .observed.ledger.unique_businesses == 4 and
   .observed.ledger.duplicate_businesses == 4
-' "$runtime_dir/incident.json" >/dev/null || fail 'the hidden service fault was not observed'
+' "$runtime_dir/incident-a.json" >/dev/null || fail 'the first hidden service fault was not observed'
 
 assert_networks gateway 'checkout-public,edge-ops,gateway-payment,monitor-gateway'
 assert_networks payment-east 'gateway-payment,payment-callback,payment-ops'
@@ -78,13 +80,13 @@ assert_networks monitor 'lead-ops,monitor-data,monitor-gateway'
 
 compose --profile tools run --rm --no-deps edge-tool status >"$runtime_dir/edge.json"
 compose --profile tools run --rm --no-deps edge-tool \
-  read "/history?prefix=$prefix-" >"$runtime_dir/edge-history.json"
+  read "/history?prefix=$first_prefix" >"$runtime_dir/edge-history.json"
 compose --profile tools run --rm --no-deps payment-tool \
   --endpoint http://payment-east:8080 status >"$runtime_dir/payment.json"
 compose --profile tools run --rm --no-deps platform-tool \
   --endpoint http://callback-east:8080 status >"$runtime_dir/platform.json"
-compose --profile tools run --rm --no-deps data-tool status "$prefix" >"$runtime_dir/data.json"
-compose --profile tools run --rm --no-deps lead-tool status "$prefix" >"$runtime_dir/lead.json"
+compose --profile tools run --rm --no-deps data-tool status "$first_prefix" >"$runtime_dir/data.json"
+compose --profile tools run --rm --no-deps lead-tool status "$first_prefix" >"$runtime_dir/lead.json"
 
 for report in edge payment platform data lead; do
   jq -e '.role == $role and (.result | type == "object")' \
@@ -92,7 +94,7 @@ for report in edge payment platform data lead; do
     fail "$report domain could not inspect its own bounded surface"
 done
 
-jq -e --slurpfile incident "$runtime_dir/incident.json" '
+jq -e --slurpfile incident "$runtime_dir/incident-a.json" '
   .role == "edge" and .result.limit == 32 and
   (.result.entries | length) == 4 and
   all(.result.entries[];
@@ -102,4 +104,50 @@ jq -e --slurpfile incident "$runtime_dir/incident.json" '
 ' "$runtime_dir/edge-history.json" >/dev/null ||
   fail 'edge history does not preserve the exact receipts returned to callers'
 
-printf 'r7 domain ops world: PASS (real services, bounded receipt history, five isolated domain surfaces)\n'
+# Move the hidden fixture to its second episode. These runner-only controls do
+# not choose an Agent remediation; they establish the region-reversed world
+# that the paid case later asks fresh Runtime processes to diagnose.
+compose --profile tools run --rm --no-deps payment-tool \
+  --endpoint http://payment-east:8080 action /admin/config \
+  '{"timeout_ms":500,"stable_keys":true,"retries":2}' >/dev/null
+compose --profile tools run --rm --no-deps platform-tool \
+  --endpoint http://callback-east:8080 action /admin/latency \
+  '{"latency_ms":5}' >/dev/null
+compose --profile tools run --rm --no-deps lead-tool probe >"$runtime_dir/synthetic-probe.json"
+jq -e '
+  .role == "lead" and
+  .result.receipt.business_id == "synthetic-001" and
+  .result.receipt.status == "succeeded" and
+  .result.receipt.capture_id > 0 and
+  .result.observed.charges == 1 and .result.observed.active_charges == 1 and
+  .result.observed.voided_charges == 0 and
+  .result.ledger.charges == 1 and .result.ledger.active_charges == 1 and
+  .result.ledger.voided_charges == 0 and
+  .result.ledger.unique_businesses == 1 and
+  .result.ledger.duplicate_businesses == 0
+' "$runtime_dir/synthetic-probe.json" >/dev/null ||
+  fail 'the bounded lead probe did not traverse the real checkout path'
+compose --profile tools run --rm --no-deps platform-tool \
+  --endpoint http://callback-west:8080 action /admin/latency \
+  '{"latency_ms":300}' >/dev/null
+compose --profile tools run --rm --no-deps payment-tool \
+  --endpoint http://payment-west:8080 action /admin/config \
+  '{"timeout_ms":100,"stable_keys":false,"retries":2}' >/dev/null
+compose --profile tools run --rm --no-deps edge-tool \
+  action /admin/route '{"route":"west"}' >/dev/null
+compose --profile tools run --rm --no-deps load \
+  --gateway-url http://gateway:8080 --monitor-url http://monitor:8080 \
+  --prefix "$second_prefix" --count 4 --settle 1s >"$runtime_dir/incident-b.json"
+
+jq -e '
+  .sent == 4 and .accepted == 4 and .failed == 0 and
+  (.receipts | length) == 4 and all(.receipts[]; .capture_id > 0) and
+  .observed.gateway.route == "west" and
+  .observed.ledger.charges == 8 and .observed.ledger.active_charges == 8 and
+  .observed.ledger.voided_charges == 0 and
+  .observed.ledger.unique_businesses == 4 and
+  .observed.ledger.duplicate_businesses == 4
+' "$runtime_dir/incident-b.json" >/dev/null ||
+  fail 'the region-reversed hidden service fault was not observed'
+
+printf 'r7 domain ops world: PASS (two real regional faults, bounded public probe, receipt history, five isolated domain surfaces)\n'

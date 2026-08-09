@@ -10,7 +10,10 @@ type factClassification struct {
 var factClassifications = map[string]factClassification{
 	"runtime.turn.started":     {source: "runtime", truth: "observation"},
 	"runtime.hook.cue":         {source: "runtime", truth: "observation"},
+	"runtime.delegate.invoked": {source: "runtime", truth: "observation"},
+	"runtime.domain.operation": {source: "runtime", truth: "observation"},
 	"runtime.view.received":    {source: "runtime", truth: "derived_projection"},
+	"runtime.intent.denied":    {source: "runtime", truth: "observation"},
 	"runtime.intent.submitted": {source: "runtime", truth: "observation"},
 	"runtime.turn.ended":       {source: "runtime", truth: "observation"},
 	"runtime.turn.timed_out":   {source: "runtime", truth: "observation"},
@@ -37,5 +40,10 @@ var factClassifications = map[string]factClassification{
 	"r8.vote.observed":         {source: "r8_selector", truth: "observation"},
 	"r8.round.settled":         {source: "r8_selector", truth: "local_preference"},
 	"r8.observation.produced":  {source: "r8_selector", truth: "local_preference"},
+	"test.attention.wave":      {source: "oracle", truth: "assertion"},
+	"test.attention.outcome":   {source: "oracle", truth: "assertion"},
+	"test.attention.exhausted": {source: "oracle", truth: "assertion"},
+	"test.attention.quiescent": {source: "oracle", truth: "assertion"},
+	"test.attention.occupied":  {source: "oracle", truth: "assertion"},
 	"test.gate.checked":        {source: "oracle", truth: "assertion"},
 }

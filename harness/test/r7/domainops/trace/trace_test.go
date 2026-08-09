@@ -15,7 +15,6 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 	"github.com/mnemon-dev/mnemon/harness/internal/authority"
-	"github.com/mnemon-dev/mnemon/harness/test/observer"
 )
 
 func TestParseStoredEventRequiresExactCanonicalDigestAndColumns(t *testing.T) {
@@ -162,7 +161,8 @@ func TestValidateGlobalAuthorityRefsRequiresExactDigests(t *testing.T) {
 
 func TestValidateGlobalDeliveriesRequiresCollectedExactOrigin(t *testing.T) {
 	digest := agency.Sum([]byte("origin")).String()
-	delivery := deliveryEvidence{OriginEventID: "event:origin", OriginEventDigest: digest}
+	delivery := deliveryEvidence{Direction: "outbox",
+		OriginEventID: "event:origin", OriginEventDigest: digest}
 	nodes := []nodeEvidence{{Role: "data", Deliveries: []deliveryEvidence{delivery}}}
 	if err := validateGlobalDeliveries(nodes, nil); err == nil {
 		t.Fatal("validateGlobalDeliveries() accepted a missing origin Event")
@@ -180,39 +180,6 @@ func TestValidateGlobalDeliveriesRequiresCollectedExactOrigin(t *testing.T) {
 	}
 }
 
-func TestRuntimeProjectionAddsNoCausalEdges(t *testing.T) {
-	started := time.Date(2026, 8, 4, 1, 0, 0, 0, time.UTC)
-	var output bytes.Buffer
-	writer, err := observer.NewWriter(&output, observer.Run{
-		ID: "runtime-edge-test",
-		Scenario: observer.Scenario{ID: "runtime-edge-test",
-			Digest: agency.Sum([]byte("runtime-edge-test")).String()},
-		StartedAt:    started,
-		Participants: []observer.Participant{{Node: "lead", Agent: "lead", Runtime: "pi"}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	turn := turnSummary{Role: "lead", Turn: "initial-lead", HookCues: 1,
-		CapturedAt:   started.Add(time.Minute).Format(time.RFC3339Nano),
-		CurrentReads: 1, SubmitAttempts: 1, IntentSubmits: 1, AgentEnd: true}
-	if err := appendRuntimeFacts(writer, []turnSummary{turn}); err != nil {
-		t.Fatal(err)
-	}
-	for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n")[1:] {
-		var record struct {
-			Record string   `json:"record"`
-			Causes []string `json:"causes"`
-		}
-		if err := json.Unmarshal([]byte(line), &record); err != nil {
-			t.Fatal(err)
-		}
-		if record.Record == "fact" && len(record.Causes) != 0 {
-			t.Fatalf("runtime observation inferred causes: %v", record.Causes)
-		}
-	}
-}
-
 func TestValidateReportRequiresAllIndependentGates(t *testing.T) {
 	report := validReport()
 	if err := validateReport(report); err != nil {
@@ -221,6 +188,11 @@ func TestValidateReportRequiresAllIndependentGates(t *testing.T) {
 	report.Isolation.Passed = false
 	if err := validateReport(report); err == nil {
 		t.Fatal("validateReport() accepted a failed isolation oracle")
+	}
+	report = validReport()
+	report.Isolation.FreshRuntimeBetweenEpisodes = false
+	if err := validateReport(report); err == nil {
+		t.Fatal("validateReport() accepted reused cross-episode Runtime state")
 	}
 	report = validReport()
 	report.Turns[0].PrivateBindingProbes = 1
@@ -236,8 +208,9 @@ func TestValidateReportRequiresAllIndependentGates(t *testing.T) {
 	report.Turns[0].BashCalls = 1
 	report.Turns[0].SubmitAttempts = 3
 	report.Turns[0].IntentSubmits = 1
-	report.Turns[0].AcceptedReceipts = 1
+	acceptTestTurn(&report.Turns[0], "bounded-post-accept")
 	report.Turns[0].SubmitDenials = 2
+	report.Turns[0].SubmitControlDenials = []controlDenial{{Code: "context_required", Count: 2}}
 	report.Turns[0].PostAcceptDenials = 2
 	if err := validateReport(report); err != nil {
 		t.Fatalf("validateReport() rejected one Effect plus two closed denials: %v", err)
@@ -245,6 +218,7 @@ func TestValidateReportRequiresAllIndependentGates(t *testing.T) {
 	report.Turns[0].IntentSubmits = 2
 	report.Turns[0].AcceptedReceipts = 2
 	report.Turns[0].SubmitDenials = 1
+	report.Turns[0].SubmitControlDenials[0].Count = 1
 	report.Turns[0].PostAcceptDenials = 1
 	if err := validateReport(report); err == nil {
 		t.Fatal("validateReport() accepted two Effects in one turn")
@@ -257,52 +231,11 @@ func TestValidateReportRequiresAllIndependentGates(t *testing.T) {
 	}
 }
 
-func TestValidateReportAcceptsContainedPostAcceptDenials(t *testing.T) {
+func TestValidateReportRequiresSupportedThinkingLevel(t *testing.T) {
 	report := validReport()
-	report.Turns[0].BashCalls = 14
-	report.Turns[0].SubmitAttempts = 14
-	report.Turns[0].IntentSubmits = 1
-	report.Turns[0].AcceptedReceipts = 1
-	report.Turns[0].SubmitDenials = 13
-	report.Turns[0].PostAcceptDenials = 13
-	if err := validateReport(report); err != nil {
-		t.Fatalf("validateReport() rejected contained post-accept denials: %v", err)
-	}
-	report.Turns[0].BashCalls = 257
-	report.Turns[0].SubmitAttempts = 257
-	report.Turns[0].SubmitDenials = 256
-	report.Turns[0].PostAcceptDenials = 256
+	report.Thinking = "unsupported"
 	if err := validateReport(report); err == nil {
-		t.Fatal("validateReport() accepted counters above the generic turn bound")
-	}
-}
-
-func TestValidateFailureReportAccountsClosedSubmitDenials(t *testing.T) {
-	report := validFailureReport()
-	report.Turns[0].BashCalls = 1
-	report.Turns[0].SubmitAttempts = 3
-	report.Turns[0].IntentSubmits = 1
-	report.Turns[0].RejectedReceipts = 1
-	report.Turns[0].SubmitDenials = 2
-	if err := validateFailureReport(report); err != nil {
-		t.Fatalf("validateFailureReport() rejected accounted attempts: %v", err)
-	}
-	report.Turns[0].SubmitDenials = 0
-	if err := validateFailureReport(report); err == nil {
-		t.Fatal("validateFailureReport() accepted an unaccounted submit attempt")
-	}
-}
-
-func TestValidateFailureReportAcceptsContainedPostAcceptDenials(t *testing.T) {
-	report := validFailureReport()
-	report.Turns[0].BashCalls = 14
-	report.Turns[0].SubmitAttempts = 14
-	report.Turns[0].IntentSubmits = 1
-	report.Turns[0].AcceptedReceipts = 1
-	report.Turns[0].SubmitDenials = 13
-	report.Turns[0].PostAcceptDenials = 13
-	if err := validateFailureReport(report); err != nil {
-		t.Fatalf("validateFailureReport() rejected contained post-accept denials: %v", err)
+		t.Fatal("validateReport() accepted an unsupported thinking level")
 	}
 }
 
@@ -314,6 +247,22 @@ func TestWriteTraceKeepsRuntimeAndAuthorityEvidenceSeparate(t *testing.T) {
 		AcceptedAt: time.Date(2026, 8, 4, 1, 0, 10, 0, time.UTC), OriginSequence: 1,
 		SourcePrincipal: "principal:lead", RequestDigest: agency.Sum([]byte("root request")).String(),
 		SemanticKind: "work.request", Consequence: "handling.create"}
+	referenceDigest := agency.Sum([]byte("retained Reference Event")).String()
+	artifactDigest := agency.Sum([]byte("retained operating knowledge")).String()
+	reference := eventEvidence{Node: "lead", ID: "event:reference", Digest: referenceDigest,
+		AcceptedAt: time.Date(2026, 8, 4, 1, 0, 10, 500000000, time.UTC), OriginSequence: 2,
+		SourcePrincipal: "principal:lead",
+		RequestDigest:   agency.Sum([]byte("reference request")).String(),
+		SemanticKind:    "knowledge.keep", Consequence: "reference.publish",
+		ReferenceKey: "opaque.test", Artifacts: []string{artifactDigest}}
+	evolved := eventEvidence{Node: "lead", ID: "event:evolution",
+		Digest:     agency.Sum([]byte("later Event")).String(),
+		AcceptedAt: time.Date(2026, 8, 4, 1, 0, 13, 0, time.UTC), OriginSequence: 3,
+		SourcePrincipal: "principal:lead",
+		RequestDigest:   agency.Sum([]byte("later request")).String(),
+		SemanticKind:    "knowledge.use", Consequence: "handling.create",
+		Targets:   []string{"principal:lead"},
+		Causation: []eventRefWire{{ID: reference.ID, Digest: reference.Digest}}}
 	remote := eventEvidence{Node: "data", ID: "event:remote", Digest: remoteDigest,
 		AcceptedAt: time.Date(2026, 8, 4, 1, 0, 11, 0, time.UTC), OriginSequence: 1,
 		CausalDepth: 1, SourcePrincipal: "principal:lead-surrogate",
@@ -337,12 +286,18 @@ func TestWriteTraceKeepsRuntimeAndAuthorityEvidenceSeparate(t *testing.T) {
 	for index := range proof.Nodes {
 		switch proof.Nodes[index].Role {
 		case "lead":
-			proof.Nodes[index].Events = []eventEvidence{root}
+			proof.Nodes[index].Events = []eventEvidence{root, reference, evolved}
+			proof.Nodes[index].Artifacts = []artifactEvidence{{Node: "lead",
+				Digest: artifactDigest, ByteSize: 28, VerifiedAt: reference.AcceptedAt}}
+			proof.Nodes[index].References = []referenceEvidence{{Node: "lead",
+				EventID: reference.ID, State: "active", ArtifactDigest: artifactDigest}}
 			proof.Nodes[index].Operations = []operationEvidence{{Node: "lead",
 				Digest: agency.Sum([]byte("receipt")).String(), Outcome: "accepted",
 				RecordedAt: root.AcceptedAt.Add(time.Second), EventID: root.ID, EventDigest: root.Digest}}
 			proof.Nodes[index].Handlings = []handlingEvidence{{Node: "lead", ID: "handling:root",
-				TargetPrincipal: "principal:lead", HeadEventID: root.ID, State: "open", CreatedSequence: 1}}
+				TargetPrincipal: "principal:lead", HeadEventID: root.ID, State: "open", CreatedSequence: 1},
+				{Node: "lead", ID: "handling:evolved", TargetPrincipal: "principal:lead",
+					HeadEventID: evolved.ID, State: "open", CreatedSequence: 3}}
 		case "data":
 			proof.Nodes[index].Events = []eventEvidence{remote, terminal}
 			proof.Nodes[index].Handlings = []handlingEvidence{{Node: "data", ID: "handling:remote",
@@ -448,6 +403,13 @@ func TestFailureTracePreservesAuthorityButCannotPass(t *testing.T) {
 	if strings.Contains(trace, `"status":"passed"`) || strings.Contains(trace, `"payload":`) {
 		t.Fatal("failed trace claimed success or retained semantic payload")
 	}
+	if status := traceGateStatus(t, trace, "r7.operation-receipts"); status != "unknown" {
+		t.Fatalf("unobserved operation-receipts gate status = %q", status)
+	}
+	if status := traceGateStatus(t, trace, "r7.peer-accepted-effect"); status != "unknown" {
+		t.Fatalf("unobserved peer-accepted-effect gate status = %q", status)
+	}
+
 }
 
 func TestFailureReportRejectsProviderMaterialAndNoncanonicalOutcome(t *testing.T) {
@@ -455,6 +417,11 @@ func TestFailureReportRejectsProviderMaterialAndNoncanonicalOutcome(t *testing.T
 	if err := validateFailureReport(report); err != nil {
 		t.Fatalf("validateFailureReport() error = %v", err)
 	}
+	report.Thinking = "unsupported"
+	if err := validateFailureReport(report); err == nil {
+		t.Fatal("failure report accepted an unsupported thinking level")
+	}
+	report = validFailureReport()
 	report.RawProviderStreamsRetained = true
 	if err := validateFailureReport(report); err == nil {
 		t.Fatal("failure report retained provider streams")
@@ -463,6 +430,25 @@ func TestFailureReportRejectsProviderMaterialAndNoncanonicalOutcome(t *testing.T
 	report.Status = "passed"
 	if err := validateFailureReport(report); err == nil {
 		t.Fatal("failure report accepted a passed outcome")
+	}
+}
+
+func TestFailureWorldIsBoundedAndConservesCounts(t *testing.T) {
+	valid := []failureWorldSnapshot{{Episode: "episode-1", Charges: 8,
+		ActiveCharges: 8, UniqueBusinesses: 4, DuplicateBusinesses: 4}}
+	if err := validateFailureWorld(valid); err != nil {
+		t.Fatalf("validateFailureWorld() error = %v", err)
+	}
+
+	inconsistent := append([]failureWorldSnapshot(nil), valid...)
+	inconsistent[0].ActiveCharges = 7
+	if err := validateFailureWorld(inconsistent); err == nil {
+		t.Fatal("failure world accepted counts that do not conserve charges")
+	}
+
+	duplicate := append(append([]failureWorldSnapshot(nil), valid...), valid[0])
+	if err := validateFailureWorld(duplicate); err == nil {
+		t.Fatal("failure world accepted a duplicate episode")
 	}
 }
 
@@ -500,17 +486,10 @@ func assertTraceSeparation(t *testing.T, trace string) {
 	if r8Facts != 0 {
 		t.Fatalf("R7-only trace contains %d R8 facts", r8Facts)
 	}
-}
-
-type testTraceRecord struct {
-	Record string   `json:"record"`
-	ID     string   `json:"id"`
-	Kind   string   `json:"kind"`
-	Causes []string `json:"causes"`
-	Gates  []struct {
-		ID     string `json:"id"`
-		Status string `json:"status"`
-	} `json:"gates"`
+	assertSuccessfulAttentionEvidence(t, trace)
+	if status := traceGateStatus(t, trace, "scenario.evolution"); status != "pass" {
+		t.Fatalf("demonstrated evolution gate status = %q", status)
+	}
 }
 
 func inspectTestTraceRecord(t *testing.T, record testTraceRecord,
@@ -546,7 +525,7 @@ func validStoredEvent(t *testing.T) storedEventRow {
 	accepted := time.Date(2026, 8, 4, 1, 2, 3, 4, time.UTC)
 	requestDigest := agency.Sum([]byte("request")).String()
 	var wire eventWire
-	wire.SchemaVersion = 2
+	wire.SchemaVersion = 3
 	wire.Machine.EventID = "event:one"
 	wire.Machine.AcceptedAt = accepted.Format(time.RFC3339Nano)
 	wire.Machine.OriginSequence = 1
@@ -574,7 +553,7 @@ func createAuthorityFixture(t *testing.T) string {
 	db := openFixture(t, path)
 	schema := `
 PRAGMA application_id = 1296978487;
-PRAGMA user_version = 9;
+PRAGMA user_version = 12;
 CREATE TABLE events(event_id TEXT PRIMARY KEY,event_digest TEXT,origin_sequence INTEGER,
  source_principal_id TEXT,request_digest TEXT,causal_depth INTEGER,accepted_at TEXT,canonical_json BLOB);
 CREATE TABLE verified_artifacts(digest TEXT PRIMARY KEY,byte_size INTEGER,verified_at TEXT);
@@ -585,9 +564,12 @@ CREATE TABLE handlings(handling_id TEXT,target_principal_id TEXT,head_event_id T
  outcome TEXT,created_sequence INTEGER);
 CREATE TABLE reference_lineage(event_id TEXT,reference_key TEXT,previous_event_id TEXT,
  state TEXT,artifact_digest TEXT);
-CREATE TABLE peer_outbox(delivery_id TEXT,route_id TEXT,origin_event_id TEXT,envelope_digest TEXT,
- delivery_json BLOB,state TEXT,created_at TEXT,settled_at TEXT,receipt_digest TEXT,receipt_json BLOB);
-CREATE TABLE peer_inbox(delivery_id TEXT,route_id TEXT,envelope_digest TEXT,delivery_json BLOB,
+CREATE TABLE peer_outbox(delivery_id TEXT,route_id TEXT,origin_event_id TEXT,
+ reply_anchor_handling_id TEXT,expected_reply_root_event_id TEXT,
+ expected_reply_root_event_digest TEXT,envelope_digest TEXT,delivery_json BLOB,state TEXT,
+ created_at TEXT,settled_at TEXT,receipt_digest TEXT,receipt_json BLOB);
+CREATE TABLE peer_inbox(delivery_id TEXT,route_id TEXT,in_reply_to_delivery_id TEXT,
+ envelope_digest TEXT,delivery_json BLOB,
  state TEXT,received_at TEXT,settled_at TEXT,local_event_id TEXT,receipt_digest TEXT,receipt_json BLOB);`
 	if _, err := db.Exec(schema); err != nil {
 		t.Fatal(err)
@@ -658,18 +640,29 @@ func readRequiredFile(t *testing.T, path string) []byte {
 
 func validReport() liveReport {
 	var report liveReport
-	report.Schema, report.Version, report.Status = "mnemon.r7.domain-ops.live-report", 1, "passed"
-	report.Model, report.Rounds = "deepseek-v4-flash", 1
+	report.Schema, report.Version, report.Status = "mnemon.r7.domain-ops.live-report", 7, "passed"
+	report.Model = "deepseek-v4-flash"
+	report.Thinking = "high"
 	report.Run = runReport{ID: "domain-ops-test", StartedAt: "2026-08-04T01:00:00Z",
 		FinishedAt: "2026-08-04T01:01:00Z", CandidateDigest: agency.Sum([]byte("candidate")).String()}
 	report.Isolation.Passed = true
-	report.World.Baseline, report.World.IncidentCharges = receiptEvidence(4, 2, 1)
-	report.World.Baseline.Observed.Ledger = ledgerStatus{Charges: 8, ActiveCharges: 8,
-		UniqueBusinesses: 4, DuplicateBusinesses: 4}
-	report.World.Recovery, report.World.RecoveryCharges = receiptEvidence(6, 1, 0)
-	report.World.Stability, report.World.StabilityCharges = receiptEvidence(6, 1, 0)
-	report.World.IncidentAfter = domainResult{Role: "data", Result: ledgerStatus{
-		Charges: 8, ActiveCharges: 4, VoidedCharges: 4, UniqueBusinesses: 4}}
+	report.Isolation.FreshRuntimeBetweenEpisodes = true
+	sequence := int64(0)
+	for episodeNumber := 1; episodeNumber <= 2; episodeNumber++ {
+		episode := episodeReport{ID: fmt.Sprintf("episode-%d", episodeNumber)}
+		episode.Baseline, episode.IncidentCharges = receiptEvidence(
+			fmt.Sprintf("incident-%d", episodeNumber), 4, 2, 1, &sequence)
+		episode.Baseline.Observed.Gateway.Route = []string{"east", "west"}[episodeNumber-1]
+		episode.Baseline.Observed.Ledger = ledgerStatus{Charges: 8, ActiveCharges: 8,
+			UniqueBusinesses: 4, DuplicateBusinesses: 4}
+		episode.Recovery, episode.RecoveryCharges = receiptEvidence(
+			fmt.Sprintf("recovery-%d", episodeNumber), 6, 1, 0, &sequence)
+		episode.Stability, episode.StabilityCharges = receiptEvidence(
+			fmt.Sprintf("stability-%d", episodeNumber), 6, 1, 0, &sequence)
+		episode.IncidentAfter = domainResult{Role: "data", Result: ledgerStatus{
+			Charges: 8, ActiveCharges: 4, VoidedCharges: 4, UniqueBusinesses: 4}}
+		report.World.Episodes = append(report.World.Episodes, episode)
+	}
 	report.Protocol.AcceptedPeerEffects = 1
 	for _, role := range domainRoles {
 		count := 0
@@ -679,27 +672,75 @@ func validReport() liveReport {
 		report.Protocol.ByReceiver = append(report.Protocol.ByReceiver,
 			peerEffectSummary{Role: role, AcceptedPeerEffects: count})
 	}
-	for _, phase := range []string{"initial-lead", "round-1"} {
+	for _, phase := range []string{"episode-1-initial-lead", "episode-1-post-outcome-lead",
+		"episode-2-initial-lead"} {
 		barrier := deliveryQuiescenceSummary{Phase: phase, Status: "quiescent", Attempts: 1}
 		for _, role := range domainRoles {
 			barrier.Nodes = append(barrier.Nodes, deliveryNodeOccupancySummary{Role: role})
 		}
 		report.Protocol.DeliveryQuiescence = append(report.Protocol.DeliveryQuiescence, barrier)
 	}
-	report.Turns = append(report.Turns, turnSummary{Role: "lead", Turn: "initial-lead",
-		CapturedAt: "2026-08-04T01:00:30Z", HookCues: 1, AgentEnd: true})
-	for _, role := range domainRoles {
-		report.Turns = append(report.Turns, turnSummary{Role: role, Turn: "round-1-" + role,
-			CapturedAt: "2026-08-04T01:00:45Z", HookCues: 1, AgentEnd: true})
+	for episode := 1; episode <= 2; episode++ {
+		envelope := attentionEnvelope{Episode: fmt.Sprintf("episode-%d", episode),
+			Status: "outcome_observed", TurnLimit: attentionTurnLimit,
+			Goal: satisfiedAttentionGoal(fmt.Sprintf("episode-%d", episode))}
+		for _, role := range domainRoles {
+			envelope.Final = append(envelope.Final, attentionNode{Role: role})
+		}
+		report.Protocol.Attention = append(report.Protocol.Attention, envelope)
 	}
+	for episode := 1; episode <= 2; episode++ {
+		report.Turns = append(report.Turns, turnSummary{Role: "lead",
+			Turn:       fmt.Sprintf("episode-%d-initial-lead", episode),
+			CapturedAt: "2026-08-04T01:00:30Z", HookCues: 1, AgentEnd: true})
+	}
+	report.Turns = append(report.Turns, turnSummary{Role: "lead",
+		Turn:       "episode-1-post-outcome-lead",
+		CapturedAt: "2026-08-04T01:00:50Z", HookCues: 1, AgentEnd: true})
+	populateValidEvolution(&report)
 	return report
+}
+
+func acceptTestTurn(turn *turnSummary, name string) {
+	turn.AcceptedReceipts = 1
+	turn.AcceptedEvents = []acceptedEventSummary{{
+		ID: "event:" + name, Digest: agency.Sum([]byte(name)).String(),
+	}}
+}
+
+func populateValidEvolution(report *liveReport) {
+	referenceDigest := agency.Sum([]byte("retained Reference Event")).String()
+	report.Protocol.Evolution.Boundary.ActiveHeadCount = 1
+	for _, role := range domainRoles {
+		boundary := evolutionBoundaryNode{Role: role, MaxOriginSequence: 0}
+		if role == "lead" {
+			boundary.ConsolidationAfterSequence = 1
+			boundary.MaxOriginSequence = 2
+			boundary.ActiveHeads = []evolutionReferenceHead{{
+				EventID: "event:reference", EventDigest: referenceDigest}}
+		}
+		report.Protocol.Evolution.Boundary.Nodes = append(
+			report.Protocol.Evolution.Boundary.Nodes, boundary)
+		effect := evolutionNodeSummary{Role: role,
+			BoundarySequence: boundary.MaxOriginSequence,
+			ActiveHeadCount:  len(boundary.ActiveHeads)}
+		if role == "lead" {
+			effect.AcceptedReferenceUses = 1
+			effect.Matches = []evolutionMatchReport{{EventID: "event:evolution",
+				ReferenceEventID: "event:reference", ReferenceDigest: referenceDigest}}
+		}
+		report.Protocol.Evolution.Effects = append(report.Protocol.Evolution.Effects, effect)
+	}
+	report.Protocol.Evolution.AcceptedReferenceUses = 1
+	report.Protocol.Evolution.Demonstrated = true
 }
 
 func validFailureReport() failureReport {
 	var report failureReport
 	report.Schema, report.Version, report.Status =
-		"mnemon.r7.domain-ops.failure-report", 1, "failed"
+		"mnemon.r7.domain-ops.failure-report", 7, "failed"
 	report.Model = "deepseek-v4-flash"
+	report.Thinking = "high"
 	report.Run = runReport{ID: "domain-ops-failed", StartedAt: "2026-08-04T01:00:00Z",
 		FinishedAt:      "2026-08-04T01:01:00Z",
 		CandidateDigest: agency.Sum([]byte("candidate")).String()}
@@ -710,34 +751,35 @@ func validFailureReport() failureReport {
 	return report
 }
 
-func freshSummary(count int) loadSummary {
-	result := loadSummary{Sent: count, Accepted: count,
+func freshSummary(prefix string, count int) loadSummary {
+	result := loadSummary{Prefix: prefix, Sent: count, Accepted: count,
 		Observed: monitorStatus{Ledger: ledgerStatus{Charges: count,
 			ActiveCharges: count, UniqueBusinesses: count}}}
 	for index := 1; index <= count; index++ {
 		result.Receipts = append(result.Receipts,
-			serviceReceipt{BusinessID: "business-" + string(rune('a'+index)), CaptureID: int64(index)})
+			serviceReceipt{BusinessID: fmt.Sprintf("%s-%d", prefix, index), CaptureID: int64(index)})
 	}
 	return result
 }
 
-func receiptEvidence(count, copies, voided int) (loadSummary, domainChargeResult) {
-	summary := freshSummary(count)
+func receiptEvidence(prefix string, count, copies, voided int,
+	sequence *int64,
+) (loadSummary, domainChargeResult) {
+	summary := freshSummary(prefix, count)
 	charges := domainChargeResult{Role: "data"}
-	sequence := int64(0)
 	for index := range summary.Receipts {
 		for copyIndex := 0; copyIndex < copies; copyIndex++ {
-			sequence++
+			(*sequence)++
 			state, reason := "active", ""
 			if copyIndex >= copies-voided {
 				state, reason = "voided", "fixture reconciliation"
 			}
 			if copyIndex == 0 {
-				summary.Receipts[index].CaptureID = sequence
+				summary.Receipts[index].CaptureID = *sequence
 			}
-			charges.Result = append(charges.Result, chargeRecord{Sequence: sequence,
+			charges.Result = append(charges.Result, chargeRecord{Sequence: *sequence,
 				BusinessID: summary.Receipts[index].BusinessID,
-				AttemptKey: fmt.Sprintf("attempt-%d-%d", index, copyIndex),
+				AttemptKey: fmt.Sprintf("%s-attempt-%d-%d", prefix, index, copyIndex),
 				State:      state, VoidReason: reason})
 		}
 	}

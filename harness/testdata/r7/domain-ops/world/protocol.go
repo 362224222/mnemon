@@ -14,7 +14,10 @@ import (
 	"time"
 )
 
-const maxBodyBytes = 16 << 10
+const (
+	MaxRequestBodyBytes  = 32 << 10
+	MaxResponseBodyBytes = 128 << 10
+)
 
 var tokenPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$`)
 
@@ -56,18 +59,40 @@ func DecodeJSON(request *http.Request, destination any) error {
 	if request == nil || request.Body == nil || destination == nil {
 		return errors.New("request body is required")
 	}
-	decoder := json.NewDecoder(io.LimitReader(request.Body, maxBodyBytes+1))
+	return decodeBoundedJSON(request.Body, MaxRequestBodyBytes, destination, "request")
+}
+
+func decodeBoundedJSON(reader io.Reader, limit int64, destination any, subject string) error {
+	payload, err := readBounded(reader, limit)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", subject, err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
-		return fmt.Errorf("decode request: %w", err)
+		return fmt.Errorf("decode %s: %w", subject, err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return errors.New("request contains a trailing JSON value")
+			return fmt.Errorf("%s contains a trailing JSON value", subject)
 		}
-		return fmt.Errorf("decode request trailer: %w", err)
+		return fmt.Errorf("decode %s trailer: %w", subject, err)
 	}
 	return nil
+}
+
+func readBounded(reader io.Reader, limit int64) ([]byte, error) {
+	if reader == nil || limit <= 0 {
+		return nil, errors.New("bounded reader dependencies are required")
+	}
+	payload, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(payload)) > limit {
+		return nil, fmt.Errorf("body exceeds %d-byte bound", limit)
+	}
+	return payload, nil
 }
 
 func WriteJSON(writer http.ResponseWriter, status int, value any) {
@@ -84,6 +109,9 @@ func PostJSON(ctx context.Context, client *http.Client, target string, input, ou
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
 	}
+	if len(payload) > MaxRequestBodyBytes {
+		return errors.New("request exceeds body bound")
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
@@ -95,19 +123,14 @@ func PostJSON(ctx context.Context, client *http.Client, target string, input, ou
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxBodyBytes))
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, MaxResponseBodyBytes))
 		return fmt.Errorf("post response status %d", response.StatusCode)
 	}
 	if output == nil {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxBodyBytes))
-		return nil
+		_, err := readBounded(response.Body, MaxResponseBodyBytes)
+		return err
 	}
-	decoder := json.NewDecoder(io.LimitReader(response.Body, maxBodyBytes+1))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(output); err != nil {
-		return fmt.Errorf("decode response: %w", err)
-	}
-	return nil
+	return decodeBoundedJSON(response.Body, MaxResponseBodyBytes, output, "response")
 }
 
 func GetJSON(ctx context.Context, client *http.Client, target string, output any) error {
@@ -124,14 +147,10 @@ func GetJSON(ctx context.Context, client *http.Client, target string, output any
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, MaxResponseBodyBytes))
 		return fmt.Errorf("get response status %d", response.StatusCode)
 	}
-	decoder := json.NewDecoder(io.LimitReader(response.Body, maxBodyBytes+1))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(output); err != nil {
-		return fmt.Errorf("decode response: %w", err)
-	}
-	return nil
+	return decodeBoundedJSON(response.Body, MaxResponseBodyBytes, output, "response")
 }
 
 func DefaultClient(timeout time.Duration) *http.Client {

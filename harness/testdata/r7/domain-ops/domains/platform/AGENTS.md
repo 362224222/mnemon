@@ -13,9 +13,14 @@ separate facts.
 ## Local tools and authority
 
 - `domainctl status` inspects callback latency and delivery observations.
+- The stable regional endpoints are `http://callback-east:8080` and
+  `http://callback-west:8080`. They identify topology, not current health.
+- Select an instance with the closed endpoint option. The canonical forms are
+  `domainctl --endpoint http://callback-west:8080 status` and
+  `domainctl --endpoint http://callback-west:8080 action /admin/latency
+  '{"latency_ms":MILLISECONDS}'`.
 - `domainctl action /admin/latency '{"latency_ms":MILLISECONDS}'` changes
-  callback latency within its bounded service range. Use `--endpoint` with the
-  stable regional service name when inspecting the other region.
+  callback latency within the default instance's bounded service range.
 - You cannot change payment retry behavior, gateway routing, or ledger records.
 - Use mnemond Events to exchange bounded evidence with other domains.
 

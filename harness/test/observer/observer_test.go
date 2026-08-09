@@ -92,19 +92,30 @@ type factsWire struct {
 	Action           string   `json:"action,omitempty"`
 	Alpha            *int     `json:"alpha,omitempty"`
 	ArtifactCount    *int     `json:"artifact_count,omitempty"`
+	AttemptCount     *int     `json:"attempt_count,omitempty"`
+	BatchedCount     *int     `json:"batched_unattributed_count,omitempty"`
 	Authenticated    *bool    `json:"authenticated,omitempty"`
 	BypassedHook     *bool    `json:"bypassed_hook,omitempty"`
 	ByteSize         *int64   `json:"byte_size,omitempty"`
 	Code             string   `json:"code,omitempty"`
+	Count            *int     `json:"count,omitempty"`
 	Consequence      string   `json:"consequence,omitempty"`
 	DurationMillis   *int64   `json:"duration_ms,omitempty"`
+	Episode          string   `json:"episode,omitempty"`
 	GateID           string   `json:"gate_id,omitempty"`
+	GoalDigest       string   `json:"goal_digest,omitempty"`
+	GoalSatisfied    *bool    `json:"goal_satisfied,omitempty"`
+	HasCurrent       *bool    `json:"has_current,omitempty"`
 	HookCue          *bool    `json:"hook_cue,omitempty"`
 	InvalidVotes     *int     `json:"invalid_votes,omitempty"`
+	InvalidCount     *int     `json:"invalid_result_count,omitempty"`
 	MarginAfter      *int     `json:"margin_after,omitempty"`
 	MarginBefore     *int     `json:"margin_before,omitempty"`
 	NoVote           *bool    `json:"no_vote,omitempty"`
 	NoVotes          *int     `json:"no_votes,omitempty"`
+	OccupiedClaims   *int     `json:"occupied_claims,omitempty"`
+	OpenTotal        *int     `json:"open_total,omitempty"`
+	OpenUnclaimed    *int     `json:"open_unclaimed,omitempty"`
 	Outcome          string   `json:"outcome,omitempty"`
 	PayloadBytes     *int     `json:"payload_bytes,omitempty"`
 	Phase            string   `json:"phase,omitempty"`
@@ -112,15 +123,24 @@ type factsWire struct {
 	PreferenceBefore string   `json:"preference_before,omitempty"`
 	Recolored        *bool    `json:"recolored,omitempty"`
 	Replayed         *bool    `json:"replayed,omitempty"`
+	ReplyRequired    *bool    `json:"reply_required,omitempty"`
 	Result           string   `json:"result,omitempty"`
+	RelatedProjected *int     `json:"related_projected,omitempty"`
+	RelatedTotal     *int     `json:"related_total,omitempty"`
+	Role             string   `json:"role,omitempty"`
 	Round            *int     `json:"round,omitempty"`
 	SampleSize       *int     `json:"sample_size,omitempty"`
 	SemanticKind     string   `json:"semantic_kind,omitempty"`
 	State            string   `json:"state,omitempty"`
 	Status           string   `json:"status,omitempty"`
+	SuccessCount     *int     `json:"success_count,omitempty"`
 	TargetCount      *int     `json:"target_count,omitempty"`
+	ToolErrorCount   *int     `json:"tool_error_count,omitempty"`
 	Targets          []string `json:"targets,omitempty"`
 	TimedOut         *bool    `json:"timed_out,omitempty"`
+	Truncated        *bool    `json:"truncated,omitempty"`
+	TurnLimit        *int     `json:"turn_limit,omitempty"`
+	TurnsUsed        *int     `json:"turns_used,omitempty"`
 	ViewNonempty     *bool    `json:"view_nonempty,omitempty"`
 	VotesA           *int     `json:"votes_a,omitempty"`
 	VotesB           *int     `json:"votes_b,omitempty"`
@@ -270,8 +290,8 @@ func TestObserverFixturesAreStrictRedactedRenderInputs(t *testing.T) {
 
 func TestTraceDecoderRejectsDangerousOrUnknownFields(t *testing.T) {
 	for _, field := range dangerousKeys {
-		raw := []byte(fmt.Sprintf(`{"schema":"%s","version":1,"record":"fact","%s":"secret"}`,
-			traceSchema, field))
+		raw := []byte(fmt.Sprintf(`{"schema":"%s","version":%d,"record":"fact","%s":"secret"}`,
+			traceSchema, traceVersion, field))
 		var value factRecord
 		if err := decodeStrict(raw, &value); err == nil {
 			t.Fatalf("strict fact decoder accepted forbidden/unknown field %q", field)
@@ -384,25 +404,6 @@ func validateRequiredFactEvidence(t *testing.T, fact factRecord) {
 	}
 }
 
-func factEvidenceInput(fact factRecord) Fact {
-	return Fact{
-		Kind: fact.Kind,
-		References: References{
-			Event: fact.Refs.Event, EventDigest: fact.Refs.EventDigest,
-			Handling: fact.Refs.Handling,
-		},
-		Fields: FactFields{
-			SemanticKind: fact.Facts.SemanticKind, Consequence: fact.Facts.Consequence,
-			Outcome: fact.Facts.Outcome, State: fact.Facts.State, Phase: fact.Facts.Phase,
-			PreferenceBefore: fact.Facts.PreferenceBefore, PreferenceAfter: fact.Facts.PreferenceAfter,
-			Result: fact.Facts.Result, Round: fact.Facts.Round, SampleSize: fact.Facts.SampleSize,
-			Alpha: fact.Facts.Alpha, VotesA: fact.Facts.VotesA, VotesB: fact.Facts.VotesB,
-			MarginBefore: fact.Facts.MarginBefore, MarginAfter: fact.Facts.MarginAfter,
-			Authenticated: fact.Facts.Authenticated, Recolored: fact.Facts.Recolored,
-		},
-	}
-}
-
 func validateFactIdentity(t *testing.T, fact factRecord, sequence int) {
 	t.Helper()
 	checks := []struct {
@@ -490,11 +491,12 @@ func validateClosedFacts(t *testing.T, sequence int, facts factsWire) {
 			t.Fatalf("fact %d has invalid %s %q", sequence, name, value)
 		}
 	}
-	checkEnum("action", facts.Action, []string{"current", "submit", "capture", "read", "other"})
+	checkEnum("action", facts.Action, []string{"current", "submit", "capture", "read", "probe", "mutation", "other"})
 	checkEnum("consequence", facts.Consequence, []string{
 		"handling.create", "handling.advance", "handling.resolve.completed",
 		"handling.resolve.declined", "handling.resolve.unresolved", "reference.publish",
-		"reference.supersede", "reference.retract",
+		"reference.supersede", "reference.retract", "observation.completed",
+		"observation.declined", "observation.unresolved",
 	})
 	checkEnum("outcome", facts.Outcome, []string{"accepted", "rejected", "replayed", "completed", "declined", "unresolved"})
 	checkEnum("phase", facts.Phase, []string{"awaiting_seed", "active", "observed"})
@@ -505,14 +507,24 @@ func validateClosedFacts(t *testing.T, sequence int, facts factsWire) {
 	checkEnum("status", facts.Status, []string{"pass", "fail", "incomplete", "unknown", "not_applicable"})
 	validateOptionalInt(t, sequence, "alpha", facts.Alpha, 1, 64)
 	validateOptionalInt(t, sequence, "artifact_count", facts.ArtifactCount, 0, 64)
+	validateOptionalInt(t, sequence, "attempt_count", facts.AttemptCount, 0, 256)
+	validateOptionalInt(t, sequence, "batched_unattributed_count", facts.BatchedCount, 0, 256)
+	validateOptionalInt(t, sequence, "count", facts.Count, 1, 256)
 	validateOptionalInt(t, sequence, "invalid_votes", facts.InvalidVotes, 0, 128)
+	validateOptionalInt(t, sequence, "invalid_result_count", facts.InvalidCount, 0, 256)
 	validateOptionalInt(t, sequence, "margin_after", facts.MarginAfter, -1024, 1024)
 	validateOptionalInt(t, sequence, "margin_before", facts.MarginBefore, -1024, 1024)
 	validateOptionalInt(t, sequence, "no_votes", facts.NoVotes, 0, 64)
+	validateOptionalInt(t, sequence, "occupied_claims", facts.OccupiedClaims, 0, 64)
+	validateOptionalInt(t, sequence, "open_unclaimed", facts.OpenUnclaimed, 0, 64)
 	validateOptionalInt(t, sequence, "payload_bytes", facts.PayloadBytes, 0, 32<<10)
 	validateOptionalInt(t, sequence, "round", facts.Round, 0, 1024)
 	validateOptionalInt(t, sequence, "sample_size", facts.SampleSize, 0, 64)
+	validateOptionalInt(t, sequence, "success_count", facts.SuccessCount, 0, 256)
 	validateOptionalInt(t, sequence, "target_count", facts.TargetCount, 0, 16)
+	validateOptionalInt(t, sequence, "tool_error_count", facts.ToolErrorCount, 0, 256)
+	validateOptionalInt(t, sequence, "turn_limit", facts.TurnLimit, 1, 256)
+	validateOptionalInt(t, sequence, "turns_used", facts.TurnsUsed, 0, 256)
 	validateOptionalInt(t, sequence, "votes_a", facts.VotesA, 0, 64)
 	validateOptionalInt(t, sequence, "votes_b", facts.VotesB, 0, 64)
 	validateOptionalInt64(t, sequence, "byte_size", facts.ByteSize, 0, 16<<20)
@@ -524,6 +536,20 @@ func validateClosedFacts(t *testing.T, sequence int, facts factsWire) {
 		t.Fatalf("fact %d target count %d does not match %d targets",
 			sequence, *facts.TargetCount, len(facts.Targets))
 	}
+	operationCounts := []*int{facts.AttemptCount, facts.SuccessCount, facts.ToolErrorCount,
+		facts.InvalidCount, facts.BatchedCount}
+	present := 0
+	for _, value := range operationCounts {
+		if value != nil {
+			present++
+		}
+	}
+	if present != 0 && (present != len(operationCounts) ||
+		*facts.SuccessCount+*facts.ToolErrorCount+*facts.InvalidCount+
+			*facts.BatchedCount != *facts.AttemptCount) {
+		t.Fatalf("fact %d has inconsistent operation counts", sequence)
+	}
+	validateMetadataTokens(t, sequence, facts)
 }
 
 func validateOptionalInt(t *testing.T, sequence int, name string, value *int, minimum, maximum int) {
@@ -543,28 +569,29 @@ func validateOptionalInt64(t *testing.T, sequence int, name string, value *int64
 func validateResult(t *testing.T, result resultRecord, facts []factRecord, seen map[string]struct{}) {
 	t.Helper()
 	if result.Schema != traceSchema || result.Version != traceVersion || result.Record != "result" ||
-		!slices.Contains([]string{"passed", "failed", "incomplete"}, result.Status) ||
 		!validTime(result.FinishedAt) || result.RecordCount != len(facts) ||
 		!digestPattern.MatchString(result.TraceDigest) || len(result.Gates) > 64 {
 		t.Fatalf("invalid result: %#v", result)
 	}
+	finishedAt, err := time.Parse(time.RFC3339Nano, result.FinishedAt)
+	if err != nil {
+		t.Fatalf("parse result time: %v", err)
+	}
+	writer := &Writer{seen: seen, gateFacts: make(map[string]gateAssertion)}
+	for _, fact := range facts {
+		if fact.Kind == "test.gate.checked" {
+			writer.gateFacts[fact.ID] = gateAssertion{ID: fact.Facts.GateID,
+				Status: GateStatus(fact.Facts.Status)}
+		}
+	}
+	gates := make([]Gate, 0, len(result.Gates))
 	for _, gate := range result.Gates {
-		if !validToken(gate.ID) || !slices.Contains([]string{"pass", "fail", "unknown", "not_applicable"}, gate.Status) {
-			t.Fatalf("invalid gate %#v", gate)
-		}
-		if len(gate.Evidence) > 32 {
-			t.Fatalf("gate %q has %d evidence references, max 32", gate.ID, len(gate.Evidence))
-		}
-		unique := make(map[string]struct{}, len(gate.Evidence))
-		for _, evidence := range gate.Evidence {
-			if _, duplicate := unique[evidence]; duplicate {
-				t.Fatalf("gate %q repeats evidence %q", gate.ID, evidence)
-			}
-			if _, present := seen[evidence]; !present {
-				t.Fatalf("gate %q cites missing evidence %q", gate.ID, evidence)
-			}
-			unique[evidence] = struct{}{}
-		}
+		gates = append(gates, Gate{ID: gate.ID, Status: GateStatus(gate.Status),
+			Evidence: slices.Clone(gate.Evidence)})
+	}
+	if _, err := writer.validateResult(Result{Status: ResultStatus(result.Status),
+		FinishedAt: finishedAt, Gates: gates}); err != nil {
+		t.Fatal(err)
 	}
 }
 

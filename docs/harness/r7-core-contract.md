@@ -3,6 +3,10 @@
 Status: **ACTIVE**. This is the sole tracked merge and release authority for
 the experimental Harness.
 
+Contract revision: **R7.2**. This revision also projects whether an outbound
+result remains unobserved as a bounded machine fact. The projection is not a
+workflow state, allowed-intent filter, or completion rule.
+
 This document is the single tracked authority for the experimental Harness. It
 defines an event physics small enough to be fully proven: ten machine
 invariants, two mutable domain states, and one admission entry point.
@@ -76,9 +80,20 @@ accepted Event
 
 Events and Artifacts are immutable. Everything an Agent needs to continue is
 projected from them and the two mutable states in section 3.
+An exact terminal peer reply is re-admitted as an immutable observation Event
+with no mutable-domain consequence: it creates no Handling, changes no
+Reference, and cannot settle the requester anchor. This is a machine-derived
+peer-admission result, not a fourth Agent-declarable consequence.
 Admission may also write the closed replay, claim, claim-disposition, and
 peer-delivery records required by P-03 through P-07. Those records enforce the
 physics; they are not Agent-declarable domain consequences.
+
+A current View derives `reply_observation_pending=true` only when its local
+requester anchor has at least one bound outbound request and no accepted exact
+terminal observation for that request. Delivery settlement and local progress
+do not clear it; an exact terminal observation does. It is read-only evidence:
+it changes no Handling, filters no allowed Intent, and never promises that a
+reply will arrive.
 
 ## 3. The two persistent effects
 
@@ -220,25 +235,52 @@ fail — there is no meaning to close over.
 Peer delivery is not a declarable consequence. For a local target, admission
 creates a local Handling. For a remote target, the same admission atomically
 creates a durable PeerDelivery obligation; it does not create a locally
-claimable Handling for a remote Principal. An accepted request that creates any
-PeerDelivery must also leave at least one open local Handling representing the
-causal responsibility: either the advanced current Handling or a local
-successor. A request that would export its only responsibility fails closed.
+claimable Handling for a remote Principal. Every ordinary remote-directed
+PeerDelivery outbox is bound in that transaction to exactly one open local
+Handling for the source Principal and to one expected reply root. The expected
+root is machine-derived from the accepted outbound Event: its correlation when
+present, otherwise its own Event identity. A subject advance binds its current
+Handling. A root or ordinary resolve binds the newly created successor targeted
+to the source Principal. If the required source-local anchor is absent or not
+unique, admission fails closed. The binding is private machine authority, not
+an Agent-provided label and not a property inferred later from semantic
+content.
+
+A request that would export its only responsibility therefore fails closed.
+The sole exception is a terminal disposition of an imported current: it may
+close the responder's Handling while returning exactly one PeerDelivery to the
+View-sealed `reply_target`, correlated through the exact View-sealed `reply_to`.
+The machine copies the imported delivery identity from private current
+authority into the signed return envelope as `InReplyToDeliveryID`; the Agent
+cannot provide or edit it. That terminal-reply outbox binds no new reply anchor
+and cannot solicit another response. The requester already retains the exact
+local responsibility anchor bound by its earlier outbound admission.
 
 ```
-remote-directed action = open local responsibility anchor + PeerDelivery(s)
+ordinary remote action = PeerDelivery(s) + exact open reply-anchor binding(s)
 
-root-handling:    at least one local successor + remote successor(s)
-subject advance: the still-open current Handling is the local anchor
-subject resolve: at least one local successor + remote successor(s)
+root-handling:     newly created source-local successor is the anchor
+subject advance:  the still-open current Handling is the anchor
+ordinary resolve: newly created source-local successor is the anchor
+terminal reply:   exactly reply_target + exactly reply_to;
+                  machine-bound InReplyToDeliveryID; no new anchor binding
 ```
 
-The local anchor is not closed by a remote Receipt, rejection, or delivery
-expiry. A later local Intent must advance or resolve it explicitly.
-The target node re-admits the signed delivery and creates its own local Event
-and local Handling. An Agent that wants a peer to consider a description
-targets that peer and references the Artifact; whether the peer adopts it is
-the peer's own local Intent (section 7.1).
+The requester's bound local anchor is not closed by a remote Receipt,
+rejection, delivery expiry, or returning disposition. A later local Intent must
+advance or resolve it explicitly. A returning terminal disposition is
+re-admitted as one immutable observation Event linked by the machine to that
+exact anchor. It creates zero new Handlings and has no reply capability. The
+terminal-reply exception itself closes only the responder's imported current
+and cannot be used for root initiation, advance, fan-out, redirect, or a
+different provenance handle that happens to resolve to the same Event.
+
+An ordinary non-reply delivery is re-admitted as a local Event plus exactly
+one local Handling. An exact terminal reply is re-admitted as a local
+observation Event plus zero Handlings. In either case, an Agent that wants a
+peer to consider or adopt a description targets that peer and references the
+Artifact; whether the peer adopts it is the peer's own later local Intent
+(section 7.1).
 
 ### 4.1 Authority fields
 
@@ -268,14 +310,40 @@ The CLI-held private binding adds:
 
 A peer admission request instead carries a signed PeerDelivery envelope and an
 independently verified peer context. Origin Event identity, sequence, digest,
-and causation remain provenance evidence. They are never copied into the
-receiving node's canonical Event fields. Its consequence subset is strictly
-smaller: it may create one new local targeted Handling and bind provenance plus
-required Artifact refs. It cannot advance or resolve an existing Handling,
-mutate a Reference, create completion, or create multiple local successors.
-Adoption and every later consequence require a local BoundIntent.
-The staged envelope becomes a `VerifiedPeerDelivery` AdmissionRequest only
-after P-09 has verified every required Artifact.
+closed consequence, total target count, and causation remain provenance
+evidence. They are never copied into the receiving node's canonical Event
+fields. Its consequence subset is strictly smaller: an ordinary non-reply
+delivery may create one new local targeted Handling; an exact terminal reply
+may create zero Handlings and only one immutable observation Event linked to an
+existing local anchor. Both may bind provenance plus required Artifact refs.
+Peer admission cannot advance or resolve an existing Handling, mutate a
+Reference, create completion, or create multiple local successors. Adoption
+and every later consequence require a local BoundIntent. The staged envelope becomes a
+`VerifiedPeerDelivery` AdmissionRequest only after P-09 has verified every
+required Artifact.
+
+A signed terminal origin consequence with exactly one origin target identifies
+only a terminal-reply *candidate*. Its signed envelope must carry the exact
+machine-generated `InReplyToDeliveryID` (`in_reply_to_delivery_id` on the wire).
+Before accepting it, the receiver must resolve that ID to one persisted ordinary
+outbox binding and verify all of the binding's authority: the authenticated
+route is exact, the signed correlation equals the expected reply root, the
+locally resolved target Principal is exact, and the exact bound requester
+Handling remains open. Missing or unknown `InReplyToDeliveryID`, missing or
+mismatched correlation, no such binding, a closed anchor, the wrong Principal,
+or a different route rejects the candidate without creating an Event. Semantic
+`kind` and payload are never consulted.
+
+Acceptance creates one local observation Event, links it to the exact outbound
+DeliveryID and requester anchor in the same transaction, and creates zero
+Handlings. At most one observation may be accepted for one outbound DeliveryID:
+replay of the same inbound delivery returns its stable Receipt under P-07, while
+a distinct inbound delivery that cites an already observed outbound DeliveryID
+fails closed. One requester anchor may accumulate at most 64 accepted reply
+observations; the sixty-fifth settles as a stable rejection without creating an
+Event or Handling.
+The requester anchor remains open and unchanged until a local Agent submits a
+fresh explicit Intent.
 
 mnemond generates or resolves:
 
@@ -283,6 +351,8 @@ mnemond generates or resolves:
 - source AgentPrincipalID, from the verified actor context;
 - the stable local AgentPrincipalID that `self` or a local alias resolves to;
 - the enrolled peer route and opaque remote target alias for a remote target;
+- `InReplyToDeliveryID` for a terminal return, copied from the exact imported
+  delivery identity sealed in private current authority;
 - operation outcome, Receipt, and PeerDelivery identity.
 
 `self` is never persisted as a literal. It is resolved at admission time, so
@@ -315,16 +385,39 @@ do not invalidate an otherwise current binding. P-07 defines the only replay
 exception to revalidating mutable authority.
 
 An Agent View has at most one writable `current`. Its `reply_to` is a
-provenance-only handle for one machine-derived stable correlation root. A
-directly imported current may also carry `reply_target`: the machine-derived
-public alias of its authenticated immediate sender, sealed as one exact offered
-remote target. It is absent for local work and unavailable routes, and exposes
-no RouteID, PeerID, remote target alias, or Principal. A bounded `related_open`
-projection may show locally accepted open Events whose correlation equals that
-root, but it exposes no Handling handle, fence, claim, or second writable
-subject. `outstanding` reports the exact local open and related counts, the
-projected prefix, and whether evidence was truncated. Semantic `kind` never
-changes these projection rules.
+provenance-only handle for one machine-derived stable correlation root.
+`reply_required` is an explicit machine-derived Boolean. Ordinary work whose
+durable Handling was created by a directly imported Event on an active route
+projects `reply_required=true` and `reply_target`: the machine-derived public
+alias of its authenticated immediate sender, sealed as one exact offered remote
+target. Local work and an unavailable route project `reply_required=false` and
+no `reply_target`. An accepted terminal reply creates no current of its own; it
+appears only as related observation evidence beside the still-open requester
+anchor. The correlation root and any responder reply capability derive from
+the immutable Handling creation Event and survive local advances. Opaque handles
+are valid only in the exact View that offers them; no handle may be carried
+across Views. Peer route targets are offered only to an attachment whose
+Principal is that route's fixed local target. `reply_target` exposes no RouteID,
+PeerID, remote target alias, Principal, or DeliveryID.
+
+For a requester anchor, `reply_observation_pending` is independently derived
+from exact outbox-to-anchor bindings and accepted terminal-observation links.
+It remains true after outbox settlement and local advance, becomes false after
+the exact terminal observation is accepted, and never changes admission
+legality. In particular, an Agent may still explicitly advance or resolve the
+current Handling while it is true.
+
+A bounded related projection may show locally accepted open Events whose
+correlation equals the current root and terminal reply observations
+machine-linked to the current requester anchor. It exposes no related Handling
+handle, fence, claim, or second writable subject. `outstanding` reports the exact
+local open and related counts, the projected prefix, and whether evidence was
+truncated. The private View read-set includes the exact monotonic accepted-
+observation revision linked to the anchor at projection time. Acceptance of
+another reply observation therefore makes a fresh subject-bound operation for
+that anchor from the older View stale; only an already-recorded operation replay
+may return its prior result under P-07.
+Semantic `kind` never changes these projection rules.
 
 **P-02 Open labels, closed structure.**
 `kind` and a first-publish `reference_key` are bounded opaque labels with no
@@ -399,43 +492,86 @@ disposition is outside T0.
 One accepted AdmissionRequest commits in one transaction: its one local Event,
 its Receipt, any allowed advance or resolution of the current Handling,
 successor local Handlings, durable PeerDelivery obligations for remote targets,
-an allowed Reference head change, and Artifact pins. Artifact capture and hash
-verification finish before this transaction; only verified refs and pins enter
-it. Partial commit is a contract violation.
+an allowed Reference head change, a permitted terminal-reply observation link,
+and Artifact pins. Artifact capture and hash verification finish before this
+transaction; only verified refs and pins enter it. Partial commit is a contract
+violation.
 
 **P-06 Local authority, federated candidates.**
 `self` targets and peer targets use identical event semantics. A PeerDelivery is
-an authenticated candidate, never a local fact, and produces a new local Event
-and, when targeted, a local Handling only through local admission. The receiving
-node preserves origin identity and causation as provenance but generates its
-own Event identity, digest, sequence, and Receipt. A peer may begin a local causal chain
-only when the local peer policy authorizes both initiation and the resolved
-target Principal. Inbound peer admission is limited to the consequence subset
-in section 4.1. Origin admission may create a PeerDelivery only when the same
-transaction leaves at least one causal local Handling open. Therefore remote
-rejection, missing Artifact, or delivery expiry cannot erase the origin's
-accepted responsibility.
+an authenticated candidate, never a local fact. Only receiver-local admission
+may produce the new local Event. An ordinary non-reply candidate creates
+exactly one targeted local Handling; an exact terminal reply creates one
+immutable observation Event and zero Handlings. The receiving node preserves
+origin identity and causation as provenance but generates its own Event
+identity, digest, sequence, and Receipt. A peer may begin a local causal chain
+only when local peer policy authorizes both initiation and the resolved target
+Principal. Inbound peer admission is limited to the consequence subset in
+section 4.1.
+
+Every ordinary origin outbox is atomically bound to its exact open source-local
+reply anchor, expected reply root, route, and Principal. Subject advance binds
+the current Handling; root initiation and ordinary resolve bind their newly
+created source-local successor. Origin admission rejects an ordinary remote
+action that cannot make this exact binding. The only exception is a terminal
+Intent over an imported current with exactly one remote successor equal to its
+sealed `reply_target` and an exact correlation handle equal to its sealed
+`reply_to`. That transaction may close the responder's current without a local
+successor; the machine writes the imported DeliveryID into the signed return as
+`InReplyToDeliveryID` and records no new reply-anchor binding because the
+requester retains the anchor bound by its earlier outbound admission. Therefore
+remote rejection, missing Artifact, delivery expiry, or a returning disposition
+cannot erase the requester's accepted responsibility.
 
 Peer delivery has one closed internal lifecycle. The origin atomically creates
 an outbox record with a stable delivery ID derived from origin Event, enrolled
-peer route, and opaque target alias. Its durable states are `pending`, `settled`
-by a signed remote admission Receipt, or `expired` by delivery TTL. A transport
-ACK does not settle it. The receiver stages by delivery ID and envelope digest;
-its inbox states are `staged`, `settled` with the stable admission Receipt, or
-`expired`. Same ID/same digest replays that Receipt, while same ID/different
-digest conflicts. Missing Artifacts keep the envelope staged without creating a
-local Event. Either-side delivery expiry changes no domain state and never means
-completed.
+peer route, and opaque target alias. The signed envelope also carries the
+origin Event's closed consequence and total target count; those fields describe
+origin structure but grant no receiving authority by themselves. Its durable
+states are `pending`, `settled` by a signed remote admission Receipt, or
+`expired` by delivery TTL. A transport ACK does not settle it. The receiver
+stages by delivery ID and envelope digest; its inbox states are `staged`,
+`settled` with the stable admission Receipt, or `expired`. Same ID/same digest
+replays that Receipt, while same ID/different digest conflicts. Missing
+Artifacts keep the envelope staged without creating a local Event. Either-side
+delivery expiry changes no domain state and never means completed.
 
-An accepted Event's correlation is copied unchanged into PeerDelivery. For an
-imported current Event, the receiving View derives `reply_to` from the
-authenticated origin correlation, or from the origin Event when none exists.
-When the immediate inbound route remains active, the same View independently
-derives `reply_target` from that inbox route's public alias. The next local
-Intent can therefore preserve one conversation root and address its
-authenticated sender without a transport rewrite or semantic target inference.
-A returning delivery is re-admitted as a new local Event; only then may it
-appear as read-only related evidence beside the origin Handling.
+An accepted Event's correlation is copied unchanged into PeerDelivery. For a
+Handling created by an imported Event, every receiving View derives `reply_to`
+from the authenticated origin correlation, or from the origin Event when none
+exists. When the immediate inbound route remains active, the same View
+independently derives `reply_target` from that inbox route's public alias. A
+local advance changes the Handling head but not this creation-bound reply
+context. A later Intent can therefore preserve one conversation root and
+address its authenticated sender without a transport rewrite or semantic target
+inference. The terminal exception requires those exact opaque handles and the
+machine-sealed inbound DeliveryID, not merely another handle resolving to the
+same Event or route.
+
+On return, terminal origin structure is only a candidate. Receiver-local
+admission resolves the exact signed `InReplyToDeliveryID` to one ordinary
+outbox and revalidates its authenticated route, expected root, target Principal,
+and still-open requester anchor. The ID, route, root, Principal, and open anchor
+are one authority tuple; no semantic label, shared root, or nearby Handling may
+substitute for any member. A successful transaction creates one local Event,
+machine-links it to that exact outbound delivery and anchor, settles the inbound
+delivery, and creates zero Handlings. It does not advance, resolve, complete, or
+otherwise settle the requester anchor. A fresh View may expose the observation
+only as bounded read-only related evidence; the local Agent must submit a fresh
+explicit Intent to decide the anchor.
+The same View derives `reply_observation_pending` from that exact local causal
+relation rather than from semantic kind, transport ACK, or peer text.
+
+Exactly one observation may be accepted per outbound DeliveryID, and at most 64
+may be linked to one requester anchor. Same inbound delivery and same digest
+replay the first Receipt; a different inbound delivery citing an already
+observed outbound DeliveryID, or a sixty-fifth observation for one anchor, fails
+closed. The exact monotonic accepted-observation revision belongs to the private
+View read-set, so a newly accepted observation makes a previously issued fresh
+subject-bound operation for that anchor stale. None of these rules changes local
+adoption: using remote content as
+evidence never updates a Reference head, and adoption still requires a separate
+local BoundIntent.
 
 **P-07 Exactly-once effect.**
 Every attachment-begin request, CurrentRequest, AdmissionRequest, and machine disposition carries a
@@ -459,9 +595,9 @@ its authority. A retrying Host reuses one nonce, so response loss cannot create
 a second attachment.
 
 The frozen View includes its exact `current`, `reply_to`, optional
-`reply_target`, related prefix, outstanding counts, and Reference evidence.
-Later Events never appear in an exact Current replay; only a fresh Current
-operation may project them.
+`reply_target`, related prefix, outstanding counts, linked reply-observation
+read-set, and Reference evidence. Later Events never appear in an exact Current
+replay; only a fresh Current operation may project them.
 
 **P-08 CAS lineage.**
 The first `reference.publish` supplies a bounded opaque `reference_key`
@@ -490,9 +626,29 @@ completion with an unavailable ref. Fan-out, causal hop, TTL, payload size,
 Artifact size, provenance citations per Event, and pending Handling count are
 bounded by machine-owned configuration. T0 admits at most eight Artifact refs
 per Event, keeps at most eight active References and eight active Peer routes,
-and limits semantic payload to 4 KiB of JSON-encoded string content; larger
-content belongs in an Artifact. Agent and peer input that exceeds a bound fails
-closed rather than being truncated, and no semantic payload can raise a bound.
+accepts at most 64 terminal reply observations for one requester anchor, and
+limits semantic payload to 4 KiB of JSON-encoded string content; larger content
+belongs in an Artifact. Agent and peer input that exceeds a bound fails closed
+rather than being truncated, and no semantic payload can raise a bound.
+The Pi reference attachment separates two closed budgets in one governed run:
+at most sixteen exploration tool calls and at most two calls to one native
+Effect-settlement tool. The latter executes only the fixed
+`mnemon-harness agent submit --json` argv without a shell, accepts one bounded
+Intent object on stdin, and returns only the bounded Agent-terminal result. It
+does not inspect Event kind or payload, choose an Intent, or imply acceptance.
+The first excess exploration call is blocked before execution and later
+exploration calls remain blocked. At cutoff, only the settlement tool may
+remain active, and only when it was already present in the Host tool snapshot;
+the attachment never widens the Host allowlist. The two-call limit permits one
+correction after rejection. Once cutoff has occurred, the final settlement
+attempt disables tools and leaves one bounded final-response turn. If no
+settlement is submitted, the remaining post-cutoff turns are bounded by the
+unused settlement slots. Automatic retry or compaction cannot refresh either budget:
+the attachment restores the exact tool set captured at cutoff only after Pi
+reports the whole run settled. Attachment failure leaves an ordinary Pi run
+untouched. A failed tool restore retains the exact snapshot and prevents a
+later governed run until restoration succeeds. These are Runtime attention
+bounds; they create no Event, Receipt, completion, or other domain fact.
 These cross-field maxima are tested together, not only one at a time, so every
 accepted responsibility remains representable within the 16 KiB private and
 Agent View envelopes. Internal
@@ -511,7 +667,11 @@ whole Current operation fail.
 available, hash-verified Artifact attached by the resolving Event. Every other
 terminal outcome needs no Artifact and must never project as completed. Final
 answers, process exit, Runtime idle, provider success, transport ACK, and
-Handling dispositions cannot produce this outcome.
+Handling dispositions cannot produce this outcome. A terminal reply observation
+is evidence for a still-open requester anchor; it cannot complete or otherwise
+settle that anchor.
+`reply_observation_pending` is likewise observation only: it neither prevents
+an explicit terminal Intent nor supplies evidence for completed.
 
 These are conformance invariants, not product concepts. They belong in tests
 and in the Core, not in the Agent-facing projection.
@@ -563,7 +723,8 @@ A has locally accepted playbook v2
 B receives a signed remote request that references the exact Artifact
         |
         v  fetch + verify bytes, then local re-admission
-B creates its own local Event and Handling
+B creates its own local Event and, because this request is nonterminal,
+  one local Handling
         |
         +-- handle this request with v2   read the exact Artifact; B's
         |                                 Reference head is unchanged
@@ -574,6 +735,12 @@ B creates its own local Event and Handling
 
 This is what allows a remote Agent to work under a new collaboration scheme
 without any scheme synchronization, global consistency, or CRDT.
+
+If B later returns an exact terminal reply, A re-admits it as an observation
+Event linked to A's existing requester anchor. A does not create a second
+Handling and does not adopt B's conclusion automatically. A's next fresh View
+shows the bounded observation, and A's local Agent decides the anchor through a
+separate explicit Intent.
 
 ### 7.2 No global convergence
 
@@ -620,7 +787,7 @@ mnemond does not promote that requirement into a global rule.
 
 | Gate | Requirement |
 |---|---|
-| `G-R7-CORE` | Unit, race, and process suites cover P-01 through P-10 and every named sub-assertion in section 10 with independent oracles. |
+| `G-R7-CORE` | Unit, race, process, and pinned Pi Runtime suites cover P-01 through P-10 and every named sub-assertion in section 10 with independent oracles. |
 | `G-R7-CASES` | `review/`, `contract-net/`, and `blackboard/` fixtures all exist under `harness/testdata/r7/cases/`, run, and pass their independent deterministic oracles. |
 | `G-R7-PATTERN-FREE` | In a temporary copy, deleting both `harness/testdata/r7/examples/` and `harness/testdata/r7/cases/` leaves the P-01 through P-10 Core conformance command passing; case acceptance and case-presence checks are excluded from this deletion run. |
 | `G-R7-NO-CASE-KIND` | No production Go source contains a case-specific kind literal such as `review.request`. |
@@ -659,16 +826,16 @@ unbound, partially proven, or failing.
 
 | ID | Required independently asserted behavior |
 |---|---|
-| P-01 | Forged authority fields fail; authenticated actor context determines source; imported origin fields cannot override local identity; for fresh operations, stale View authority digest and every unoffered known consequence, successor target, or opaque handle fail; related evidence is provenance-only and cannot become a writable subject. |
+| P-01 | Forged authority fields fail; authenticated actor context determines source; imported origin fields cannot override local identity; for fresh operations, stale View authority digest and every unoffered known consequence, successor target, or opaque handle fail; related evidence is provenance-only and cannot become a writable subject; `reply_observation_pending` is a machine-derived read-only fact; a newly accepted reply observation makes a previously issued fresh subject-bound operation for that anchor stale. |
 | P-02 | Unknown valid kind and first-publish Reference key traverse the generic path without registration; unknown consequence and every illegal consequence combination fail; no case-specific dispatch exists. |
-| P-03 | Interactive root initiation succeeds; a private Host-boundary nonce binds one attachment; authority permits one unended attachment per Principal; same-boundary begin exactly replays and must match the private journal across response loss, missing journal commit, and restart; a fresh nonce atomically replaces its predecessor even when the journal is absent; expired, ended, or divergent outcomes never report ready; Pi retries only the same nonce and emits no cue on failure; a new boundary or Hook end finishes a presented terminal without replaying its old Intent; T0 exposes no managed-wake issuance path; every accepted local target creates exactly one Handling; wrong-Principal and wrong-attachment claim fail. |
+| P-03 | Interactive root initiation succeeds; a private Host-boundary nonce binds one attachment; authority permits one unended attachment per Principal; same-boundary begin exactly replays and must match the private journal across response loss, missing journal commit, and restart; a fresh nonce atomically replaces its predecessor even when the journal is absent; expired, ended, or divergent outcomes never report ready; Pi retries only the same nonce and emits no cue on failure; a new boundary or Hook end finishes a presented terminal without replaying its old Intent; T0 exposes no managed-wake issuance path; every accepted local successor and ordinary peer-request target creates exactly one Handling, while a P-06 terminal reply observation creates none; wrong-Principal and wrong-attachment claim fail. |
 | P-04 | At most one live claim exists; a fresh operation with stale fence fails; accepted advance updates the Handling head and releases the claim; bounded lease-expiry and Host-boundary-end dispositions, including transactional boundary replacement, clear occupancy but cannot change domain state, create an Event, or create completion; repeated fresh boundaries over a fixed bounded open set select the least previously claimed Handling and cannot be monopolized by one old responsibility. |
-| P-05 | Fault injection at each BoundIntent and VerifiedPeerDelivery transaction boundary yields either the whole local outcome or none, including outbox obligation and Reference head where allowed. |
-| P-06 | Authenticated delivery is re-admitted under the restricted peer subset; rejection creates no receiving fact; acceptance creates a new receiving Event, preserves provenance and an unchanged stable correlation root, resolves the target locally, and follows the bounded outbox/inbox lifecycle; an origin request exporting its sole responsibility fails, while remote rejection or expiry leaves the required local Handling open. |
-| P-07 | Same key/same digest replays the byte-stable attachment-begin proof, frozen View including its focus projection, admission Receipt, or internal outcome before the relevant mutable validation; same key/different digest conflicts; Host retries reuse one nonce and compare replayed proof with private journal authority; response loss, missing journal commit, restart, and retry create at most one attachment, claim, local Event, or machine disposition; begin replay never renews expiry or revives an ended boundary. |
+| P-05 | Fault injection at each BoundIntent and VerifiedPeerDelivery transaction boundary yields either the whole local outcome or none, including outbox obligation, terminal-reply observation link, and Reference head where allowed. |
+| P-06 | Authenticated delivery is re-admitted under the restricted peer subset; rejection creates no receiving fact; acceptance creates a receiver-local Event, preserves provenance and a stable correlation root, and follows the bounded outbox/inbox lifecycle. Ordinary non-reply delivery still creates exactly one local Handling. Every ordinary remote-directed Event atomically binds each outbox DeliveryID to its exact source-local open requester anchor, machine-derived expected reply root, authenticated route, and local Principal. An exact terminal return closes only the responder's imported Handling, carries machine-generated `InReplyToDeliveryID`, creates no new reply anchor, and cannot request another reply. Receiver-local admission resolves that exact DeliveryID and revalidates the full route/root/Principal/open-anchor tuple; missing or reused ID, mismatched root, wrong Principal or route, and a closed anchor reject regardless of `kind` or payload. Acceptance creates one immutable observation Event machine-linked to the exact outbound delivery and anchor, creates zero Handlings, and never advances, resolves, completes, or otherwise settles the anchor. Only one observation may be accepted per outbound DeliveryID and at most 64 per anchor. A fresh View boundedly projects accepted observations as read-only related evidence, derives pending outbound observation independently of delivery settlement or local advance, and clears it only after the exact terminal observation; a local Agent's separate explicit Intent decides the anchor. Remote use or observation never adopts a Reference; adoption remains receiver-local and explicit. Stale routes, remote rejection, missing Artifact, and expiry cannot change these rules. |
+| P-07 | Same key/same digest replays the byte-stable attachment-begin proof, frozen View including its focus projection, admission Receipt, or internal outcome before the relevant mutable validation; same key/different digest conflicts; Host retries reuse one nonce and compare replayed proof with private journal authority; response loss, missing journal commit, restart, and retry create at most one attachment, claim, local Event, reply observation, or machine disposition; a distinct inbound delivery cannot create a second observation for one `InReplyToDeliveryID`; begin replay never renews expiry or revives an ended boundary. |
 | P-08 | Valid first-publish key creation without a prior handle, invalid key rejection, first-publish CAS, concurrent first publish, active supersede, tombstone retract/reactivation, stale head, forward reference, concurrent mutation, and replay all match section 5; a provenance citation records the exact head, mutates nothing, and cannot stand in for a Reference action. |
-| P-09 | Any missing or mismatched Artifact keeps peer input unadmitted and cannot activate a Reference or complete; every Agent/peer resource bound fails closed independently and payload cannot raise it; the maximum accepted payload, Artifact, Reference, route, current, and related combination remains representable; related evidence has explicit prefix/count/truncation, and JSON-escaped current plus related payloads cannot overflow the focus or canonical View budget; more than the expiry-maintenance limit settles only the bounded prefix and leaves all excess claims unchanged for later natural turns. |
-| P-10 | Only explicit completed with attached verified Artifact projects completed; other terminal outcomes close without Artifact; final/exit/idle/provider/ACK/disposition cannot complete. |
+| P-09 | Any missing or mismatched Artifact keeps peer input unadmitted and cannot activate a Reference or complete; every Agent/peer resource bound, including the 64 reply-observations-per-anchor limit, fails closed independently and payload cannot raise it; pending-reply inspection is indexed by the exact local anchor rather than scanning retained delivery history; Pi executes no more than sixteen exploration calls plus two calls to its fixed no-shell Effect-settlement tool per governed run, never re-enables a Host-disabled tool, blocks excess calls, and after cutoff allows only one bounded final-response turn after the last settlement attempt; automatic continuation cannot refresh either budget; the maximum accepted payload, Artifact, Reference, route, current, observation, and related combination remains representable; related evidence has explicit prefix/count/truncation, and JSON-escaped current plus related payloads cannot overflow the focus or canonical View budget; more than the expiry-maintenance limit settles only the bounded prefix and leaves all excess claims unchanged for later natural turns. |
+| P-10 | Only explicit completed with attached verified Artifact projects completed; other terminal outcomes close without Artifact; final/exit/idle/provider/ACK/disposition, terminal reply observations, and the pending-observation projection cannot complete or settle the requester anchor or prohibit an explicit non-completed resolution. |
 
 Ten rows is the point. A row may bind several test symbols, but it is verified
 only when every named behavior in that row has independent evidence. A ledger

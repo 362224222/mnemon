@@ -151,6 +151,12 @@ func TestTraceWriterRejectsKindsWithoutMinimumDisplayEvidence(t *testing.T) {
 		{"vote", requiredEvidenceFact("trace:vote", "r8.vote.observed")},
 		{"settled round", requiredEvidenceFact("trace:settled", "r8.round.settled")},
 		{"preference observation", requiredEvidenceFact("trace:observation", "r8.observation.produced")},
+		{"attention wave", requiredEvidenceFact("trace:attention-wave", "test.attention.wave")},
+		{"attention outcome", requiredEvidenceFact("trace:attention-outcome", "test.attention.outcome")},
+		{"attention exhaustion", requiredEvidenceFact("trace:attention-exhausted", "test.attention.exhausted")},
+		{"attention quiescence", requiredEvidenceFact("trace:attention-quiescent", "test.attention.quiescent")},
+		{"attention occupied", requiredEvidenceFact("trace:attention-occupied", "test.attention.occupied")},
+		{"gate assertion", requiredEvidenceFact("trace:gate-assertion", "test.gate.checked")},
 	}
 	tests[0].fact.Fields.SemanticKind = ""
 	tests[1].fact.Fields.Outcome = ""
@@ -159,6 +165,12 @@ func TestTraceWriterRejectsKindsWithoutMinimumDisplayEvidence(t *testing.T) {
 	tests[4].fact.Fields.Authenticated = nil
 	tests[5].fact.Fields.Recolored = nil
 	tests[6].fact.Fields.Result = ""
+	tests[7].fact.Fields.OpenUnclaimed = nil
+	tests[8].fact.Fields.GoalSatisfied = nil
+	tests[9].fact.Fields.TurnLimit = nil
+	tests[10].fact.Fields.GoalDigest = ""
+	tests[11].fact.Fields.OccupiedClaims = nil
+	tests[12].fact.Fields.GateID = ""
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -175,9 +187,13 @@ func TestTraceWriterRejectsKindsWithoutMinimumDisplayEvidence(t *testing.T) {
 
 func TestKindEvidenceRulesMatchClosedDisplayContract(t *testing.T) {
 	expected := []string{
+		"runtime.domain.operation", "runtime.view.received", "runtime.intent.denied",
 		"r7.event.accepted", "r7.handling.resolved", "r8.selection.seeded",
 		"r8.round.frozen", "r8.vote.observed", "r8.round.settled",
-		"r8.observation.produced",
+		"r8.observation.produced", "test.attention.wave", "test.attention.outcome",
+		"test.attention.exhausted",
+		"test.attention.quiescent", "test.attention.occupied",
+		"test.gate.checked",
 	}
 	if len(kindEvidenceRules) != len(expected) {
 		t.Fatalf("kind evidence rules = %d, want %d", len(kindEvidenceRules), len(expected))
@@ -188,6 +204,151 @@ func TestKindEvidenceRulesMatchClosedDisplayContract(t *testing.T) {
 			t.Fatalf("kind evidence rule %q is missing or incomplete", kind)
 		}
 	}
+}
+
+func TestTraceWriterEnforcesFinalAttentionSemantics(t *testing.T) {
+	one := 1
+	falseValue := false
+	trueValue := true
+	tests := []struct {
+		name   string
+		kind   string
+		mutate func(*Fact)
+	}{
+		{"outcome rejects false goal", "test.attention.outcome", func(fact *Fact) {
+			fact.Fields.GoalSatisfied = &falseValue
+		}},
+		{"outcome rejects occupied claim", "test.attention.outcome", func(fact *Fact) {
+			fact.Fields.OccupiedClaims = &one
+		}},
+		{"exhausted rejects satisfied goal", "test.attention.exhausted", func(fact *Fact) {
+			fact.Fields.GoalSatisfied = &trueValue
+		}},
+		{"exhausted rejects occupied claim", "test.attention.exhausted", func(fact *Fact) {
+			fact.Fields.OccupiedClaims = &one
+		}},
+		{"quiescent rejects open work", "test.attention.quiescent", func(fact *Fact) {
+			fact.Fields.OpenUnclaimed = &one
+		}},
+		{"quiescent rejects satisfied goal", "test.attention.quiescent", func(fact *Fact) {
+			fact.Fields.GoalSatisfied = &trueValue
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			writer := newTestWriter(t, &output)
+			fact := requiredEvidenceFact("trace:attention", test.kind)
+			test.mutate(&fact)
+			if _, err := writer.Append(fact); err == nil {
+				t.Fatalf("writer accepted invalid %s", test.kind)
+			}
+		})
+	}
+
+	var output bytes.Buffer
+	writer := newTestWriter(t, &output)
+	fact := requiredEvidenceFact("trace:attention-occupied", "test.attention.occupied")
+	if _, err := writer.Append(fact); err != nil {
+		t.Fatalf("occupied attention rejected authority-only evidence: %v", err)
+	}
+	writer = newTestWriter(t, &bytes.Buffer{})
+	fact.Fields.GoalDigest = "sha256:" + strings.Repeat("3", 64)
+	fact.Fields.GoalSatisfied = &trueValue
+	if _, err := writer.Append(fact); err == nil {
+		t.Fatal("occupied attention accepted external goal evidence")
+	}
+}
+
+func TestTraceWriterEnforcesGateSettlement(t *testing.T) {
+	tests := []struct {
+		name   string
+		status ResultStatus
+		gates  func(string, string) []Gate
+	}{
+		{"pass needs evidence", ResultPassed, func(_, _ string) []Gate {
+			return []Gate{{ID: "scenario.outcome", Status: GatePass}}
+		}},
+		{"passed result needs a pass gate", ResultPassed, func(_, _ string) []Gate {
+			return nil
+		}},
+		{"passed result rejects only not-applicable gates", ResultPassed, func(_, _ string) []Gate {
+			return []Gate{{ID: "r8.applicability", Status: GateNotApplicable}}
+		}},
+		{"fail needs evidence", ResultFailed, func(_, _ string) []Gate {
+			return []Gate{{ID: "scenario.outcome", Status: GateFail}}
+		}},
+		{"unknown rejects evidence", ResultIncomplete, func(evidence, _ string) []Gate {
+			return []Gate{{ID: "scenario.outcome", Status: GateUnknown,
+				Evidence: []string{evidence}}}
+		}},
+		{"duplicate gate", ResultPassed, func(evidence, _ string) []Gate {
+			return []Gate{{ID: "scenario.outcome", Status: GatePass,
+				Evidence: []string{evidence}}, {ID: "scenario.outcome",
+				Status: GatePass, Evidence: []string{evidence}}}
+		}},
+		{"passed result rejects failed gate", ResultPassed, func(evidence, _ string) []Gate {
+			return []Gate{{ID: "scenario.outcome", Status: GateFail,
+				Evidence: []string{evidence}}}
+		}},
+		{"passed result rejects unknown gate", ResultPassed, func(_, _ string) []Gate {
+			return []Gate{{ID: "scenario.outcome", Status: GateUnknown}}
+		}},
+		{"failed result needs failed gate", ResultFailed, func(evidence, _ string) []Gate {
+			return []Gate{{ID: "scenario.outcome", Status: GatePass,
+				Evidence: []string{evidence}}}
+		}},
+		{"assertion must match footer", ResultPassed, func(_, assertion string) []Gate {
+			return []Gate{{ID: "scenario.other", Status: GatePass,
+				Evidence: []string{assertion}}}
+		}},
+		{"assertion status must match footer", ResultFailed, func(_, assertion string) []Gate {
+			return []Gate{{ID: "scenario.outcome", Status: GateFail,
+				Evidence: []string{assertion}}}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			writer, evidence, assertion := gateTestWriter(t)
+			if err := writer.Finish(Result{Status: test.status, FinishedAt: testTime(4),
+				Gates: test.gates(evidence, assertion)}); err == nil {
+				t.Fatal("writer accepted contradictory gate settlement")
+			}
+		})
+	}
+
+	writer, evidence, _ := gateTestWriter(t)
+	if err := writer.Finish(Result{Status: ResultPassed, FinishedAt: testTime(4),
+		Gates: []Gate{{ID: "scenario.outcome", Status: GatePass,
+			Evidence: []string{evidence}},
+			{ID: "r8.applicability", Status: GateNotApplicable}}}); err != nil {
+		t.Fatalf("writer rejected evidence-free not-applicable gate: %v", err)
+	}
+	writer, _, _ = gateTestWriter(t)
+	if err := writer.Finish(Result{Status: ResultIncomplete, FinishedAt: testTime(4),
+		Gates: []Gate{{ID: "scenario.pending", Status: GateUnknown}}}); err != nil {
+		t.Fatalf("writer rejected evidence-free unknown gate on incomplete result: %v", err)
+	}
+	writer, evidence, _ = gateTestWriter(t)
+	if err := writer.Finish(Result{Status: ResultFailed, FinishedAt: testTime(4),
+		Gates: []Gate{{ID: "scenario.outcome", Status: GateFail,
+			Evidence: []string{evidence}}}}); err != nil {
+		t.Fatalf("writer rejected failed result with a failed evidenced gate: %v", err)
+	}
+}
+
+func gateTestWriter(t *testing.T) (*Writer, string, string) {
+	t.Helper()
+	writer := newTestWriter(t, &bytes.Buffer{})
+	evidence := testFact("trace:gate-source", "runtime.turn.ended", SourceRuntime, TruthObservation)
+	if _, err := writer.Append(evidence); err != nil {
+		t.Fatal(err)
+	}
+	assertion := requiredEvidenceFact("trace:gate-assertion", "test.gate.checked")
+	if _, err := writer.Append(assertion); err != nil {
+		t.Fatal(err)
+	}
+	return writer, evidence.ID, assertion.ID
 }
 
 func TestTraceWriterMakesOutputFailureTerminal(t *testing.T) {
@@ -261,6 +422,9 @@ func requiredEvidenceFact(id, kind string) Fact {
 			truth = TruthObservation
 		}
 	}
+	if strings.HasPrefix(kind, "test.attention.") || kind == "test.gate.checked" {
+		source, truth = SourceOracle, TruthAssertion
+	}
 	fact := testFact(id, kind, source, truth)
 	fact.References = References{Event: "event:one", EventDigest: "sha256:" + strings.Repeat("1", 64),
 		Handling: "handling:one", Selection: "sha256:" + strings.Repeat("2", 64)}
@@ -268,7 +432,22 @@ func requiredEvidenceFact(id, kind string) Fact {
 		Outcome: "completed", State: "terminal", PreferenceBefore: "A", PreferenceAfter: "B",
 		Phase: "observed", Result: "threshold_reached", Round: &integer, SampleSize: &integer,
 		Alpha: &integer, VotesA: &zero, VotesB: &integer, MarginBefore: &zero,
-		MarginAfter: &integer, Authenticated: &boolean, Recolored: &boolean}
+		MarginAfter: &integer, Authenticated: &boolean, Recolored: &boolean,
+		Episode: "episode-1", Role: "lead", OccupiedClaims: &zero,
+		OpenUnclaimed: &integer, TurnLimit: &integer, TurnsUsed: &zero}
+	if strings.HasPrefix(kind, "test.attention.") && kind != "test.attention.wave" &&
+		kind != "test.attention.occupied" {
+		fact.Fields.GoalDigest = "sha256:" + strings.Repeat("3", 64)
+		goalSatisfied := kind == "test.attention.outcome" || kind == "test.attention.occupied"
+		fact.Fields.GoalSatisfied = &goalSatisfied
+		if kind == "test.attention.quiescent" {
+			fact.Fields.OpenUnclaimed = &zero
+		}
+	}
+	if kind == "test.gate.checked" {
+		fact.Fields.GateID = "scenario.outcome"
+		fact.Fields.Status = "pass"
+	}
 	return fact
 }
 

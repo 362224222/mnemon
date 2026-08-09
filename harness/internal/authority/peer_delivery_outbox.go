@@ -77,8 +77,12 @@ func validatePeerDeliveryCapacityTx(ctx context.Context, tx *sql.Tx,
 }
 
 func insertPeerDeliveriesTx(ctx context.Context, tx *sql.Tx, event agency.Event,
-	now time.Time,
+	handlingIDs []agency.HandlingID, now time.Time,
 ) error {
+	reply, err := outboundReplyBinding(event, handlingIDs)
+	if err != nil {
+		return err
+	}
 	for _, target := range event.Targets() {
 		if target.Destination() != agency.TargetDestinationRemote {
 			continue
@@ -91,13 +95,17 @@ func insertPeerDeliveriesTx(ctx context.Context, tx *sql.Tx, event agency.Event,
 			return errors.New("admit Intent: outbound peer route changed after validation")
 		}
 		correlation, _ := event.Correlation()
+		inReplyToDelivery, _ := event.InReplyToDelivery()
 		delivery, err := agency.NewPeerDelivery(route.RouteID(), agency.PeerDeliverySpec{
 			OriginEvent:       event.Ref(),
 			OriginSequence:    event.OriginSequence(),
 			OriginAcceptedAt:  event.AcceptedAt(),
 			OriginSource:      event.Source(),
+			OriginConsequence: event.Consequence(),
+			OriginTargetCount: uint8(len(event.Targets())),
 			OriginCausation:   event.Causation(),
 			OriginCorrelation: correlation,
+			InReplyToDelivery: inReplyToDelivery,
 			TargetAlias:       route.RemoteTargetAlias(),
 			Kind:              event.Kind(),
 			Payload:           event.Payload(),
@@ -108,16 +116,101 @@ func insertPeerDeliveriesTx(ctx context.Context, tx *sql.Tx, event agency.Event,
 		if err != nil {
 			return fmt.Errorf("admit Intent: construct PeerDelivery: %w", err)
 		}
+		anchor, rootID, rootDigest := reply.databaseValues()
 		if _, err := tx.ExecContext(ctx, `INSERT INTO peer_outbox(
-			delivery_id, route_id, origin_event_id, envelope_digest, delivery_json,
-			state, expires_at, created_at) VALUES(?, ?, ?, ?, ?, 'pending', ?, ?)`,
+			delivery_id, route_id, origin_event_id, reply_anchor_handling_id,
+			expected_reply_root_event_id, expected_reply_root_event_digest,
+			envelope_digest, delivery_json, state, expires_at, created_at)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
 			delivery.ID().String(), route.RouteID().String(), event.ID().String(),
-			delivery.EnvelopeDigest().String(), delivery.CanonicalJSON(),
+			anchor, rootID, rootDigest, delivery.EnvelopeDigest().String(), delivery.CanonicalJSON(),
 			formatTime(delivery.ExpiresAt()), formatTime(now)); err != nil {
 			return fmt.Errorf("admit Intent: persist PeerDelivery: %w", err)
 		}
 	}
 	return nil
+}
+
+type peerReplyBinding struct {
+	anchor agency.HandlingID
+	root   agency.EventRef
+}
+
+func (binding peerReplyBinding) databaseValues() (any, any, any) {
+	if binding.anchor.IsZero() || binding.root.IsZero() {
+		return nil, nil, nil
+	}
+	return binding.anchor.String(), binding.root.ID().String(), binding.root.Digest().String()
+}
+
+// outboundReplyBinding records the local authority against which a later
+// terminal candidate may be re-admitted. It never infers that authority from
+// semantic kind or from a Handling's historical creation Event.
+func outboundReplyBinding(event agency.Event,
+	handlingIDs []agency.HandlingID,
+) (peerReplyBinding, error) {
+	if remoteTargetCount(event.Targets()) == 0 || isExactTerminalReplyEvent(event) {
+		return peerReplyBinding{}, nil
+	}
+	root := event.Ref()
+	if correlation, present := event.Correlation(); present {
+		root = correlation
+	}
+	if event.Consequence() == agency.ConsequenceAdvanceHandling {
+		subject, present := event.Subject()
+		if !present {
+			return peerReplyBinding{}, errors.New("admit Intent: remote advance lacks reply anchor")
+		}
+		return peerReplyBinding{anchor: subject.HandlingID(), root: root}, nil
+	}
+	anchor, err := sourceLocalSuccessor(event, handlingIDs)
+	if err != nil {
+		return peerReplyBinding{}, err
+	}
+	return peerReplyBinding{anchor: anchor, root: root}, nil
+}
+
+func isExactTerminalReplyEvent(event agency.Event) bool {
+	if len(event.Targets()) != 1 || event.Targets()[0].Destination() != agency.TargetDestinationRemote {
+		return false
+	}
+	if _, present := event.InReplyToDelivery(); !present {
+		return false
+	}
+	switch event.Consequence() {
+	case agency.ConsequenceResolveCompleted, agency.ConsequenceResolveDeclined,
+		agency.ConsequenceResolveUnresolved:
+		_, correlated := event.Correlation()
+		return correlated
+	default:
+		return false
+	}
+}
+
+func sourceLocalSuccessor(event agency.Event,
+	handlingIDs []agency.HandlingID,
+) (agency.HandlingID, error) {
+	var result agency.HandlingID
+	localIndex := 0
+	for _, target := range event.Targets() {
+		if target.Destination() != agency.TargetDestinationLocal {
+			continue
+		}
+		if target.LocalPrincipal() == event.Source() {
+			if localIndex >= len(handlingIDs) {
+				return agency.HandlingID{}, errors.New("admit Intent: reply anchor cardinality mismatch")
+			}
+			result = handlingIDs[localIndex]
+		}
+		localIndex++
+	}
+	if result.IsZero() {
+		return agency.HandlingID{}, errors.New("admit Intent: remote Event lacks source-local reply anchor")
+	}
+	if localIndex != len(handlingIDs) {
+		return agency.HandlingID{}, errors.New("admit Intent: reply anchor cardinality mismatch")
+	}
+	return result, nil
 }
 
 type pendingPeerDeliveryRow struct {

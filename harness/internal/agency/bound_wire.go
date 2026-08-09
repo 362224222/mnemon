@@ -14,6 +14,7 @@ type requestDigestWire struct {
 	Artifacts         []resolvedArtifactWire    `json:"artifacts,omitempty"`
 	Causation         []eventRefWire            `json:"causation,omitempty"`
 	Correlation       *eventRefWire             `json:"correlation,omitempty"`
+	InReplyToDelivery string                    `json:"in_reply_to_delivery_id,omitempty"`
 }
 
 type boundIntentWire struct {
@@ -27,9 +28,10 @@ type boundIntentWire struct {
 }
 
 type subjectBindingWire struct {
-	HandlingID string       `json:"handling_id"`
-	Head       eventRefWire `json:"head"`
-	Fence      uint64       `json:"fence"`
+	HandlingID          string       `json:"handling_id"`
+	Head                eventRefWire `json:"head"`
+	Fence               uint64       `json:"fence"`
+	ObservationRevision uint64       `json:"observation_revision"`
 }
 
 type referenceExpectationWire struct {
@@ -51,12 +53,13 @@ type resolvedArtifactWire struct {
 }
 
 func (intent BoundIntent) requestWire() requestDigestWire {
-	wire := requestDigestWire{SchemaVersion: 1, SourcePrincipal: intent.attachment.principal.String(),
+	wire := requestDigestWire{SchemaVersion: 3, SourcePrincipal: intent.attachment.principal.String(),
 		MayInitiate: intent.attachment.mayInitiate, ViewDigest: intent.viewDigest.String(),
 		Intent: intent.intent.wire()}
 	if intent.subject != nil {
 		wire.Subject = &subjectBindingWire{HandlingID: intent.subject.handlingID.String(),
-			Head: intent.subject.head.canonical().(eventRefWire), Fence: intent.subject.fence}
+			Head: intent.subject.head.canonical().(eventRefWire), Fence: intent.subject.fence,
+			ObservationRevision: intent.subject.observationRevision}
 	}
 	if intent.expectedReference != nil {
 		expected := intent.expectedReference
@@ -85,6 +88,9 @@ func (intent BoundIntent) requestWire() requestDigestWire {
 		correlation := intent.correlation.canonical().(eventRefWire)
 		wire.Correlation = &correlation
 	}
+	if !intent.inReplyToDelivery.IsZero() {
+		wire.InReplyToDelivery = intent.inReplyToDelivery.String()
+	}
 	return wire
 }
 
@@ -99,7 +105,7 @@ func (target ResolvedTarget) resolvedWire() resolvedTargetWire {
 }
 
 func (intent BoundIntent) wire() boundIntentWire {
-	return boundIntentWire{SchemaVersion: 1, OperationKey: intent.operationKey.String(),
+	return boundIntentWire{SchemaVersion: 3, OperationKey: intent.operationKey.String(),
 		AttachmentID:     intent.attachment.id.String(),
 		AttachmentIssue:  intent.attachment.issuedAt.Format(time.RFC3339Nano),
 		AttachmentExpiry: intent.attachment.expiresAt.Format(time.RFC3339Nano),

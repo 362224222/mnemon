@@ -10,7 +10,7 @@ import (
 
 const (
 	traceSchema   = "mnemon.test.trace"
-	traceVersion  = 1
+	traceVersion  = 2
 	maxTraceLine  = 16 << 10
 	maxTraceFacts = 100000
 )
@@ -82,13 +82,66 @@ type kindEvidenceRule struct {
 }
 
 var kindEvidenceRules = map[string]kindEvidenceRule{
-	"r7.event.accepted":       {"accepted Event evidence", validAcceptedEventEvidence},
-	"r7.handling.resolved":    {"terminal Handling evidence", validResolvedHandlingEvidence},
-	"r8.selection.seeded":     {"seed preference evidence", validSelectionSeedEvidence},
-	"r8.round.frozen":         {"frozen round evidence", validFrozenRoundEvidence},
-	"r8.vote.observed":        {"vote evidence", validVoteEvidence},
-	"r8.round.settled":        {"settled round evidence", validSettledRoundEvidence},
-	"r8.observation.produced": {"preference observation", validPreferenceObservation},
+	"runtime.domain.operation": {"domain operation observation", validDomainOperationEvidence},
+	"runtime.view.received":    {"Agent View structural projection", validRuntimeViewEvidence},
+	"runtime.intent.denied":    {"Intent denial observation", validIntentDenialEvidence},
+	"r7.event.accepted":        {"accepted Event evidence", validAcceptedEventEvidence},
+	"r7.handling.resolved":     {"terminal Handling evidence", validResolvedHandlingEvidence},
+	"test.gate.checked":        {"gate assertion evidence", validGateAssertionEvidence},
+	"test.attention.wave":      {"attention wave evidence", validAttentionSnapshotEvidence},
+	"test.attention.outcome":   {"attention outcome evidence", validOutcomeAttentionEvidence},
+	"test.attention.exhausted": {"attention exhaustion evidence", validExhaustedAttentionEvidence},
+	"test.attention.quiescent": {"attention quiescence evidence", validQuiescentAttentionEvidence},
+	"test.attention.occupied":  {"occupied attention boundary evidence", validOccupiedAttentionEvidence},
+	"r8.selection.seeded":      {"seed preference evidence", validSelectionSeedEvidence},
+	"r8.round.frozen":          {"frozen round evidence", validFrozenRoundEvidence},
+	"r8.vote.observed":         {"vote evidence", validVoteEvidence},
+	"r8.round.settled":         {"settled round evidence", validSettledRoundEvidence},
+	"r8.observation.produced":  {"preference observation", validPreferenceObservation},
+}
+
+func validRuntimeViewEvidence(fact Fact) bool {
+	fields := fact.Fields
+	if fields.Action != "current" ||
+		fields.HasCurrent == nil || fields.OpenTotal == nil || fields.RelatedTotal == nil ||
+		fields.RelatedProjected == nil || fields.Truncated == nil ||
+		*fields.OpenTotal < 0 || *fields.OpenTotal > 64 ||
+		*fields.RelatedTotal < 0 || *fields.RelatedTotal > 128 ||
+		*fields.RelatedProjected < 0 || *fields.RelatedProjected > 1 ||
+		*fields.RelatedProjected > *fields.RelatedTotal ||
+		*fields.Truncated != (*fields.RelatedProjected < *fields.RelatedTotal) ||
+		*fields.HasCurrent != (fields.ReplyRequired != nil) {
+		return false
+	}
+	return !*fields.HasCurrent || *fields.OpenTotal > 0
+}
+
+func validDomainOperationEvidence(fact Fact) bool {
+	return len(fact.Causes) == 0 &&
+		slices.Contains([]string{"read", "probe", "mutation"}, fact.Fields.Action) &&
+		hasAllOperationCounts(fact.Fields) && *fact.Fields.AttemptCount > 0 &&
+		operationCountSum(fact.Fields) == *fact.Fields.AttemptCount
+}
+
+func hasAllOperationCounts(fields FactFields) bool {
+	return fields.AttemptCount != nil && fields.SuccessCount != nil &&
+		fields.ToolErrorCount != nil && fields.InvalidCount != nil && fields.BatchedCount != nil
+}
+
+func operationCountSum(fields FactFields) int {
+	return *fields.SuccessCount + *fields.ToolErrorCount + *fields.InvalidCount +
+		*fields.BatchedCount
+}
+
+func validIntentDenialEvidence(fact Fact) bool {
+	return len(fact.Causes) == 0 && fact.Fields.Action == "submit" &&
+		fact.Fields.Count != nil && *fact.Fields.Count > 0 &&
+		slices.Contains([]string{
+			"invalid_argument", "content_required", "content_too_large", "artifact_invalid",
+			"artifact_too_large", "authentication_failed", "context_required", "context_stale",
+			"asset_revision_mismatch", "action_not_allowed", "operation_mismatch",
+			"operation_pending", "mnemond_unavailable", "internal",
+		}, fact.Fields.Code)
 }
 
 func validateKindEvidence(fact Fact, sequence int) error {
@@ -108,6 +161,51 @@ func validAcceptedEventEvidence(fact Fact) bool {
 func validResolvedHandlingEvidence(fact Fact) bool {
 	return fact.References.Handling != "" && fact.Fields.State == "terminal" &&
 		slices.Contains([]string{"completed", "declined", "unresolved"}, fact.Fields.Outcome)
+}
+
+func validAttentionSnapshotEvidence(fact Fact) bool {
+	return validAttentionFields(fact) && *fact.Fields.OccupiedClaims == 0
+}
+
+func validOutcomeAttentionEvidence(fact Fact) bool {
+	return validFinalAttentionEvidence(fact, true) && *fact.Fields.OccupiedClaims == 0
+}
+
+func validExhaustedAttentionEvidence(fact Fact) bool {
+	return validFinalAttentionEvidence(fact, false) && *fact.Fields.OccupiedClaims == 0
+}
+
+func validQuiescentAttentionEvidence(fact Fact) bool {
+	return validExhaustedAttentionEvidence(fact) && *fact.Fields.OpenUnclaimed == 0
+}
+
+func validOccupiedAttentionEvidence(fact Fact) bool {
+	return validAttentionFields(fact) && fact.Fields.GoalDigest == "" &&
+		fact.Fields.GoalSatisfied == nil
+}
+
+func validGateAssertionEvidence(fact Fact) bool {
+	return validTraceToken(fact.Fields.GateID) && slices.Contains([]string{
+		string(GatePass), string(GateFail), string(GateUnknown), string(GateNotApplicable),
+	}, fact.Fields.Status)
+}
+
+func validFinalAttentionEvidence(fact Fact, goalSatisfied bool) bool {
+	return validFinalAttentionFields(fact) && *fact.Fields.GoalSatisfied == goalSatisfied
+}
+
+func validFinalAttentionFields(fact Fact) bool {
+	return validAttentionFields(fact) && digestPattern.MatchString(fact.Fields.GoalDigest) &&
+		fact.Fields.GoalSatisfied != nil
+}
+
+func validAttentionFields(fact Fact) bool {
+	return len(fact.Causes) == 0 && fact.Fields.Episode != "" && fact.Fields.Role != "" &&
+		fact.Fields.Round != nil && *fact.Fields.Round > 0 &&
+		fact.Fields.OpenUnclaimed != nil && fact.Fields.OccupiedClaims != nil &&
+		fact.Fields.TurnLimit != nil && fact.Fields.TurnsUsed != nil &&
+		*fact.Fields.TurnLimit > 0 &&
+		*fact.Fields.TurnsUsed >= 0 && *fact.Fields.TurnsUsed <= *fact.Fields.TurnLimit
 }
 
 func validSelectionSeedEvidence(fact Fact) bool {
@@ -175,11 +273,12 @@ func validateFactFields(fields FactFields, sequence int) error {
 		value   string
 		allowed []string
 	}{
-		{"action", fields.Action, []string{"current", "submit", "capture", "read", "other"}},
+		{"action", fields.Action, []string{"current", "submit", "capture", "read", "probe", "mutation", "other"}},
 		{"consequence", fields.Consequence, []string{
 			"handling.create", "handling.advance", "handling.resolve.completed",
 			"handling.resolve.declined", "handling.resolve.unresolved", "reference.publish",
-			"reference.supersede", "reference.retract",
+			"reference.supersede", "reference.retract", "observation.completed",
+			"observation.declined", "observation.unresolved",
 		}},
 		{"outcome", fields.Outcome, []string{"accepted", "rejected", "replayed", "completed", "declined", "unresolved"}},
 		{"phase", fields.Phase, []string{"awaiting_seed", "active", "observed"}},
@@ -194,9 +293,8 @@ func validateFactFields(fields FactFields, sequence int) error {
 			return fmt.Errorf("trace writer: fact %d has invalid %s", sequence, check.name)
 		}
 	}
-	if !validOptionalTokens(fields.Code, fields.GateID, fields.SemanticKind) ||
-		len(fields.Targets) > 16 || !validOptionalTokens(fields.Targets...) {
-		return fmt.Errorf("trace writer: fact %d has invalid metadata token", sequence)
+	if err := validateFactMetadata(fields, sequence); err != nil {
+		return err
 	}
 	if fields.TargetCount != nil && *fields.TargetCount != len(fields.Targets) {
 		return fmt.Errorf("trace writer: fact %d has inconsistent target metadata", sequence)
@@ -208,18 +306,43 @@ func validateFactFields(fields FactFields, sequence int) error {
 		maximum int
 	}{
 		{"alpha", fields.Alpha, 1, 64}, {"artifact_count", fields.ArtifactCount, 0, 64},
+		{"attempt_count", fields.AttemptCount, 0, 256},
+		{"batched_unattributed_count", fields.BatchedCount, 0, 256},
+		{"count", fields.Count, 1, 256},
+		{"invalid_result_count", fields.InvalidCount, 0, 256},
 		{"invalid_votes", fields.InvalidVotes, 0, 128},
 		{"margin_after", fields.MarginAfter, -1024, 1024},
 		{"margin_before", fields.MarginBefore, -1024, 1024},
-		{"no_votes", fields.NoVotes, 0, 64}, {"round", fields.Round, 0, 1024},
+		{"no_votes", fields.NoVotes, 0, 64},
+		{"occupied_claims", fields.OccupiedClaims, 0, 64},
+		{"open_total", fields.OpenTotal, 0, 64},
+		{"open_unclaimed", fields.OpenUnclaimed, 0, 64},
+		{"round", fields.Round, 0, 1024},
+		{"related_projected", fields.RelatedProjected, 0, 1},
+		{"related_total", fields.RelatedTotal, 0, 128},
 		{"payload_bytes", fields.PayloadBytes, 0, 32 << 10},
 		{"sample_size", fields.SampleSize, 0, 64}, {"votes_a", fields.VotesA, 0, 64},
+		{"success_count", fields.SuccessCount, 0, 256},
+		{"tool_error_count", fields.ToolErrorCount, 0, 256},
 		{"votes_b", fields.VotesB, 0, 64}, {"target_count", fields.TargetCount, 0, 16},
+		{"turn_limit", fields.TurnLimit, 1, 256}, {"turns_used", fields.TurnsUsed, 0, 256},
 	}
 	for _, value := range integers {
 		if value.value != nil && (*value.value < value.minimum || *value.value > value.maximum) {
 			return fmt.Errorf("trace writer: fact %d has out-of-bound %s", sequence, value.name)
 		}
+	}
+	operationCounts := []*int{fields.AttemptCount, fields.SuccessCount, fields.ToolErrorCount,
+		fields.InvalidCount, fields.BatchedCount}
+	present := 0
+	for _, value := range operationCounts {
+		if value != nil {
+			present++
+		}
+	}
+	if present != 0 && (present != len(operationCounts) ||
+		operationCountSum(fields) != *fields.AttemptCount) {
+		return fmt.Errorf("trace writer: fact %d has inconsistent operation counts", sequence)
 	}
 	if !validInt64(fields.ByteSize, 0, 16<<20) {
 		return fmt.Errorf("trace writer: fact %d has out-of-bound byte_size", sequence)
@@ -228,33 +351,6 @@ func validateFactFields(fields FactFields, sequence int) error {
 		return fmt.Errorf("trace writer: fact %d has out-of-bound duration_ms", sequence)
 	}
 	return nil
-}
-
-func (writer *Writer) validateResult(result Result) (string, error) {
-	if !slices.Contains([]ResultStatus{ResultPassed, ResultFailed, ResultIncomplete}, result.Status) {
-		return "", fmt.Errorf("trace writer: invalid result status")
-	}
-	if len(result.Gates) > 64 {
-		return "", fmt.Errorf("trace writer: gates exceed 64")
-	}
-	for _, gate := range result.Gates {
-		if !validTraceToken(gate.ID) || !slices.Contains([]GateStatus{
-			GatePass, GateFail, GateUnknown, GateNotApplicable,
-		}, gate.Status) || len(gate.Evidence) > 32 {
-			return "", fmt.Errorf("trace writer: invalid gate")
-		}
-		unique := make(map[string]struct{}, len(gate.Evidence))
-		for _, evidence := range gate.Evidence {
-			if _, duplicate := unique[evidence]; duplicate {
-				return "", fmt.Errorf("trace writer: gate %q repeats evidence", gate.ID)
-			}
-			if _, exists := writer.seen[evidence]; !exists {
-				return "", fmt.Errorf("trace writer: gate %q cites missing evidence", gate.ID)
-			}
-			unique[evidence] = struct{}{}
-		}
-	}
-	return canonicalTime("result finished_at", result.FinishedAt)
 }
 
 func canonicalTime(label string, value time.Time) (string, error) {

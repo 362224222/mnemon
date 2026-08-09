@@ -105,6 +105,7 @@ func TestVerifiedPeerDeliveryAllowsNoArtifactForNoncompletionCandidate(t *testin
 	delivery, err := NewPeerDelivery(route, PeerDeliverySpec{
 		OriginEvent: mustEventRef(t, "event:no-artifact", "origin"), OriginSequence: 1,
 		OriginAcceptedAt: testTime, OriginSource: mustPrincipal(t, "agent:origin"),
+		OriginConsequence: ConsequenceCreateHandlings, OriginTargetCount: 2,
 		TargetAlias: mustHandle(t, "agent/target"), Kind: mustLabel(t, "opaque.request"),
 		Payload: mustPayload(t, "Request without content bytes."), CausalDepth: 1,
 		ExpiresAt: testTime.Add(time.Hour),

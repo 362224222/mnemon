@@ -19,7 +19,44 @@ func validateCombinedEvidence(proof evidence) error {
 	if err := validateGlobalDeliveries(proof.Nodes, global); err != nil {
 		return err
 	}
-	return validatePeerEffectSummary(proof)
+	if err := validateTurnEventBindings(proof.Report.Turns, proof.Nodes); err != nil {
+		return err
+	}
+	if err := validatePeerEffectSummary(proof); err != nil {
+		return err
+	}
+	return validateEvolutionEvidence(proof)
+}
+
+func validateTurnEventBindings(turns []turnSummary, nodes []nodeEvidence) error {
+	events := make(map[string]eventEvidence)
+	operations := make(map[string]operationEvidence)
+	for _, node := range nodes {
+		for _, event := range node.Events {
+			events[event.ID] = event
+		}
+		for _, operation := range node.Operations {
+			if operation.Outcome == "accepted" {
+				operations[operation.EventID] = operation
+			}
+		}
+	}
+	seen := make(map[string]struct{})
+	for _, turn := range turns {
+		for _, reference := range turn.AcceptedEvents {
+			event, eventExists := events[reference.ID]
+			operation, operationExists := operations[reference.ID]
+			if !eventExists || !operationExists || event.Node != turn.Role ||
+				event.Digest != reference.Digest || operation.EventDigest != reference.Digest {
+				return errors.New("Runtime turn accepted Event differs from stopped authority")
+			}
+			if _, duplicate := seen[reference.ID]; duplicate {
+				return errors.New("accepted Event is attributed to more than one Runtime turn")
+			}
+			seen[reference.ID] = struct{}{}
+		}
+	}
+	return nil
 }
 
 func validateAuthoritySummary(nodes []nodeEvidence) error {
@@ -102,24 +139,6 @@ func optionalEventRef(id, digest string) *eventRefWire {
 		return nil
 	}
 	return &eventRefWire{ID: id, Digest: digest}
-}
-
-func validateGlobalDeliveries(nodes []nodeEvidence, global map[string]eventEvidence) error {
-	for _, node := range nodes {
-		for _, delivery := range node.Deliveries {
-			origin, exists := global[delivery.OriginEventID]
-			if !exists || origin.Digest != delivery.OriginEventDigest {
-				return errors.New("peer Delivery has no exact collected origin Event")
-			}
-			if delivery.LocalEventID != "" {
-				local, exists := global[delivery.LocalEventID]
-				if !exists || local.Digest != delivery.LocalEventDigest {
-					return errors.New("peer Receipt local Event differs from collected Event")
-				}
-			}
-		}
-	}
-	return nil
 }
 
 func validatePeerEffectSummary(proof evidence) error {

@@ -13,8 +13,16 @@
           "test": "./internal/authority::TestPeerDeliveryRoundTripUsesTwoLocalAdmissions"
         },
         {
+          "id": "pending-reply-observation-is-machine-derived",
+          "test": "./internal/authority::TestCurrentProjectsPendingReplyObservationAfterRemoteRoot"
+        },
+        {
           "id": "related-evidence-is-provenance-only",
           "test": "./internal/agency::TestAgentViewProjectsRelatedEvidenceWithoutWritableSubjectAuthority"
+        },
+        {
+          "id": "reply-observation-stales-prior-view",
+          "test": "./internal/authority::TestTerminalReplyObservationMakesPriorViewStale"
         },
         {
           "id": "stale-view-authority-fails-closed",
@@ -29,6 +37,10 @@
     {
       "id": "P-02",
       "oracles": [
+        {
+          "id": "machine-only-observation-consequences",
+          "test": "./internal/agency::TestObservationConsequencesRemainMachineOnly"
+        },
         {
           "id": "open-labels-closed-shapes",
           "test": "./internal/agency::TestR7GapP02OpenLabelsAndClosedShapes"
@@ -91,8 +103,12 @@
           "test": "./internal/authority::TestAttachmentSchemaAllowsOneUnendedInteractiveBoundaryPerPrincipal"
         },
         {
-          "id": "pi-host-boundary-uses-lifecycle-callbacks",
-          "test": "./internal/attach::TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface"
+          "id": "ordinary-peer-request-creates-handling",
+          "test": "./internal/authority::TestOrdinaryPeerDeliveryStillCreatesHandling"
+        },
+        {
+          "id": "pi-host-boundary-has-one-cue-and-bounded-receipt",
+          "test": "./internal/attach::TestLoadHasOneFixedCueOneBoundedReceiptAndNoAuthorityOrSecretSurface"
         },
         {
           "id": "pi-host-retries-one-private-boundary",
@@ -113,6 +129,10 @@
         {
           "id": "same-completed-boundary-never-reports-ready",
           "test": "./internal/cli::TestSameHookAttachFinishesPresentedHandlingButNeverReturnsReady"
+        },
+        {
+          "id": "terminal-reply-observation-creates-no-handling",
+          "test": "./internal/authority::TestTerminalReplyObservationCreatesNoHandlingAndLeavesAnchorOpen"
         },
         {
           "id": "wrong-attachment-cannot-claim",
@@ -165,12 +185,20 @@
           "test": "./internal/authority::TestBoundIntentFaultMatrixCommitsWholeOriginOutcomeOrNone"
         },
         {
+          "id": "correlated-terminal-reply-transaction-fault",
+          "test": "./internal/authority::TestCorrelatedTerminalReplyOutboxFaultRestoresResponderHandling"
+        },
+        {
           "id": "peer-delivery-transaction-fault-matrix",
           "test": "./internal/authority::TestVerifiedPeerDeliveryFaultMatrixCommitsWholeReceiverOutcomeOrNone"
         },
         {
           "id": "reference-transaction-fault-matrix",
           "test": "./internal/authority::TestReferenceFaultMatrixCommitsLineageAndHeadAtomically"
+        },
+        {
+          "id": "terminal-reply-observation-transaction-fault",
+          "test": "./internal/authority::TestTerminalReplyObservationFaultRollsBackEventAndInboxSettlement"
         }
       ]
     },
@@ -178,20 +206,112 @@
       "id": "P-06",
       "oracles": [
         {
+          "id": "correlated-terminal-reply-revalidates-route",
+          "test": "./internal/authority::TestCorrelatedTerminalReplyRejectsRevokedBoundRoute"
+        },
+        {
           "id": "delivery-id-envelope-conflict",
           "test": "./internal/authority::TestPeerInboxRejectsSameDeliveryIDDifferentEnvelope"
+        },
+        {
+          "id": "exact-correlated-terminal-reply-shape",
+          "test": "./internal/agency::TestExactCorrelatedTerminalReplyMayCloseResponderAnchor"
+        },
+        {
+          "id": "guide-completed-terminal-binds",
+          "test": "./internal/attach::TestGuideResponseExampleAtomicallyClosesAndReturnsCorrelatedEvidence"
+        },
+        {
+          "id": "guide-declined-terminal-binds",
+          "test": "./internal/attach::TestGuideDeclineExampleReturnsCorrelatedDisposition"
+        },
+        {
+          "id": "imported-current-projects-authenticated-reply-role",
+          "test": "./internal/authority::TestImportedCurrentProjectsOneAuthenticatedReplyTarget"
+        },
+        {
+          "id": "imported-handling-preserves-reply-context-across-advance",
+          "test": "./internal/authority::TestImportedHandlingKeepsReplyContextAcrossLocalAdvance"
         },
         {
           "id": "missing-artifact-creates-no-fact",
           "test": "./internal/authority::TestMissingPeerArtifactExpiresWithoutCreatingDomainState"
         },
         {
-          "id": "peer-response-preserves-correlation-root",
-          "test": "./internal/authority::TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult"
+          "id": "ordinary-imported-work-keeps-explicit-reply-role",
+          "test": "./internal/authority::TestOrdinaryImportedWorkCannotBecomeNoReplyBySemanticKind"
+        },
+        {
+          "id": "ordinary-peer-delivery-still-creates-handling",
+          "test": "./internal/authority::TestOrdinaryPeerDeliveryStillCreatesHandling"
+        },
+        {
+          "id": "ordinary-remote-effects-retain-anchor",
+          "test": "./internal/agency::TestRemoteEffectsRequireLocalResponsibilityAnchor"
+        },
+        {
+          "id": "peer-route-projection-is-principal-scoped",
+          "test": "./internal/authority::TestPeerRouteProjectionIsScopedToAttachmentPrincipal"
+        },
+        {
+          "id": "pending-reply-observation-clears-after-exact-terminal-observation",
+          "test": "./internal/authority::TestPendingReplyObservationClearsAfterExactTerminalObservation"
+        },
+        {
+          "id": "pending-reply-observation-survives-settlement-and-local-advance",
+          "test": "./internal/authority::TestPendingReplyObservationSurvivesDeliverySettlementAndLocalAdvance"
         },
         {
           "id": "remote-failure-preserves-origin-anchor",
           "test": "./internal/authority::TestRemoteRejectionAndExpiryLeaveOriginAnchorOpen"
+        },
+        {
+          "id": "reply-required-projection-is-sealed",
+          "test": "./internal/agency::TestParseAgentViewCanonicalJSONRejectsNoncanonicalAndDivergentProjection"
+        },
+        {
+          "id": "sole-target-terminal-origin-is-only-candidate",
+          "test": "./internal/agency::TestPeerDeliveryIdentifiesOnlySoleTargetTerminalReplyCandidate"
+        },
+        {
+          "id": "terminal-reply-follows-bound-subject-advance-anchor",
+          "test": "./internal/authority::TestTerminalReplyFollowsBoundSubjectAdvanceAnchor"
+        },
+        {
+          "id": "terminal-reply-observation-bound-fails-closed",
+          "test": "./internal/authority::TestTerminalReplyObservationBoundFailsClosedAtSixtyFour"
+        },
+        {
+          "id": "terminal-reply-observation-concurrent-unique",
+          "test": "./internal/authority::TestConcurrentTerminalReplyObservationsAcceptExactlyOne"
+        },
+        {
+          "id": "terminal-reply-observation-creates-no-handling",
+          "test": "./internal/authority::TestTerminalReplyObservationCreatesNoHandlingAndLeavesAnchorOpen"
+        },
+        {
+          "id": "terminal-reply-observation-is-unique-per-outbound",
+          "test": "./internal/authority::TestTerminalReplyObservationIsUniquePerOutboundDelivery"
+        },
+        {
+          "id": "terminal-reply-observation-projects-into-fresh-view",
+          "test": "./internal/authority::TestTerminalReplyObservationProjectsIntoFreshView"
+        },
+        {
+          "id": "terminal-reply-observation-requires-exact-delivery-binding",
+          "test": "./internal/authority::TestTerminalReplyObservationRequiresExactInReplyToDeliveryBinding"
+        },
+        {
+          "id": "terminal-reply-observation-revalidates-authority-tuple",
+          "test": "./internal/authority::TestTerminalReplyObservationRejectsWrongRouteRootPrincipalOrClosedAnchor"
+        },
+        {
+          "id": "terminal-reply-observation-stales-prior-view",
+          "test": "./internal/authority::TestTerminalReplyObservationMakesPriorViewStale"
+        },
+        {
+          "id": "trace-terminal-observation-binds-exact-outbound",
+          "test": "./test/r7/domainops/trace::TestGlobalDeliveryValidationBindsTerminalObservationToExactOutboundRequest"
         },
         {
           "id": "two-local-admissions",
@@ -233,6 +353,10 @@
         {
           "id": "frozen-focus-does-not-absorb-later-events",
           "test": "./internal/authority::TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult"
+        },
+        {
+          "id": "reply-observation-deduplicates-outbound-delivery",
+          "test": "./internal/authority::TestTerminalReplyObservationIsUniquePerOutboundDelivery"
         }
       ]
     },
@@ -325,8 +449,28 @@
           "test": "./internal/agency::TestVerifiedPeerArtifactBounds"
         },
         {
+          "id": "pending-reply-observation-query-is-anchor-bounded",
+          "test": "./internal/authority::TestPendingReplyObservationUsesAnchorIndex"
+        },
+        {
+          "id": "pi-effect-settlement-is-fixed-and-no-shell",
+          "test": "./internal/attach::TestPiEffectSettlementUsesOneNativeBoundedToolWithoutShellInference"
+        },
+        {
+          "id": "pi-exploration-and-effect-budgets-fail-closed",
+          "test": "./internal/attach::TestPiHookSeparatesExplorationFromBoundedEffectSettlement"
+        },
+        {
           "id": "reference-projection-bound-fails-closed",
           "test": "./internal/authority::TestReferenceProjectionBoundDoesNotOfferPublishAboveLimit"
+        },
+        {
+          "id": "reply-observation-bound-fails-closed",
+          "test": "./internal/authority::TestTerminalReplyObservationBoundFailsClosedAtSixtyFour"
+        },
+        {
+          "id": "reply-observation-projection-rotation-is-bounded",
+          "test": "./internal/authority::TestTerminalReplyObservationRotationIsDeterministicAndBounded"
         },
         {
           "id": "semantic-payload-json-budget-fails-closed",
@@ -346,8 +490,16 @@
           "test": "./internal/authority::TestLocalHandlingLoopRejectsStaleFenceAndRequiresArtifactForCompleted"
         },
         {
+          "id": "pending-reply-observation-does-not-prohibit-explicit-resolution",
+          "test": "./internal/authority::TestExplicitResolveRemainsLegalWithPendingReplyObservation"
+        },
+        {
           "id": "runtime-observations-cannot-complete",
           "test": "./test/r7/process::TestHandlingSurvivesProcessAndDaemonBoundaries"
+        },
+        {
+          "id": "terminal-reply-observation-cannot-settle-anchor",
+          "test": "./internal/authority::TestTerminalReplyObservationCreatesNoHandlingAndLeavesAnchorOpen"
         }
       ]
     }
@@ -483,16 +635,25 @@
             "test:./internal/agency::TestAgentViewMaximumReferenceAndPayloadShapeRemainsReadable",
             "test:./internal/agency::TestAgentViewProjectsRelatedEvidenceWithoutWritableSubjectAuthority",
             "test:./internal/agency::TestCanonicalObjectsHaveHardTotalByteLimits",
+            "test:./internal/agency::TestExactCorrelatedTerminalReplyMayCloseResponderAnchor",
+            "test:./internal/agency::TestObservationConsequencesRemainMachineOnly",
             "test:./internal/agency::TestParseAgentIntentJSONRejectsAuthorityAndMalformedShapes",
+            "test:./internal/agency::TestParseAgentViewCanonicalJSONRejectsNoncanonicalAndDivergentProjection",
+            "test:./internal/agency::TestPeerDeliveryIdentifiesOnlySoleTargetTerminalReplyCandidate",
             "test:./internal/agency::TestPeerDeliveryRejectsOversizeCanonicalInputs",
             "test:./internal/agency::TestR7GapP01UnofferedHandlesFailClosed",
             "test:./internal/agency::TestR7GapP02OpenLabelsAndClosedShapes",
             "test:./internal/agency::TestR7GapP08InvalidReferenceKeysFailClosed",
             "test:./internal/agency::TestR7GapP09SuccessorBoundFailsClosed",
+            "test:./internal/agency::TestRemoteEffectsRequireLocalResponsibilityAnchor",
             "test:./internal/agency::TestVerifiedPeerArtifactBounds",
             "test:./internal/agency::TestVerifiedPeerDeliveryRequiresParsedEnvelopeAndCompleteArtifacts",
-            "test:./internal/attach::TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface",
+            "test:./internal/attach::TestGuideDeclineExampleReturnsCorrelatedDisposition",
+            "test:./internal/attach::TestGuideResponseExampleAtomicallyClosesAndReturnsCorrelatedEvidence",
+            "test:./internal/attach::TestLoadHasOneFixedCueOneBoundedReceiptAndNoAuthorityOrSecretSurface",
+            "test:./internal/attach::TestPiEffectSettlementUsesOneNativeBoundedToolWithoutShellInference",
             "test:./internal/attach::TestPiHookRetriesOnePrivateBoundaryAndEmitsNoCueOnFailure",
+            "test:./internal/attach::TestPiHookSeparatesExplorationFromBoundedEffectSettlement",
             "test:./internal/authority::TestAcceptedOperationReplayPrecedesStaleSubjectAndReferenceAuthority",
             "test:./internal/authority::TestAdmissionRejectsSameOperationKeyWithDifferentRequestDigest",
             "test:./internal/authority::TestAdmissionRequiresExactDurablyIssuedView",
@@ -506,18 +667,25 @@
             "test:./internal/authority::TestConcurrentDifferentCurrentOperationsCreateOneLiveClaim",
             "test:./internal/authority::TestConcurrentExistingReferenceHeadCASAcceptsExactlyOneMutation",
             "test:./internal/authority::TestConcurrentReferenceCASAcceptsExactlyOneCandidate",
+            "test:./internal/authority::TestConcurrentTerminalReplyObservationsAcceptExactlyOne",
+            "test:./internal/authority::TestCorrelatedTerminalReplyOutboxFaultRestoresResponderHandling",
+            "test:./internal/authority::TestCorrelatedTerminalReplyRejectsRevokedBoundRoute",
             "test:./internal/authority::TestCurrentKeepsEscapedCurrentAndOmitsRelatedBeyondEncodedBudget",
             "test:./internal/authority::TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult",
             "test:./internal/authority::TestCurrentLeastAttendedSelectionSurvivesBoundaryWithoutAdvance",
             "test:./internal/authority::TestCurrentNeverClaimsAnotherPrincipalsHandling",
             "test:./internal/authority::TestCurrentOperationReplaysFrozenViewAfterRestartAndExpiry",
+            "test:./internal/authority::TestCurrentProjectsPendingReplyObservationAfterRemoteRoot",
             "test:./internal/authority::TestCurrentRejectsExpiredAndWrongAttachmentProof",
             "test:./internal/authority::TestEndInteractiveAttachmentFaultRollsBackEndAndClaim",
             "test:./internal/authority::TestEndInteractiveAttachmentRacesAdmissionWithoutPartialEffect",
             "test:./internal/authority::TestEndInteractiveAttachmentReleasesClaimWithoutDomainEffect",
+            "test:./internal/authority::TestExplicitResolveRemainsLegalWithPendingReplyObservation",
             "test:./internal/authority::TestFocusProjectionUsesDeterministicBoundedPrefixAndPayloadBudget",
             "test:./internal/authority::TestFreshBoundaryAtomicallyReplacesPredecessorWithoutDomainEffect",
             "test:./internal/authority::TestFreshCurrentDurablySettlesExpiredClaimWithoutDomainEffect",
+            "test:./internal/authority::TestImportedCurrentProjectsOneAuthenticatedReplyTarget",
+            "test:./internal/authority::TestImportedHandlingKeepsReplyContextAcrossLocalAdvance",
             "test:./internal/authority::TestInteractiveAttachmentBeginCannotReviveEndedBoundary",
             "test:./internal/authority::TestInteractiveAttachmentBeginExactlyReplaysAcrossRestart",
             "test:./internal/authority::TestInteractiveAttachmentBeginRejectsSameOperationDifferentPrincipal",
@@ -525,8 +693,14 @@
             "test:./internal/authority::TestMaximumAcceptedWorldKeepsCurrentReadable",
             "test:./internal/authority::TestMissingPeerArtifactExpiresWithoutCreatingDomainState",
             "test:./internal/authority::TestOpenHandlingBoundRejectsAdditionalSuccessor",
+            "test:./internal/authority::TestOrdinaryImportedWorkCannotBecomeNoReplyBySemanticKind",
+            "test:./internal/authority::TestOrdinaryPeerDeliveryStillCreatesHandling",
             "test:./internal/authority::TestPeerDeliveryRoundTripUsesTwoLocalAdmissions",
             "test:./internal/authority::TestPeerInboxRejectsSameDeliveryIDDifferentEnvelope",
+            "test:./internal/authority::TestPeerRouteProjectionIsScopedToAttachmentPrincipal",
+            "test:./internal/authority::TestPendingReplyObservationClearsAfterExactTerminalObservation",
+            "test:./internal/authority::TestPendingReplyObservationSurvivesDeliverySettlementAndLocalAdvance",
+            "test:./internal/authority::TestPendingReplyObservationUsesAnchorIndex",
             "test:./internal/authority::TestReferenceCanRetractThenSupersedeTombstone",
             "test:./internal/authority::TestReferenceCitationRecordsExactHeadWithoutMutatingLineage",
             "test:./internal/authority::TestReferenceExistingHeadCASRejectsStaleMutation",
@@ -535,6 +709,16 @@
             "test:./internal/authority::TestReferenceRejectsForwardHead",
             "test:./internal/authority::TestReferenceTombstoneRejectsFreshRetractAndReplaysOriginal",
             "test:./internal/authority::TestRemoteRejectionAndExpiryLeaveOriginAnchorOpen",
+            "test:./internal/authority::TestTerminalReplyFollowsBoundSubjectAdvanceAnchor",
+            "test:./internal/authority::TestTerminalReplyObservationBoundFailsClosedAtSixtyFour",
+            "test:./internal/authority::TestTerminalReplyObservationCreatesNoHandlingAndLeavesAnchorOpen",
+            "test:./internal/authority::TestTerminalReplyObservationFaultRollsBackEventAndInboxSettlement",
+            "test:./internal/authority::TestTerminalReplyObservationIsUniquePerOutboundDelivery",
+            "test:./internal/authority::TestTerminalReplyObservationMakesPriorViewStale",
+            "test:./internal/authority::TestTerminalReplyObservationProjectsIntoFreshView",
+            "test:./internal/authority::TestTerminalReplyObservationRejectsWrongRouteRootPrincipalOrClosedAnchor",
+            "test:./internal/authority::TestTerminalReplyObservationRequiresExactInReplyToDeliveryBinding",
+            "test:./internal/authority::TestTerminalReplyObservationRotationIsDeterministicAndBounded",
             "test:./internal/authority::TestVerifiedPeerDeliveryFaultMatrixCommitsWholeReceiverOutcomeOrNone",
             "test:./internal/authority::TestVerifyArtifactEnforcesExistingCASObjectBound",
             "test:./internal/cli::TestAcceptedHandlingReceiptRetainsReplayUntilBoundaryEndCommits",
@@ -548,6 +732,17 @@
             "test:./internal/cli::TestPresentedTerminalCannotReactivateAfterBoundaryEndFailure",
             "test:./internal/cli::TestSameHookAttachFinishesPresentedHandlingButNeverReturnsReady",
             "test:./internal/daemon::TestAttachmentBeginResponseExactlyReplaysAcrossDaemonRestart"
+          ]
+        },
+        {
+          "id": "pi-runtime",
+          "kind": "shell",
+          "argv": [
+            "bash",
+            "harness/test/r7/runtime/pi/run_delegate_oracle.sh"
+          ],
+          "oracles": [
+            "stdout:pi Runtime oracle: PASS"
           ]
         },
         {
@@ -582,6 +777,22 @@
             "stdout:r7 case passed: blackboard",
             "stdout:r7 case passed: contract-net",
             "stdout:r7 case passed: review"
+          ]
+        },
+        {
+          "id": "trace",
+          "kind": "go-test",
+          "argv": [
+            "go",
+            "-C",
+            "harness",
+            "test",
+            "-json",
+            "./test/r7/domainops/trace",
+            "-count=1"
+          ],
+          "oracles": [
+            "test:./test/r7/domainops/trace::TestGlobalDeliveryValidationBindsTerminalObservationToExactOutboundRequest"
           ]
         }
       ]

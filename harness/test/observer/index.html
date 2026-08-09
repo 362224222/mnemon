@@ -366,7 +366,7 @@
       <div class="loader-row">
         <div class="loader-copy">
           <strong>Drop one or more sanitized JSONL traces</strong>
-          <span>mnemon.test.trace v1 · metadata-only · multiple runs supported</span>
+          <span>mnemon.test.trace v2 · metadata-only · multiple runs supported</span>
         </div>
         <div>
           <label class="file-button" for="traceFiles">Load trace files</label>
@@ -462,7 +462,7 @@
       canvasHeight: 1000
     });
     const TRACE_SCHEMA = "mnemon.test.trace";
-    const TRACE_VERSION = 1;
+    const TRACE_VERSION = 2;
     const TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
     const DIGEST = /^sha256:[0-9a-f]{64}$/;
     const TRACE_ID = /^trace:[A-Za-z0-9][A-Za-z0-9._:-]{0,121}$/;
@@ -471,17 +471,26 @@
     const FACT_KEYS = Object.freeze(["schema", "version", "record", "seq", "id", "captured_at", "source", "agent", "turn", "kind", "truth", "causes", "refs", "facts"]);
     const RESULT_KEYS = Object.freeze(["schema", "version", "record", "status", "finished_at", "record_count", "trace_digest", "gates"]);
     const FACT_FIELDS = Object.freeze([
-      "action", "alpha", "artifact_count", "authenticated", "bypassed_hook", "byte_size",
-      "code", "consequence", "duration_ms", "gate_id", "hook_cue", "invalid_votes",
-      "margin_after", "margin_before", "no_vote", "no_votes", "outcome", "payload_bytes", "phase",
-      "preference_after", "preference_before", "recolored", "replayed", "result", "round",
-      "sample_size", "semantic_kind", "state", "status", "target_count", "targets", "timed_out", "view_nonempty",
-      "votes_a", "votes_b"
+      "action", "alpha", "artifact_count", "attempt_count", "authenticated", "batched_unattributed_count", "bypassed_hook", "byte_size",
+      "code", "consequence", "count", "duration_ms", "episode", "gate_id", "goal_digest", "goal_satisfied", "has_current", "hook_cue", "invalid_result_count", "invalid_votes",
+      "margin_after", "margin_before", "no_vote", "no_votes", "occupied_claims", "open_total", "open_unclaimed", "outcome", "payload_bytes", "phase",
+      "preference_after", "preference_before", "recolored", "related_projected", "related_total", "replayed", "reply_required", "result", "role", "round",
+      "sample_size", "semantic_kind", "state", "status", "success_count", "target_count", "targets", "timed_out", "tool_error_count", "truncated",
+      "turn_limit", "turns_used", "view_nonempty", "votes_a", "votes_b"
+    ]);
+    const INTENT_DENIAL_CODES = Object.freeze([
+      "invalid_argument", "content_required", "content_too_large", "artifact_invalid",
+      "artifact_too_large", "authentication_failed", "context_required", "context_stale",
+      "asset_revision_mismatch", "action_not_allowed", "operation_mismatch",
+      "operation_pending", "mnemond_unavailable", "internal"
     ]);
     const FACT_CLASSIFICATION_ROWS = Object.freeze([
       "runtime.turn.started|runtime|observation",
       "runtime.hook.cue|runtime|observation",
+      "runtime.delegate.invoked|runtime|observation",
+      "runtime.domain.operation|runtime|observation",
       "runtime.view.received|runtime|derived_projection",
+      "runtime.intent.denied|runtime|observation",
       "runtime.intent.submitted|runtime|observation",
       "runtime.turn.ended|runtime|observation",
       "runtime.turn.timed_out|runtime|observation",
@@ -508,6 +517,11 @@
       "r8.vote.observed|r8_selector|observation",
       "r8.round.settled|r8_selector|local_preference",
       "r8.observation.produced|r8_selector|local_preference",
+      "test.attention.wave|oracle|assertion",
+      "test.attention.outcome|oracle|assertion",
+      "test.attention.exhausted|oracle|assertion",
+      "test.attention.quiescent|oracle|assertion",
+      "test.attention.occupied|oracle|assertion",
       "test.gate.checked|oracle|assertion"
     ]);
     const FACT_CLASSIFICATIONS = new Map(FACT_CLASSIFICATION_ROWS.map(row => {
@@ -647,8 +661,8 @@
 
     function validateFacts(facts, label) {
       exactObject(facts, FACT_FIELDS, [], label);
-      if (facts.action !== undefined) requireEnum(facts.action, ["current", "submit", "capture", "read", "other"], label + ".action");
-      if (facts.consequence !== undefined) requireEnum(facts.consequence, ["handling.create", "handling.advance", "handling.resolve.completed", "handling.resolve.declined", "handling.resolve.unresolved", "reference.publish", "reference.supersede", "reference.retract"], label + ".consequence");
+      if (facts.action !== undefined) requireEnum(facts.action, ["current", "submit", "capture", "read", "probe", "mutation", "other"], label + ".action");
+      if (facts.consequence !== undefined) requireEnum(facts.consequence, ["handling.create", "handling.advance", "handling.resolve.completed", "handling.resolve.declined", "handling.resolve.unresolved", "reference.publish", "reference.supersede", "reference.retract", "observation.completed", "observation.declined", "observation.unresolved"], label + ".consequence");
       if (facts.outcome !== undefined) requireEnum(facts.outcome, ["accepted", "rejected", "replayed", "completed", "declined", "unresolved"], label + ".outcome");
       if (facts.phase !== undefined) requireEnum(facts.phase, ["awaiting_seed", "active", "observed"], label + ".phase");
       if (facts.preference_after !== undefined) requireEnum(facts.preference_after, ["A", "B"], label + ".preference_after");
@@ -658,18 +672,40 @@
       if (facts.status !== undefined) requireEnum(facts.status, ["pass", "fail", "incomplete", "unknown", "not_applicable"], label + ".status");
       optionalInteger(facts.alpha, 1, 64, label + ".alpha");
       optionalInteger(facts.artifact_count, 0, 64, label + ".artifact_count");
+      optionalInteger(facts.attempt_count, 0, 256, label + ".attempt_count");
+      optionalInteger(facts.batched_unattributed_count, 0, 256, label + ".batched_unattributed_count");
+      optionalInteger(facts.count, 1, 256, label + ".count");
       optionalInteger(facts.invalid_votes, 0, 128, label + ".invalid_votes");
+      optionalInteger(facts.invalid_result_count, 0, 256, label + ".invalid_result_count");
       optionalInteger(facts.margin_after, -1024, 1024, label + ".margin_after");
       optionalInteger(facts.margin_before, -1024, 1024, label + ".margin_before");
       optionalInteger(facts.no_votes, 0, 64, label + ".no_votes");
+      optionalInteger(facts.occupied_claims, 0, 64, label + ".occupied_claims");
+      optionalInteger(facts.open_total, 0, 64, label + ".open_total");
+      optionalInteger(facts.open_unclaimed, 0, 64, label + ".open_unclaimed");
       optionalInteger(facts.payload_bytes, 0, 32768, label + ".payload_bytes");
       optionalInteger(facts.round, 0, 1024, label + ".round");
+      optionalInteger(facts.related_projected, 0, 1, label + ".related_projected");
+      optionalInteger(facts.related_total, 0, 128, label + ".related_total");
       optionalInteger(facts.sample_size, 0, 64, label + ".sample_size");
+      optionalInteger(facts.success_count, 0, 256, label + ".success_count");
       optionalInteger(facts.target_count, 0, 16, label + ".target_count");
+      optionalInteger(facts.tool_error_count, 0, 256, label + ".tool_error_count");
+      optionalInteger(facts.turn_limit, 1, 256, label + ".turn_limit");
+      optionalInteger(facts.turns_used, 0, 256, label + ".turns_used");
       optionalInteger(facts.votes_a, 0, 64, label + ".votes_a");
       optionalInteger(facts.votes_b, 0, 64, label + ".votes_b");
       optionalInteger(facts.byte_size, 0, 16777216, label + ".byte_size");
       optionalInteger(facts.duration_ms, 0, 3600000, label + ".duration_ms");
+      const operationCounts = [facts.attempt_count, facts.success_count,
+        facts.tool_error_count, facts.invalid_result_count, facts.batched_unattributed_count];
+      const presentOperationCounts = operationCounts.filter(value => value !== undefined);
+      if (presentOperationCounts.length !== 0 &&
+          (presentOperationCounts.length !== operationCounts.length ||
+           facts.success_count + facts.tool_error_count + facts.invalid_result_count +
+             facts.batched_unattributed_count !== facts.attempt_count)) {
+        fail(label, "has inconsistent operation counts");
+      }
       if (facts.targets !== undefined) {
         if (!Array.isArray(facts.targets) || facts.targets.length > 16) fail(label + ".targets", "must contain at most 16 targets");
         facts.targets.forEach((target, index) => requireString(target, TOKEN, label + ".targets[" + index + "]"));
@@ -677,8 +713,12 @@
       if (facts.target_count !== undefined && facts.target_count !== (facts.targets || []).length) {
         fail(label + ".target_count", "must equal targets length");
       }
-      ["authenticated", "bypassed_hook", "hook_cue", "no_vote", "recolored", "replayed", "timed_out", "view_nonempty"].forEach(key => optionalBoolean(facts[key], label + "." + key));
-      ["code", "gate_id", "semantic_kind"].forEach(key => optionalString(facts[key], TOKEN, label + "." + key));
+      ["authenticated", "bypassed_hook", "goal_satisfied", "has_current", "hook_cue", "no_vote", "recolored", "replayed", "reply_required", "timed_out", "truncated", "view_nonempty"].forEach(key => optionalBoolean(facts[key], label + "." + key));
+      ["code", "episode", "gate_id", "role", "semantic_kind"].forEach(key => optionalString(facts[key], TOKEN, label + "." + key));
+      if (facts.goal_digest !== undefined) requireString(facts.goal_digest, DIGEST, label + ".goal_digest");
+      if ((facts.goal_digest === undefined) !== (facts.goal_satisfied === undefined)) {
+        fail(label, "must pair goal_digest and goal_satisfied");
+      }
     }
 
     function validateFact(record, expectedSequence, seen, label) {
@@ -720,6 +760,34 @@
         if (!Object.prototype.hasOwnProperty.call(object, field)) fail(path + "." + field, "is required for " + record.kind);
       });
       switch (record.kind) {
+        case "runtime.view.received":
+          required(record.facts, ["action", "has_current", "open_total", "related_projected",
+            "related_total", "truncated"], label + ".facts");
+          if (record.facts.action !== "current" ||
+              record.facts.related_projected > record.facts.related_total ||
+              record.facts.truncated !==
+                (record.facts.related_projected < record.facts.related_total) ||
+              record.facts.has_current !==
+                Object.prototype.hasOwnProperty.call(record.facts, "reply_required") ||
+              (record.facts.has_current && record.facts.open_total < 1)) {
+            fail(label, "does not describe one bounded Agent View structure");
+          }
+          break;
+        case "runtime.domain.operation":
+          required(record.facts, ["action", "attempt_count", "batched_unattributed_count",
+            "invalid_result_count", "success_count", "tool_error_count"], label + ".facts");
+          if (record.causes.length !== 0 || record.facts.attempt_count < 1 ||
+              !["read", "probe", "mutation"].includes(record.facts.action)) {
+            fail(label, "does not describe a non-causal bounded domain operation observation");
+          }
+          break;
+        case "runtime.intent.denied":
+          required(record.facts, ["action", "code", "count"], label + ".facts");
+          if (record.causes.length !== 0 || record.facts.action !== "submit" ||
+              !INTENT_DENIAL_CODES.includes(record.facts.code)) {
+            fail(label, "does not describe a non-causal closed Intent denial observation");
+          }
+          break;
         case "r7.event.accepted":
           required(record.refs, ["event", "event_digest"], label + ".refs");
           required(record.facts, ["semantic_kind", "consequence"], label + ".facts");
@@ -730,6 +798,48 @@
           if (record.facts.state !== "terminal" || !["completed", "declined", "unresolved"].includes(record.facts.outcome)) {
             fail(label + ".facts", "does not describe a terminal Handling outcome");
           }
+          break;
+        case "test.attention.wave":
+        case "test.attention.outcome":
+        case "test.attention.exhausted":
+        case "test.attention.quiescent":
+        case "test.attention.occupied":
+          required(record.facts, ["episode", "role", "round", "open_unclaimed", "occupied_claims", "turn_limit", "turns_used"], label + ".facts");
+          if (record.kind === "test.attention.outcome" ||
+              record.kind === "test.attention.exhausted" ||
+              record.kind === "test.attention.quiescent") {
+            required(record.facts, ["goal_digest", "goal_satisfied"], label + ".facts");
+          }
+          if (record.causes.length !== 0 || record.facts.round < 1 ||
+              record.facts.turns_used > record.facts.turn_limit) {
+            fail(label, "does not describe a bounded non-causal attention snapshot");
+          }
+          if (record.kind === "test.attention.wave" && record.facts.occupied_claims !== 0) {
+            fail(label, "does not describe an unoccupied attention wave");
+          }
+          if (record.kind === "test.attention.outcome" &&
+              (!record.facts.goal_satisfied || record.facts.occupied_claims !== 0)) {
+            fail(label, "does not describe a satisfied unoccupied attention outcome");
+          }
+          if (record.kind === "test.attention.exhausted" &&
+              (record.facts.goal_satisfied || record.facts.occupied_claims !== 0)) {
+            fail(label, "does not describe an unsatisfied unoccupied attention exhaustion");
+          }
+          if (record.kind === "test.attention.quiescent" &&
+              (record.facts.goal_satisfied || record.facts.occupied_claims !== 0 ||
+               record.facts.open_unclaimed !== 0)) {
+            fail(label, "does not describe an unsatisfied empty attention quiescence");
+          }
+          if (record.kind === "test.attention.occupied" &&
+              (record.facts.goal_digest !== undefined ||
+               record.facts.goal_satisfied !== undefined)) {
+            fail(label, "must precede and omit external goal evidence");
+          }
+          break;
+        case "test.gate.checked":
+          required(record.facts, ["gate_id", "status"], label + ".facts");
+          requireEnum(record.facts.status,
+            ["pass", "fail", "unknown", "not_applicable"], label + ".facts.status");
           break;
         case "r8.selection.seeded":
           required(record.facts, ["preference_after", "phase"], label + ".facts");
@@ -749,7 +859,7 @@
       }
     }
 
-    function validateResult(record, factCount, seen, label) {
+    function validateResult(record, factCount, seen, gateAssertions, label) {
       exactObject(record, RESULT_KEYS, ["schema", "version", "record", "status", "finished_at", "record_count", "trace_digest", "gates"], label);
       if (record.schema !== TRACE_SCHEMA || record.version !== TRACE_VERSION || record.record !== "result") fail(label, "has an invalid envelope");
       requireEnum(record.status, ["passed", "failed", "incomplete"], label + ".status");
@@ -758,20 +868,46 @@
       if (record.record_count !== factCount) fail(label + ".record_count", "does not match the fact count");
       requireString(record.trace_digest, DIGEST, label + ".trace_digest");
       if (!Array.isArray(record.gates) || record.gates.length > 64) fail(label + ".gates", "exceeds its array bound");
+      const gateIDs = new Set();
+      let hasFailure = false;
+      let hasPass = false;
       record.gates.forEach((gate, index) => {
         const path = label + ".gates[" + index + "]";
         exactObject(gate, ["id", "status", "evidence"], ["id", "status", "evidence"], path);
         requireString(gate.id, TOKEN, path + ".id");
         requireEnum(gate.status, ["pass", "fail", "unknown", "not_applicable"], path + ".status");
         if (!Array.isArray(gate.evidence) || gate.evidence.length > 32) fail(path + ".evidence", "exceeds its array bound");
+        if (gateIDs.has(gate.id)) fail(path + ".id", "duplicates a gate");
+        gateIDs.add(gate.id);
+        if ((gate.status === "pass" || gate.status === "fail") && gate.evidence.length === 0) {
+          fail(path + ".evidence", "is required for a settled gate");
+        }
+        if (gate.status === "unknown" && gate.evidence.length !== 0) {
+          fail(path + ".evidence", "cannot support an unknown gate");
+        }
+        hasFailure ||= gate.status === "fail";
+        hasPass ||= gate.status === "pass";
         const evidence = new Set();
         gate.evidence.forEach((reference, evidenceIndex) => {
           requireString(reference, TRACE_ID, path + ".evidence[" + evidenceIndex + "]");
           if (evidence.has(reference)) fail(path + ".evidence", "contains a duplicate reference");
           if (!seen.has(reference)) fail(path + ".evidence[" + evidenceIndex + "]", "does not refer to a fact");
+          const assertion = gateAssertions.get(reference);
+          if (assertion && (assertion.id !== gate.id || assertion.status !== gate.status)) {
+            fail(path + ".evidence[" + evidenceIndex + "]", "contradicts its gate assertion");
+          }
           evidence.add(reference);
         });
       });
+      if (record.status === "passed") {
+        if (!hasPass) fail(label + ".status", "requires at least one evidenced pass gate");
+        if (record.gates.some(gate => gate.status === "fail" || gate.status === "unknown")) {
+          fail(label + ".status", "cannot pass with a failed or unresolved gate");
+        }
+      }
+      if (record.status === "failed" && !hasFailure) {
+        fail(label + ".status", "requires at least one failed gate");
+      }
     }
 
     function decodeLines(bytes, name) {
@@ -807,14 +943,18 @@
       validateRun(header, name + " line 1");
       const facts = [];
       const seen = new Set();
+      const gateAssertions = new Map();
       for (let index = 1; index < lines.length - 1; index++) {
         const fact = lines[index].value;
         validateFact(fact, index, seen, name + " line " + (index + 1));
         facts.push(fact);
+        if (fact.kind === "test.gate.checked") {
+          gateAssertions.set(fact.id, { id: fact.facts.gate_id, status: fact.facts.status });
+        }
       }
       const resultLine = lines[lines.length - 1];
       const result = resultLine.value;
-      validateResult(result, facts.length, seen, name + " line " + lines.length);
+      validateResult(result, facts.length, seen, gateAssertions, name + " line " + lines.length);
       const digest = await sha256(bytes.slice(0, resultLine.start), name);
       if (digest !== result.trace_digest) fail(name, "trace_digest does not cover the exact preceding bytes");
       return { name, header, facts, result, errors: [] };
@@ -947,6 +1087,20 @@
           chip.append(node("span", "seq", "#" + fact.seq), node("span", "kind", fact.kind));
           if (fact.turn) chip.append(node("span", "turn", fact.turn));
           const details = [];
+          if (fact.facts.action) details.push(fact.facts.action);
+          if (fact.facts.attempt_count !== undefined) {
+            details.push("requested " + fact.facts.attempt_count + " · success " +
+              fact.facts.success_count + " · tool error " + fact.facts.tool_error_count +
+              " · invalid result " + fact.facts.invalid_result_count + " · batched " +
+              fact.facts.batched_unattributed_count);
+          }
+          if (fact.facts.code) details.push(fact.facts.code);
+          if (fact.facts.count !== undefined) details.push("count " + fact.facts.count);
+          if (fact.facts.open_unclaimed !== undefined) {
+            details.push(fact.facts.episode + " · " + fact.facts.role + " · wave " + fact.facts.round +
+              " · open/unclaimed " + fact.facts.open_unclaimed + " · occupied " + fact.facts.occupied_claims +
+              " · turns " + fact.facts.turns_used + "/" + fact.facts.turn_limit);
+          }
           if (fact.facts.semantic_kind) details.push(fact.facts.semantic_kind);
           if (fact.facts.consequence) details.push(fact.facts.consequence);
           if (fact.facts.targets && fact.facts.targets.length) details.push("→ " + fact.facts.targets.join(", "));

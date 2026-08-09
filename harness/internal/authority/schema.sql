@@ -76,6 +76,9 @@ CREATE TABLE peer_outbox (
     delivery_id TEXT PRIMARY KEY,
     route_id TEXT NOT NULL REFERENCES peer_routes(route_id),
     origin_event_id TEXT NOT NULL REFERENCES events(event_id),
+    reply_anchor_handling_id TEXT REFERENCES handlings(handling_id),
+    expected_reply_root_event_id TEXT,
+    expected_reply_root_event_digest TEXT,
     envelope_digest TEXT NOT NULL UNIQUE,
     delivery_json BLOB NOT NULL,
     state TEXT NOT NULL CHECK (state IN ('pending', 'settled', 'expired')),
@@ -85,6 +88,15 @@ CREATE TABLE peer_outbox (
     receipt_json BLOB,
     receipt_signature BLOB,
     settled_at TEXT,
+    CHECK ((reply_anchor_handling_id IS NULL AND expected_reply_root_event_id IS NULL AND
+            expected_reply_root_event_digest IS NULL) OR
+           (reply_anchor_handling_id IS NOT NULL AND expected_reply_root_event_id IS NOT NULL AND
+            expected_reply_root_event_digest IS NOT NULL AND
+            length(expected_reply_root_event_digest) = 71 AND
+            substr(expected_reply_root_event_digest, 1, 7) = 'sha256:' AND
+            substr(expected_reply_root_event_digest, 8) NOT GLOB '*[^0-9a-f]*' AND
+            expected_reply_root_event_digest !=
+                'sha256:0000000000000000000000000000000000000000000000000000000000000000')),
     CHECK ((state = 'pending' AND receipt_digest IS NULL AND receipt_json IS NULL AND
             receipt_signature IS NULL AND settled_at IS NULL) OR
            (state = 'settled' AND receipt_digest IS NOT NULL AND receipt_json IS NOT NULL AND
@@ -96,9 +108,17 @@ CREATE TABLE peer_outbox (
 CREATE INDEX peer_outbox_pending
 ON peer_outbox(state, expires_at, created_at);
 
+CREATE UNIQUE INDEX peer_outbox_origin_route
+ON peer_outbox(origin_event_id, route_id);
+
+CREATE INDEX peer_outbox_reply_anchor
+ON peer_outbox(reply_anchor_handling_id, delivery_id)
+WHERE reply_anchor_handling_id IS NOT NULL;
+
 CREATE TABLE peer_inbox (
     delivery_id TEXT PRIMARY KEY,
     route_id TEXT NOT NULL REFERENCES peer_routes(route_id),
+    in_reply_to_delivery_id TEXT,
     envelope_digest TEXT NOT NULL,
     delivery_json BLOB NOT NULL,
     delivery_signature BLOB NOT NULL CHECK (length(delivery_signature) = 64),
@@ -122,6 +142,13 @@ ON peer_inbox(state, expires_at, received_at);
 
 CREATE UNIQUE INDEX peer_inbox_local_event
 ON peer_inbox(local_event_id)
+WHERE local_event_id IS NOT NULL;
+
+-- Several signed candidates may cite one outbound request, but only one may
+-- become its locally accepted observation. Rejected and merely staged rows do
+-- not consume this authority slot because they have no local Event.
+CREATE UNIQUE INDEX peer_inbox_accepted_reply
+ON peer_inbox(in_reply_to_delivery_id)
 WHERE local_event_id IS NOT NULL;
 
 CREATE TABLE event_artifacts (
@@ -229,4 +256,4 @@ CREATE TABLE reference_outcome_projection (
 ) STRICT;
 
 PRAGMA application_id = 1296978487;
-PRAGMA user_version = 9;
+PRAGMA user_version = 12;

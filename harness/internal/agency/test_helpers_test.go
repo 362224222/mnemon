@@ -192,6 +192,11 @@ func mustRoute(t *testing.T, value string) RouteID {
 	return result
 }
 
+func mustDeliveryID(t *testing.T, value string) DeliveryID {
+	t.Helper()
+	return DeliveryID{digest: Sum([]byte(value))}
+}
+
 func mustEventRef(t *testing.T, id, body string) EventRef {
 	t.Helper()
 	result, err := NewEventRef(mustEventID(t, id), Sum([]byte(body)))
@@ -203,7 +208,7 @@ func mustEventRef(t *testing.T, id, body string) EventRef {
 
 func mustSubject(t *testing.T, handle OpaqueHandle, id, event, body string, fence uint64) SubjectBinding {
 	t.Helper()
-	result, err := NewSubjectBinding(handle, mustHandlingID(t, id), mustEventRef(t, event, body), fence)
+	result, err := NewSubjectBinding(handle, mustHandlingID(t, id), mustEventRef(t, event, body), fence, 0)
 	if err != nil {
 		t.Fatalf("NewSubjectBinding() error = %v", err)
 	}

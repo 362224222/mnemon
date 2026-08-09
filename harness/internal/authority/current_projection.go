@@ -60,6 +60,9 @@ func projectTargetsTx(ctx context.Context, tx *sql.Tx, attachment agency.Attachm
 		return err
 	}
 	for _, route := range routes {
+		if route.LocalTargetPrincipal() != attachment.Principal() {
+			continue
+		}
 		requested, err := agency.AliasTarget(route.PublicAlias())
 		if err != nil {
 			return errors.New("current View: corrupt peer route public alias")
@@ -81,11 +84,17 @@ func projectViewContentTx(ctx context.Context, tx *sql.Tx, principal agency.Agen
 	var reply currentReplyContext
 	if claim != nil {
 		var err error
-		reply, err = currentReplyContextTx(ctx, tx, claim.head)
+		reply, err = currentReplyContextTx(ctx, tx, claim.handlingID, claim.head)
+		if err != nil {
+			return err
+		}
+		spec.ReplyObservationPending, err = replyObservationPendingTx(ctx, tx,
+			claim.handlingID)
 		if err != nil {
 			return err
 		}
 		spec.ReplyTarget = reply.target
+		spec.ReplyDelivery = reply.delivery
 		if err := projectClaim(claim, reply.root, spec, publicSpec); err != nil {
 			return err
 		}
@@ -179,11 +188,13 @@ func projectClaim(claim *projectedClaim, replyRoot agency.EventRef, spec *agency
 		return errors.New("current View: reply root is required")
 	}
 	subjectHandle, err := deterministicHandle("subject", claim.handlingID.String(),
-		claim.head.ID().String(), claim.head.Digest().String(), fmt.Sprint(claim.fence))
+		claim.head.ID().String(), claim.head.Digest().String(), fmt.Sprint(claim.fence),
+		fmt.Sprint(claim.observationRevision))
 	if err != nil {
 		return err
 	}
-	subject, err := agency.NewSubjectBinding(subjectHandle, claim.handlingID, claim.head, claim.fence)
+	subject, err := agency.NewSubjectBinding(subjectHandle, claim.handlingID, claim.head,
+		claim.fence, claim.observationRevision)
 	if err != nil {
 		return err
 	}
@@ -206,6 +217,7 @@ func projectClaim(claim *projectedClaim, replyRoot agency.EventRef, spec *agency
 		}
 		spec.Provenance = append(spec.Provenance, replyOffer)
 	}
+	spec.ReplyTo = replyHandle
 	current := agency.AgentViewCurrentSpec{Subject: subjectHandle, ReplyTo: replyHandle,
 		Kind: claim.kind, Payload: claim.payload}
 	for _, digest := range claim.artifacts {

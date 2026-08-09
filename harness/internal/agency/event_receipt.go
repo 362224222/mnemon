@@ -13,24 +13,25 @@ type EventStamp struct {
 // NewEvent does not perform admission; it only prevents malformed accepted
 // records from being represented.
 type Event struct {
-	id             EventID
-	acceptedAt     time.Time
-	originSequence uint64
-	causalDepth    uint16
-	source         AgentPrincipalID
-	operationKey   OperationKey
-	requestDigest  Digest
-	kind           SemanticLabel
-	payload        SemanticPayload
-	consequence    Consequence
-	subject        *SubjectBinding
-	expectedRef    *ReferenceExpectation
-	targets        []ResolvedTarget
-	artifacts      []Digest
-	causation      []EventRef
-	correlation    EventRef
-	canonical      []byte
-	digest         Digest
+	id                EventID
+	acceptedAt        time.Time
+	originSequence    uint64
+	causalDepth       uint16
+	source            AgentPrincipalID
+	operationKey      OperationKey
+	requestDigest     Digest
+	kind              SemanticLabel
+	payload           SemanticPayload
+	consequence       Consequence
+	subject           *SubjectBinding
+	expectedRef       *ReferenceExpectation
+	targets           []ResolvedTarget
+	artifacts         []Digest
+	causation         []EventRef
+	correlation       EventRef
+	inReplyToDelivery DeliveryID
+	canonical         []byte
+	digest            Digest
 }
 
 func NewEvent(request BoundIntent, stamp EventStamp) (Event, error) {
@@ -43,20 +44,21 @@ func NewEvent(request BoundIntent, stamp EventStamp) (Event, error) {
 		return Event{}, err
 	}
 	event := Event{
-		id:             stamp.ID,
-		acceptedAt:     acceptedAt,
-		originSequence: stamp.OriginSequence,
-		causalDepth:    stamp.CausalDepth,
-		source:         request.attachment.principal,
-		operationKey:   request.operationKey,
-		requestDigest:  request.digest,
-		kind:           request.intent.kind,
-		payload:        request.intent.payload,
-		consequence:    request.intent.consequence,
-		targets:        append([]ResolvedTarget(nil), request.targets...),
-		artifacts:      append([]Digest(nil), request.artifacts...),
-		causation:      append([]EventRef(nil), request.causation...),
-		correlation:    request.correlation,
+		id:                stamp.ID,
+		acceptedAt:        acceptedAt,
+		originSequence:    stamp.OriginSequence,
+		causalDepth:       stamp.CausalDepth,
+		source:            request.attachment.principal,
+		operationKey:      request.operationKey,
+		requestDigest:     request.digest,
+		kind:              request.intent.kind,
+		payload:           request.intent.payload,
+		consequence:       request.intent.consequence,
+		targets:           append([]ResolvedTarget(nil), request.targets...),
+		artifacts:         append([]Digest(nil), request.artifacts...),
+		causation:         append([]EventRef(nil), request.causation...),
+		correlation:       request.correlation,
+		inReplyToDelivery: request.inReplyToDelivery,
 	}
 	if request.subject != nil {
 		copyValue := *request.subject
@@ -102,6 +104,9 @@ func (event Event) Causation() []EventRef     { return append([]EventRef(nil), e
 func (event Event) Correlation() (EventRef, bool) {
 	return event.correlation, !event.correlation.IsZero()
 }
+func (event Event) InReplyToDelivery() (DeliveryID, bool) {
+	return event.inReplyToDelivery, !event.inReplyToDelivery.IsZero()
+}
 func (event Event) CanonicalJSON() []byte { return copyBytes(event.canonical) }
 func (event Event) Digest() Digest        { return event.digest }
 func (event Event) Ref() EventRef         { return EventRef{id: event.id, digest: event.digest} }
@@ -125,6 +130,7 @@ type eventMachineWire struct {
 	Subject           *subjectBindingWire       `json:"subject,omitempty"`
 	ExpectedReference *referenceExpectationWire `json:"expected_reference,omitempty"`
 	Targets           []resolvedTargetWire      `json:"targets,omitempty"`
+	InReplyToDelivery string                    `json:"in_reply_to_delivery_id,omitempty"`
 }
 
 type eventSemanticWire struct {
@@ -140,7 +146,7 @@ type eventEvidenceWire struct {
 
 func (event Event) wire() eventWire {
 	wire := eventWire{
-		SchemaVersion: 2,
+		SchemaVersion: 3,
 		Machine: eventMachineWire{
 			ID: event.id.String(), AcceptedAt: event.acceptedAt.Format(time.RFC3339Nano),
 			OriginSequence: event.originSequence, CausalDepth: event.causalDepth,
@@ -152,7 +158,8 @@ func (event Event) wire() eventWire {
 	}
 	if event.subject != nil {
 		wire.Machine.Subject = &subjectBindingWire{HandlingID: event.subject.handlingID.String(),
-			Head: event.subject.head.canonical().(eventRefWire), Fence: event.subject.fence}
+			Head: event.subject.head.canonical().(eventRefWire), Fence: event.subject.fence,
+			ObservationRevision: event.subject.observationRevision}
 	}
 	if event.expectedRef != nil {
 		wire.Machine.ExpectedReference = &referenceExpectationWire{Absent: event.expectedRef.absent,
@@ -164,6 +171,9 @@ func (event Event) wire() eventWire {
 	}
 	for _, target := range event.targets {
 		wire.Machine.Targets = append(wire.Machine.Targets, target.resolvedWire())
+	}
+	if !event.inReplyToDelivery.IsZero() {
+		wire.Machine.InReplyToDelivery = event.inReplyToDelivery.String()
 	}
 	for _, digest := range event.artifacts {
 		wire.Evidence.Artifacts = append(wire.Evidence.Artifacts, digest.String())

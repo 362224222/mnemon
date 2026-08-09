@@ -59,7 +59,7 @@ func commitDomainAdmissionTx(ctx context.Context, tx *sql.Tx,
 			return agency.Event{}, err
 		}
 	}
-	if err := insertPeerDeliveriesTx(ctx, tx, event, now); err != nil {
+	if err := insertPeerDeliveriesTx(ctx, tx, event, handlingIDs, now); err != nil {
 		return agency.Event{}, err
 	}
 	return event, nil

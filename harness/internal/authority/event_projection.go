@@ -40,12 +40,14 @@ func loadEventArtifactsTx(ctx context.Context, tx *sql.Tx,
 type storedEventProjection struct {
 	SchemaVersion int `json:"schema_version"`
 	Machine       struct {
-		ID             string `json:"event_id"`
-		AcceptedAt     string `json:"accepted_at"`
-		OriginSequence uint64 `json:"origin_sequence"`
-		CausalDepth    uint16 `json:"causal_depth"`
-		Source         string `json:"source_principal"`
-		RequestDigest  string `json:"request_digest"`
+		ID                string `json:"event_id"`
+		AcceptedAt        string `json:"accepted_at"`
+		OriginSequence    uint64 `json:"origin_sequence"`
+		CausalDepth       uint16 `json:"causal_depth"`
+		Source            string `json:"source_principal"`
+		RequestDigest     string `json:"request_digest"`
+		Consequence       string `json:"consequence"`
+		InReplyToDelivery string `json:"in_reply_to_delivery_id,omitempty"`
 	} `json:"machine"`
 	Semantic struct {
 		Kind    string `json:"kind"`
@@ -70,6 +72,8 @@ type storedEventDetails struct {
 	artifacts   []agency.Digest
 	causation   []agency.EventRef
 	correlation agency.EventRef
+	consequence agency.Consequence
+	inReplyTo   agency.DeliveryID
 }
 
 func loadStoredEventTx(ctx context.Context, tx *sql.Tx, idValue string) (
@@ -135,7 +139,7 @@ func inspectStoredEventDetails(idValue, digestValue string, originSequence uint6
 		return storedEventDetails{}, nil, errors.New("current View: corrupt Event bytes")
 	}
 	var wire storedEventProjection
-	if err := json.Unmarshal(canonical, &wire); err != nil || wire.SchemaVersion != 2 {
+	if err := json.Unmarshal(canonical, &wire); err != nil || wire.SchemaVersion != 3 {
 		return storedEventDetails{}, nil, errors.New("current View: invalid Event projection")
 	}
 	if err := validateStoredEventAuthority(wire, idValue, originSequence, causalDepth, sourceValue,
@@ -163,8 +167,29 @@ func inspectStoredEventDetails(idValue, digestValue string, originSequence uint6
 	if err != nil {
 		return storedEventDetails{}, nil, err
 	}
+	consequence, err := parseStoredEventConsequence(wire.Machine.Consequence)
+	if err != nil {
+		return storedEventDetails{}, nil, err
+	}
+	var inReplyTo agency.DeliveryID
+	if wire.Machine.InReplyToDelivery != "" {
+		inReplyTo, err = agency.ParseDeliveryID(wire.Machine.InReplyToDelivery)
+		if err != nil {
+			return storedEventDetails{}, nil, errors.New("current View: invalid Event reply Delivery")
+		}
+	}
 	return storedEventDetails{ref: eventRef, kind: kind, payload: payload,
-		causation: causation, correlation: correlation}, artifacts, nil
+		causation: causation, correlation: correlation, consequence: consequence,
+		inReplyTo: inReplyTo}, artifacts, nil
+}
+
+func parseStoredEventConsequence(value string) (agency.Consequence, error) {
+	for consequence := agency.ConsequenceCreateHandlings; consequence <= agency.ConsequenceObserveUnresolved; consequence++ {
+		if consequence.String() == value {
+			return consequence, nil
+		}
+	}
+	return agency.ConsequenceInvalid, errors.New("current View: invalid Event consequence")
 }
 
 func parseStoredEventRelations(causationWires []storedEventRefProjection,

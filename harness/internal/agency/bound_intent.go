@@ -25,6 +25,7 @@ type BoundIntent struct {
 	artifacts         []Digest
 	causation         []EventRef
 	correlation       EventRef
+	inReplyToDelivery DeliveryID
 	canonical         []byte
 	digest            Digest
 }
@@ -49,9 +50,6 @@ func BindIntent(spec BoundIntentSpec) (BoundIntent, error) {
 	if err != nil {
 		return BoundIntent{}, err
 	}
-	if err := requireLocalResponsibilityAnchor(spec.Intent.consequence, targets); err != nil {
-		return BoundIntent{}, err
-	}
 	resolvedArtifacts, artifacts, err := resolveArtifacts(spec.OperationKey, spec.Intent.artifacts,
 		spec.View.artifacts, spec.Candidates)
 	if err != nil {
@@ -63,6 +61,15 @@ func BindIntent(spec BoundIntentSpec) (BoundIntent, error) {
 	causation, correlation, err := resolveProvenance(spec.Intent, spec.View.provenance)
 	if err != nil {
 		return BoundIntent{}, err
+	}
+	if err := requireLocalResponsibilityAnchor(spec.Intent.consequence, targets,
+		spec.View, spec.Intent.correlationHandle, correlation); err != nil {
+		return BoundIntent{}, err
+	}
+	var inReplyToDelivery DeliveryID
+	if isTerminalConsequence(spec.Intent.consequence) &&
+		exactCorrelatedReply(targets, spec.View, spec.Intent.correlationHandle, correlation) {
+		inReplyToDelivery = spec.View.replyDelivery
 	}
 
 	result := BoundIntent{
@@ -77,6 +84,7 @@ func BindIntent(spec BoundIntentSpec) (BoundIntent, error) {
 		artifacts:         artifacts,
 		causation:         causation,
 		correlation:       correlation,
+		inReplyToDelivery: inReplyToDelivery,
 	}
 	_, digest, err := canonicalJSON(result.requestWire())
 	if err != nil {
@@ -152,13 +160,19 @@ func (target ResolvedTarget) destinationKey() resolvedTargetDestination {
 	}
 }
 
-func requireLocalResponsibilityAnchor(consequence Consequence, targets []ResolvedTarget) error {
+func requireLocalResponsibilityAnchor(consequence Consequence, targets []ResolvedTarget,
+	view ViewAuthority, correlationHandle OpaqueHandle, correlation EventRef,
+) error {
 	remote, local := false, false
 	for _, target := range targets {
 		remote = remote || target.destination == TargetDestinationRemote
 		local = local || target.destination == TargetDestinationLocal
 	}
 	if !remote || consequence == ConsequenceAdvanceHandling {
+		return nil
+	}
+	if isTerminalConsequence(consequence) &&
+		exactCorrelatedReply(targets, view, correlationHandle, correlation) {
 		return nil
 	}
 	if (consequence == ConsequenceCreateHandlings ||
@@ -168,6 +182,26 @@ func requireLocalResponsibilityAnchor(consequence Consequence, targets []Resolve
 		return invariant("remote responsibility", "request must leave one causal local Handling open")
 	}
 	return nil
+}
+
+func isTerminalConsequence(consequence Consequence) bool {
+	return consequence == ConsequenceResolveCompleted ||
+		consequence == ConsequenceResolveDeclined ||
+		consequence == ConsequenceResolveUnresolved
+}
+
+func exactCorrelatedReply(targets []ResolvedTarget, view ViewAuthority,
+	correlationHandle OpaqueHandle, correlation EventRef,
+) bool {
+	if len(targets) != 1 || view.replyTo.IsZero() || view.replyTarget.IsZero() ||
+		view.replyDelivery.IsZero() ||
+		correlationHandle != view.replyTo || correlation.IsZero() ||
+		targets[0].destination != TargetDestinationRemote ||
+		targets[0].requested != view.replyTarget {
+		return false
+	}
+	expected, offered := view.provenance[view.replyTo.String()]
+	return offered && expected == correlation
 }
 
 func resolveProvenance(intent AgentIntent, offers map[string]EventRef) ([]EventRef, EventRef, error) {
@@ -218,6 +252,9 @@ func (intent BoundIntent) Causation() []EventRef {
 }
 func (intent BoundIntent) Correlation() (EventRef, bool) {
 	return intent.correlation, !intent.correlation.IsZero()
+}
+func (intent BoundIntent) InReplyToDelivery() (DeliveryID, bool) {
+	return intent.inReplyToDelivery, !intent.inReplyToDelivery.IsZero()
 }
 func (intent BoundIntent) CanonicalJSON() []byte { return copyBytes(intent.canonical) }
 func (intent BoundIntent) RequestDigest() Digest { return intent.digest }

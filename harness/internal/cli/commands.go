@@ -156,13 +156,16 @@ func (app *App) runSubmit(ctx context.Context, store *journalStore, client agenc
 	raw, apiErr := readBoundedInput(app.stdin, maxIntentInputBytes,
 		codeContentTooLarge, "Intent input exceeds its closed byte bound")
 	if apiErr != nil {
+		if apiErr.Code == codeContentRequired {
+			return app.writeError(newControlError(codeContentRequired,
+				"provide exactly one Intent JSON object on stdin with a quoted heredoc"))
+		}
 		return app.writeError(apiErr)
 	}
 	defer clear(raw)
 	intent, err := agency.ParseAgentIntentJSON(raw)
 	if err != nil {
-		return app.writeError(newControlError(codeInvalidArgument,
-			"Intent input is not one canonical AgentIntent"))
+		return app.writeError(intentInputControlError(err))
 	}
 	var receipt []byte
 	var terminal clientJournal
@@ -178,7 +181,7 @@ func (app *App) runSubmit(ctx context.Context, store *journalStore, client agenc
 		}
 		candidates, err := journal.bindCandidates(intent)
 		if err != nil {
-			return err
+			return candidateBindingControlError(err)
 		}
 		operation, err := deriveAdmissionOperation(journal.CurrentOperation, intent, candidates)
 		if err != nil {
@@ -229,6 +232,69 @@ func (app *App) runSubmit(ctx context.Context, store *journalStore, client agenc
 	defer terminal.clear()
 	app.finishPresentedReceipt(ctx, store, client, terminal)
 	return 0
+}
+
+func candidateBindingControlError(err error) error {
+	switch {
+	case errors.Is(err, errCandidateNotCaptured):
+		return newControlError(codeArtifactInvalid,
+			"Artifact candidate handle was not returned by capture in this Hook boundary; use view_handle for a View-offered Artifact")
+	case errors.Is(err, errCandidateRepeated):
+		return newControlError(codeInvalidArgument,
+			"Intent repeats an Artifact candidate")
+	default:
+		return err
+	}
+}
+
+func intentInputControlError(err error) *controlError {
+	if errors.Is(err, agency.ErrLimit) {
+		return newControlError(codeContentTooLarge,
+			"Intent input exceeds a closed field or collection bound")
+	}
+	var validation *agency.ValidationError
+	if errors.As(err, &validation) {
+		switch intentValidationDiagnostic(validation) {
+		case "required":
+			return newControlError(codeInvalidArgument,
+				"Intent input must include kind, payload, and consequence")
+		case "duplicate_json":
+			return newControlError(codeInvalidArgument,
+				"Intent input contains a duplicate JSON field")
+		case "noncanonical_field":
+			return newControlError(codeInvalidArgument,
+				"Intent input contains a non-canonical field")
+		case "closed_consequence":
+			return newControlError(codeInvalidArgument,
+				"Intent consequence must be copied exactly from the current View allowed_intents")
+		case "root_shape":
+			return newControlError(codeInvalidArgument,
+				"handling.create requires at least one View-offered successor and no subject or Reference fields")
+		case "subject_shape":
+			return newControlError(codeInvalidArgument,
+				"handling advance or resolve requires current.facts.handle as subject_handling and no Reference fields")
+		case "reference_publish_shape":
+			return newControlError(codeInvalidArgument,
+				"reference.publish requires one new reference_key, exactly one Artifact, and no Handling fields or successors")
+		case "reference_supersede_shape":
+			return newControlError(codeInvalidArgument,
+				"reference.supersede requires one View-offered reference_head, exactly one Artifact, and no Handling fields or successors")
+		case "reference_retract_shape":
+			return newControlError(codeInvalidArgument,
+				"reference.retract requires one View-offered reference_head, no Artifact, and no Handling fields or successors")
+		case "target_shape":
+			return newControlError(codeInvalidArgument,
+				"each successor must contain exactly one of self:true or one View-offered alias")
+		case "artifact_kind":
+			return newControlError(codeInvalidArgument,
+				"each Artifact kind must be exactly candidate or view_handle")
+		default:
+			return newControlError(codeInvalidArgument,
+				"Intent input has an invalid canonical field or structural shape")
+		}
+	}
+	return newControlError(codeInvalidArgument,
+		"Intent input must be exactly one JSON object without Markdown or trailing text")
 }
 
 func (app *App) finishPresentedReceipt(ctx context.Context, store *journalStore,
