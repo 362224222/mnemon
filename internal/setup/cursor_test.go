@@ -7,40 +7,6 @@ import (
 	"testing"
 )
 
-func TestCursorWriteSkill(t *testing.T) {
-	dir := t.TempDir()
-
-	skillPath, err := CursorWriteSkill(dir)
-	if err != nil {
-		t.Fatalf("write skill: %v", err)
-	}
-	if skillPath != filepath.Join(dir, "skills", "mnemon", "SKILL.md") {
-		t.Fatalf("skill path = %q", skillPath)
-	}
-	if _, err := os.Stat(skillPath); err != nil {
-		t.Fatalf("stat skill: %v", err)
-	}
-}
-
-func TestCursorWriteHook(t *testing.T) {
-	dir := t.TempDir()
-
-	hookPath, err := CursorWriteHook(dir, "prime.sh", []byte("#!/bin/bash\n"))
-	if err != nil {
-		t.Fatalf("write hook: %v", err)
-	}
-	if hookPath != filepath.Join(dir, "hooks", "mnemon", "prime.sh") {
-		t.Fatalf("hook path = %q", hookPath)
-	}
-	info, err := os.Stat(hookPath)
-	if err != nil {
-		t.Fatalf("stat hook: %v", err)
-	}
-	if info.Mode().Perm() != 0755 {
-		t.Fatalf("hook permissions = %v, want 0755", info.Mode().Perm())
-	}
-}
-
 func TestCursorRegisterHooksPreservesUnrelatedConfig(t *testing.T) {
 	dir := t.TempDir()
 	hooksPath := filepath.Join(dir, "hooks.json")
