@@ -109,6 +109,8 @@ For race, process, and Docker boundaries:
 make test-integration
 ```
 
-Paid Pi/DeepSeek evaluation uses `make test-live`. See
+Regular CI runs only `make test`; the integration command is an explicit local
+or manually dispatched boundary check. Paid Pi/DeepSeek evaluation uses
+`make test-live`. See
 [r7-core-contract.md](r7-core-contract.md) for normative behavior and
 [r7-module-layout.md](r7-module-layout.md) for the enforced package boundary.

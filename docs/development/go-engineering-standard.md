@@ -260,18 +260,19 @@ configuration source; it must not grow a parallel evidence ledger.
 
 ## 10. Executable gates
 
-The repository exposes three non-overlapping test levels:
+The repository exposes three independently invoked test levels:
 
 ```sh
-make test              # deterministic Go, architecture, fixture, and CLI tests
-make test-integration  # race plus real process and Docker boundaries
+make test              # deterministic CI: unit, projection, and static architecture
+make test-integration  # opt-in CLI E2E, timing, race, process, and Docker boundaries
 make test-live         # explicit paid Pi/DeepSeek evaluation
 ```
 
-The levels do not invoke one another. Fast CI runs `make test`; Harness-affecting
-changes and scheduled CI run `make test-integration`; paid provider evaluation
-is manual. Focused packages may be invoked directly during development, but do
-not add overlapping umbrella targets.
+Regular CI runs only `make test` and must not depend on real daemon readiness,
+wall-clock scenario outcomes, Docker, or a provider. Integration deliberately
+rechecks the complete Harness under race, process, and Docker boundaries; paid
+provider evaluation remains a separate explicit gate. Focused packages may be
+invoked directly during development, but do not add another umbrella target.
 
 Any added analyzer MUST have a repository-owned version and configuration and
 be reproducible in CI. Do not depend on a developer's global tool version or

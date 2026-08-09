@@ -3,8 +3,10 @@
 ## Development
 
 - Build with `go build -o mnemon .`.
-- Run `make test` for deterministic unit, architecture, fixture, and CLI tests.
-- Run `make test-integration` for Harness race, process, and Docker boundaries.
+- Run `make test` for the deterministic CI suite. It excludes real daemon
+  readiness, CLI E2E, wall-clock scenarios, Docker, and provider calls.
+- Run `make test-integration` explicitly for CLI E2E plus Harness timing, race,
+  process, and Docker boundaries; it is not a regular CI gate.
 - Run `make test-live` only when explicitly validating the paid Pi/DeepSeek
   scenarios.
 - Treat `harness/` as an experimental, not-yet-released harness layer. Do not

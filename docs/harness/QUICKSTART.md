@@ -85,9 +85,10 @@ make test
 make test-integration
 ```
 
-During local iteration, run the focused Go package or scenario being changed.
-The deterministic and integration levels are deliberately separate and do not
-invoke one another.
+Regular CI runs only `make test`. Run `make test-integration` explicitly when
+CLI E2E, timing, process, transport, or Docker boundaries change. During local
+iteration, run the focused Go package or scenario being changed. The levels are
+deliberately separate and do not invoke one another.
 
 The direct suites prove the ten R7 invariants, local continuity, federated
 re-admission, and the data-only collaboration cases. A plain Go architecture

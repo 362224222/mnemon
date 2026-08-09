@@ -9,6 +9,18 @@ HARNESS_LDFLAGS := -s -w -X main.version=$(VERSION)
 GO_VERSION   := $(shell awk '$$1 == "go" { print $$2; exit }' go.mod)
 HARNESS_GO_VERSION := $(shell awk '$$1 == "go" { print $$2; exit }' harness/go.mod)
 HARNESS_GO   := env GOTOOLCHAIN=go$(HARNESS_GO_VERSION) GOFLAGS=-mod=readonly go -C harness
+HARNESS_DETERMINISTIC_PKGS := \
+	./cmd/mnemon-harness \
+	./internal/agency \
+	./internal/attach \
+	./internal/authority \
+	./internal/cas \
+	./internal/selector \
+	./internal/selector/simtest \
+	./test/architecture \
+	./test/observer \
+	./test/r7/domainops/trace \
+	./test/r8/network/runner/trace
 HARNESS_TESTDATA_PKGS := \
 	./internal/selector/testdata/network/cmd/r8-peer \
 	./testdata/r7/domain-ops/cmd/domain-load \
@@ -52,15 +64,16 @@ uninstall: ## Remove mnemon binary from $GOBIN
 
 # ── Test ─────────────────────────────────────────────────────────────
 
-test: ## Run all fast, deterministic tests without Docker or provider calls
+test: ## Run deterministic tests without E2E, real daemon, or provider calls
 	go vet ./...
 	go test ./...
-	bash scripts/e2e_test.sh
 	$(HARNESS_GO) vet ./... $(HARNESS_TESTDATA_PKGS)
-	$(HARNESS_GO) test ./... $(HARNESS_TESTDATA_PKGS) -count=1
+	$(HARNESS_GO) test $(HARNESS_DETERMINISTIC_PKGS) -count=1
 
-test-integration: ## Run race and real Docker/process integration tests
-	$(HARNESS_GO) test -race ./internal/... $(HARNESS_TESTDATA_PKGS) -count=1
+test-integration: ## Run opt-in E2E, timing, race, process, and Docker tests
+	bash scripts/e2e_test.sh
+	$(HARNESS_GO) test -p 1 ./... $(HARNESS_TESTDATA_PKGS) -count=1
+	$(HARNESS_GO) test -race -p 1 ./internal/... $(HARNESS_TESTDATA_PKGS) -count=1
 	harness/test/r7/runner/run_cases.sh
 	harness/test/r7/runtime/pi/run_delegate_oracle.sh
 	harness/test/r7/domainops/run_world.sh

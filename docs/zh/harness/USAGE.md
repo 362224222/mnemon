@@ -66,8 +66,9 @@ make test
 make test-integration
 ```
 
-付费的 Pi/DeepSeek 场景使用 `make test-live`。这些是开发检查，不是普通
-用户工作流的一部分。
+普通 CI 只运行 `make test`；涉及 CLI E2E、时序、进程、传输或 Docker
+边界时，才显式运行 `make test-integration`。付费的 Pi/DeepSeek 场景使用
+`make test-live`。这些是开发检查，不是普通用户工作流的一部分。
 
 ## Trust model — a governance contract, not a sandbox
 

@@ -382,7 +382,8 @@ Mnemon architecture.
 ```bash
 make build          # build binary
 make install        # build + install to $GOBIN
-make test           # run E2E test suite
+make test           # run deterministic CI tests
+make test-integration  # opt-in CLI E2E and Harness boundary tests
 mnemon setup        # interactive setup
 mnemon setup --eject  # remove all integrations
 make help           # show all targets

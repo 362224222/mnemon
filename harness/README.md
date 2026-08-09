@@ -28,14 +28,16 @@ make harness-build
 make test
 ```
 
-Run the real process, race, and Docker boundary suite for Harness changes:
+Run the opt-in CLI E2E, timing, race, process, and Docker boundary suite when
+those surfaces change:
 
 ```sh
 make test-integration
 ```
 
-Paid Pi/DeepSeek evaluation is an explicit `make test-live` operation. The
-three levels do not invoke one another, and direct behavior tests—not a separate
+Regular CI runs only `make test`. Integration and paid Pi/DeepSeek evaluation
+are explicit `make test-integration` and `make test-live` operations. The three
+levels do not invoke one another, and direct behavior tests—not a separate
 evidence registry—decide pass or fail.
 
 See [the Harness documentation](../docs/harness/README.md), the

@@ -789,8 +789,8 @@ R7 uses direct tests rather than a second contract registry:
 
 | Level | Requirement |
 |---|---|
-| `make test` | Deterministic unit, architecture, fixture, process, observer, and CLI tests pass for both Go modules. |
-| `make test-integration` | Core race checks, the generic R7 Docker case runner, the Pi attachment boundary, the real service world, and the isolated R8 network pass once each. |
+| `make test` | Deterministic unit, projection, observer, and static architecture tests pass without real daemon readiness, CLI E2E, wall-clock scenarios, Docker, or providers. |
+| `make test-integration` | When explicitly requested, CLI E2E, full Harness package tests, Core race checks, the generic R7 Docker case runner, the Pi attachment boundary, the real service world, and the isolated R8 network pass once each. |
 | `make test-live` | When explicitly authorized, real Pi/DeepSeek turns exercise the local and federated product scenarios. Model prose is never the pass/fail oracle. |
 
 The ordinary Go architecture tests enforce root/Harness isolation, the exact
@@ -840,9 +840,10 @@ that it no longer constrains the active Harness. It must not embed the hash of
 the commit that contains its own retirement text.
 
 Active quickstarts must not teach an R7-forbidden registry or schema-loader
-path. `make test` is the deterministic merge gate; Harness-affecting changes
-also run `make test-integration`. The paid `make test-live` evaluation remains
-explicit and cannot make an otherwise failing deterministic tree authoritative.
+path. `make test` is the only regular CI gate. Boundary-affecting changes run
+`make test-integration` explicitly before merge; its timing and process tests
+are not regular CI. The paid `make test-live` evaluation remains explicit and
+cannot make an otherwise failing deterministic tree authoritative.
 
 ## 12. Non-normative material
 
