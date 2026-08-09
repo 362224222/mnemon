@@ -19,11 +19,10 @@ LLM agents forget everything between sessions. Context compaction drops critical
 
 Mnemon gives your agent persistent, cross-session memory — a four-graph knowledge store with intent-aware recall, importance decay, and automatic deduplication. The `mnemon` memory path remains one local binary with zero API keys and one setup command.
 
-Mnemon ships one product executable with two deliberately separate authority
-surfaces. Existing Memory commands remain at the `mnemon` root. Agency lives at
-`mnemon agency ...`; its local daemon/protocol role is called `mnemond` and owns
-durable View → Intent → Receipt state under `.mnemon/agency` plus the optional
-peer boundary. See the [mnemond Agency documentation](docs/mnemond/README.md).
+Mnemon ships one executable with two separate surfaces. Memory stays at the
+`mnemon` root; [Agency](docs/AGENCY.md) lives at `mnemon agency ...` and adds
+durable, project-local responsibility and effect admission to an existing Pi
+agent. Agency does not replace Memory or the Agent Runtime.
 
 > **Claude Max / Pro subscriber?** Mnemon works entirely through your existing subscription — no separate API key required. Your LLM subscription *is* the intelligence layer. Two commands and you're done.
 
@@ -83,8 +82,19 @@ make install
 
 ```bash
 mnemon --version
-mnemon agency --version  # Agency is available on macOS / Linux
+mnemon agency --version
 ```
+
+### Agency (Pi)
+
+```bash
+mnemon agency setup --runtime pi --project-root .
+```
+
+Set up each project once, then use Pi normally. Agency is available on macOS
+and Linux and remains independent from Memory: `mnemon setup --target pi --yes`
+enables Memory, while the command above enables Agency. See the
+[Agency guide](docs/AGENCY.md) for its operating model and optional peers.
 
 ### [Claude Code](https://github.com/anthropics/claude-code)
 
@@ -385,7 +395,7 @@ Mnemon architecture.
 make build          # build the single mnemon executable
 make install        # build + install to $GOBIN
 make test           # run deterministic CI tests
-make test-integration  # opt-in CLI E2E and mnemond Agency boundary tests
+make test-integration  # opt-in CLI E2E and Agency boundary tests
 mnemon setup        # interactive setup
 mnemon setup --eject  # remove all integrations
 make help           # show all targets
@@ -397,7 +407,7 @@ See [Development and Deployment](docs/DEPLOYMENT.md) for Docker, Compose, Ollama
 
 ## Documentation
 
-- [mnemond Agency](docs/mnemond/README.md) — the `mnemon agency` surface for durable project-local Agent authority and optional peer federation
+- [Agency](docs/AGENCY.md) — one-time Pi setup, operating model, completion semantics, and optional peers
 - [Go Engineering Standard](docs/development/go-engineering-standard.md) — maintainability, concurrency, persistence, testing, and review thresholds
 - [Design & Architecture](docs/DESIGN.md) — current engine architecture, algorithms, integration design
 - [Usage & Reference](docs/USAGE.md) — CLI commands, embedding support, architecture overview

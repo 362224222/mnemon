@@ -30,9 +30,9 @@ Mnemon 采用 **LLM-Supervised** 模式：
 - **更强的判断能力**：Opus 级别的 LLM 评估候选链接，而非 gpt-4o-mini
 - **LLM 可替换**：同一套 Binary + Skill 可在 Claude Code、Cursor、任何 LLM CLI 中使用
 
-当前 engine 与正式的 [mnemond Agency](../../mnemond/README.md) 共享
+当前 engine 与 [Mnemon Agency](../AGENCY.md) 共享
 hook-native、LLM-led、protocol-constrained 立场，但 authority 保持分离：
-`mnemon` 负责 memory operation，`mnemond` 负责 project-local Agency admission
+Memory 负责 memory operation，Agency 负责 project-local Agency admission
 与持久 lifecycle state。
 
 ## 2.2 Tools are Organs, Skills are Textbooks

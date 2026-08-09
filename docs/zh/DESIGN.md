@@ -6,13 +6,9 @@
 
 Mnemon 是一个为 LLM agent 设计的持久化记忆系统。它采用 **LLM-Supervised** 模式：宿主 LLM 作为独立记忆 Binary 的外部编排者，通过符号化 CLI 接口交互，而 Binary 负责确定性的存储、图索引和生命周期管理。记忆以四图知识结构组织 — temporal、entity、causal、semantic 四种 edge。`mnemon` 记忆引擎仍以一个 Go binary + SQLite 实现，不依赖任何外部 API。
 
-本文档描述现有 `mnemon` CLI 与 memory-engine architecture。产品还提供独立的
-[mnemond](../mnemond/README.md) 二进制，由它负责 project-local Agency authority
-及其 event-sourced lifecycle state。
-
-`mnemond` 为用户已有的 agent 增加有界的 View → Intent → Receipt authority
-layer。宿主 agent 仍是任务执行 runtime；mnemond 负责持久化 Agency admission、
-Artifact、Handling、Reference 与可选 peer federation，不改变 `mnemon` CLI 行为。
+本文档描述 Memory 引擎。同一个 `mnemon` 可执行文件还提供可选的
+[Mnemon Agency](AGENCY.md)，用于保存持久工作、回执与 peer 协作。Memory 与
+Agency 虽然共享可执行文件，但状态和 authority 彼此独立。
 
 ---
 
@@ -46,9 +42,9 @@ MAGMA 四图模型（temporal、entity、causal、semantic），LLM 注意力与
 
 Markdown 可安装的 runtime 集成：`SKILL.md`、`INSTALL.md`、`GUIDELINE.md`、四个 hook phase（Prime、Remind、Nudge、Compact）、agent 主导的记忆判断、可选 setup 自动化，以及轻量 Markdown 自进化。
 
-### [mnemond Agency Authority](../mnemond/README.md)
+### [Mnemon Agency](AGENCY.md)
 
-正式产品文档，覆盖 project-local Agency setup、Agent Integration、event authority、Artifact 与可选 peer federation。
+说明如何把持久工作、回执和可选 peer 协作接入已有 Agent Runtime。
 
 ### [8. 设计决策与未来方向](design/08-decisions.md)
 

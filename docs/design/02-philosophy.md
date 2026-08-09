@@ -30,9 +30,9 @@ This means:
 - **Stronger judgment capability**: An Opus-class LLM evaluates candidate links, not gpt-4o-mini
 - **LLM swappable**: The same Binary + Skill works across Claude Code, Cursor, or any LLM CLI
 
-This engine and the formal [mnemond Agency](../mnemond/README.md) share a
+This engine and [Mnemon Agency](../AGENCY.md) share a
 hook-native, LLM-led, protocol-constrained stance. Their authority remains
-separate: `mnemon` owns memory operations, while `mnemond` owns project-local
+separate: Memory owns memory operations, while Agency owns project-local
 Agency admission and durable lifecycle state.
 
 ## 2.2 Tools are Organs, Skills are Textbooks

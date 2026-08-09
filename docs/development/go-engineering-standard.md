@@ -1,8 +1,8 @@
 # Go Engineering Standard
 
 - **Status:** project-wide engineering contract
-- **Applies to:** hand-written Go code in both the `mnemon` and mnemond Agency
-  product surfaces
+- **Applies to:** hand-written Go code in both the Memory and Agency product
+  surfaces
 - **Priority:** correctness and safety > clarity > simplicity > reuse > source-line reduction
 
 This document defines how Mnemon uses Go to keep long-lived code understandable,
@@ -47,7 +47,7 @@ responsibilities MUST remain distinct:
   against it; independent unchecked discriminator lists are prohibited.
 
 This split applies to every new Event-like design, not only to the current
-mnemond Agency protocol.
+Agency protocol.
 
 ## 2. Package and ownership design
 
@@ -271,7 +271,7 @@ make test-live         # explicit paid Pi/DeepSeek evaluation
 
 Regular CI runs only `make test` and must not depend on real daemon readiness,
 wall-clock scenario outcomes, Docker, or a provider. Integration deliberately
-rechecks the complete mnemond Agency surface under race, process, and Docker
+rechecks the complete Agency surface under race, process, and Docker
 boundaries; paid provider evaluation remains a separate explicit gate. Focused
 packages may be invoked directly during development, but do not add another
 umbrella target.

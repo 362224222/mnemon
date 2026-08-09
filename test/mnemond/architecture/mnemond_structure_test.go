@@ -67,40 +67,6 @@ func assertNativeMemoryDoesNotImportAgency(t *testing.T, root string) {
 	}
 }
 
-func TestExactlyOneActiveMnemondContract(t *testing.T) {
-	root := repositoryRoot(t)
-	var active []string
-	err := filepath.WalkDir(filepath.Join(root, "docs"), func(path string, entry os.DirEntry,
-		walkErr error,
-	) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			return nil
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if strings.Contains(string(raw), "Status: **ACTIVE**") {
-			relative, err := filepath.Rel(root, path)
-			if err != nil {
-				return err
-			}
-			active = append(active, filepath.ToSlash(relative))
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"docs/mnemond/core-contract.md"}
-	if !slices.Equal(active, want) {
-		t.Fatalf("ACTIVE architecture authorities = %v, want %v", active, want)
-	}
-}
-
 func assertMnemondPackageGraph(t *testing.T, root string) {
 	t.Helper()
 	want := map[string][]string{

@@ -6,14 +6,10 @@
 
 Mnemon is a persistent memory system designed for LLM agents. It adopts the **LLM-Supervised** pattern: the host LLM acts as external orchestrator of a standalone memory binary through symbolic CLI interfaces, while the binary handles deterministic storage, graph indexing, and lifecycle management. Memory is organized as a four-graph knowledge structure with temporal, entity, causal, and semantic edges. The `mnemon` memory engine remains one Go binary + SQLite, with no external API dependencies.
 
-This document describes the existing `mnemon` CLI and memory-engine architecture.
-The product also ships [mnemond](mnemond/README.md), a separate binary that owns
-project-local Agency authority and its event-sourced lifecycle state.
-
-`mnemond` extends the product with a bounded View → Intent → Receipt authority
-layer for agents users already run. The host agent remains the task execution
-runtime; mnemond owns durable Agency admission, Artifacts, Handlings, References,
-and optional peer federation. It does not change `mnemon` CLI behavior.
+This document describes the Memory engine. The same `mnemon` executable also
+provides [Mnemon Agency](AGENCY.md), an optional local authority for durable
+Agent work and peer collaboration. Memory and Agency keep separate state and
+authority even though they share one executable.
 
 ---
 
@@ -47,9 +43,10 @@ Effective Importance (EI) decay formula, immunity rules, auto-pruning, GC comman
 
 Markdown-installable runtime integration: `SKILL.md`, `INSTALL.md`, `GUIDELINE.md`, the four hook phases (Prime, Remind, Nudge, Compact), agent-led memory decisions, optional setup automation, and lightweight markdown self-evolution.
 
-### [mnemond Agency Authority](mnemond/README.md)
+### [Mnemon Agency](AGENCY.md)
 
-The formal product documentation for project-local Agency setup, Agent Integration, event authority, Artifacts, and optional peer federation.
+How to add durable work, receipts, and optional peer collaboration to an
+existing Agent Runtime.
 
 ### [8. Design Decisions & Future Direction](design/08-decisions.md)
 

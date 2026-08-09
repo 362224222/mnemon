@@ -5,7 +5,7 @@
 - Build the single product executable with `go build -o mnemon .`.
 - Run `make test` for the deterministic CI suite. It excludes real daemon
   readiness, CLI E2E, wall-clock scenarios, Docker, and provider calls.
-- Run `make test-integration` explicitly for CLI E2E plus mnemond Agency
+- Run `make test-integration` explicitly for CLI E2E plus Agency
   timing, race, process, and Docker boundaries; it is not a regular CI gate.
 - Run `make test-live` only when explicitly validating the paid Pi/DeepSeek
   scenarios.
@@ -42,7 +42,7 @@
   Commit title plus one or two focused body paragraphs, with bullets only when
   they improve scanning.
 - Choose the commit type by the primary project effect:
-  - `feat` for new developer-facing or mnemond Agency capabilities.
+  - `feat` for new developer-facing or Agency capabilities.
   - `fix` for correctness repairs.
   - `test` for tests, eval scenarios, or fixtures that do not add a new
     reusable capability.
