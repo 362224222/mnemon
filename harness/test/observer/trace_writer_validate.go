@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -19,8 +18,8 @@ var (
 	tokenPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
 	digestPattern     = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	tracePattern      = regexp.MustCompile(`^trace:[A-Za-z0-9][A-Za-z0-9._:-]{0,121}$`)
-	sourceClasses     = []string{"runtime", "r7_authority", "transport", "r8_selector", "oracle", "runner"}
-	truthClasses      = []string{"observation", "accepted_local_fact", "derived_projection", "local_preference", "assertion"}
+	sourceClasses     = []string{"runtime", "r7_authority", "transport", "oracle", "runner"}
+	truthClasses      = []string{"observation", "accepted_local_fact", "derived_projection", "assertion"}
 	intentDenialCodes = []string{
 		"invalid_argument", "content_required", "content_too_large", "artifact_invalid",
 		"artifact_too_large", "authentication_failed", "context_required", "context_stale",
@@ -64,9 +63,6 @@ func (writer *Writer) validateFact(fact Fact, sequence int) (string, error) {
 		classification.truth != string(fact.Truth) {
 		return "", fmt.Errorf("trace writer: fact %d has invalid kind/source/truth classification", sequence)
 	}
-	if strings.HasPrefix(fact.Kind, "r8.") && fact.References.Selection == "" {
-		return "", fmt.Errorf("trace writer: fact %d has no SelectionID", sequence)
-	}
 	if err := writer.validateCauses(fact.Causes, sequence); err != nil {
 		return "", err
 	}
@@ -99,11 +95,6 @@ var kindEvidenceRules = map[string]kindEvidenceRule{
 	"test.attention.exhausted": {"attention exhaustion evidence", validExhaustedAttentionEvidence},
 	"test.attention.quiescent": {"attention quiescence evidence", validQuiescentAttentionEvidence},
 	"test.attention.occupied":  {"occupied attention boundary evidence", validOccupiedAttentionEvidence},
-	"r8.selection.seeded":      {"seed preference evidence", validSelectionSeedEvidence},
-	"r8.round.frozen":          {"frozen round evidence", validFrozenRoundEvidence},
-	"r8.vote.observed":         {"vote evidence", validVoteEvidence},
-	"r8.round.settled":         {"settled round evidence", validSettledRoundEvidence},
-	"r8.observation.produced":  {"preference observation", validPreferenceObservation},
 }
 
 func validRuntimeViewEvidence(fact Fact) bool {
@@ -209,32 +200,6 @@ func validAttentionFields(fact Fact) bool {
 		*fact.Fields.TurnsUsed >= 0 && *fact.Fields.TurnsUsed <= *fact.Fields.TurnLimit
 }
 
-func validSelectionSeedEvidence(fact Fact) bool {
-	return fact.Fields.PreferenceAfter != "" && fact.Fields.Phase != ""
-}
-
-func validFrozenRoundEvidence(fact Fact) bool {
-	return fact.Fields.Round != nil && fact.Fields.SampleSize != nil &&
-		fact.Fields.Alpha != nil && fact.Fields.PreferenceBefore != "" &&
-		fact.Fields.MarginBefore != nil
-}
-
-func validVoteEvidence(fact Fact) bool {
-	return fact.Fields.Round != nil && fact.Fields.VotesA != nil &&
-		fact.Fields.VotesB != nil && fact.Fields.Authenticated != nil
-}
-
-func validSettledRoundEvidence(fact Fact) bool {
-	return fact.Fields.Round != nil && fact.Fields.PreferenceBefore != "" &&
-		fact.Fields.PreferenceAfter != "" && fact.Fields.MarginBefore != nil &&
-		fact.Fields.MarginAfter != nil && fact.Fields.Recolored != nil && fact.Fields.Phase != ""
-}
-
-func validPreferenceObservation(fact Fact) bool {
-	return fact.Fields.Round != nil && fact.Fields.Result != "" &&
-		fact.Fields.PreferenceAfter != "" && fact.Fields.MarginAfter != nil && fact.Fields.Phase != ""
-}
-
 func (writer *Writer) validateCauses(causes []string, sequence int) error {
 	if len(causes) > 16 {
 		return fmt.Errorf("trace writer: fact %d causes exceed 16", sequence)
@@ -256,7 +221,7 @@ func (writer *Writer) validateCauses(causes []string, sequence int) error {
 }
 
 func validateReferences(refs References, sequence int) error {
-	for _, value := range []string{refs.Artifact, refs.EventDigest, refs.Selection} {
+	for _, value := range []string{refs.Artifact, refs.EventDigest} {
 		if value != "" && !digestPattern.MatchString(value) {
 			return fmt.Errorf("trace writer: fact %d has invalid digest reference", sequence)
 		}
@@ -282,10 +247,6 @@ func validateFactFields(fields FactFields, sequence int) error {
 			"observation.declined", "observation.unresolved",
 		}},
 		{"outcome", fields.Outcome, []string{"accepted", "rejected", "replayed", "completed", "declined", "unresolved"}},
-		{"phase", fields.Phase, []string{"awaiting_seed", "active", "observed"}},
-		{"preference_after", fields.PreferenceAfter, []string{"A", "B"}},
-		{"preference_before", fields.PreferenceBefore, []string{"A", "B"}},
-		{"result", fields.Result, []string{"threshold_reached", "inconclusive"}},
 		{"state", fields.State, []string{"open", "active", "pending", "settled", "expired", "retracted", "terminal"}},
 		{"status", fields.Status, []string{"pass", "fail", "incomplete", "unknown", "not_applicable"}},
 	}
@@ -306,15 +267,11 @@ func validateFactFields(fields FactFields, sequence int) error {
 		minimum int
 		maximum int
 	}{
-		{"alpha", fields.Alpha, 1, 64}, {"artifact_count", fields.ArtifactCount, 0, 64},
+		{"artifact_count", fields.ArtifactCount, 0, 64},
 		{"attempt_count", fields.AttemptCount, 0, 256},
 		{"batched_unattributed_count", fields.BatchedCount, 0, 256},
 		{"count", fields.Count, 1, 256},
 		{"invalid_result_count", fields.InvalidCount, 0, 256},
-		{"invalid_votes", fields.InvalidVotes, 0, 128},
-		{"margin_after", fields.MarginAfter, -1024, 1024},
-		{"margin_before", fields.MarginBefore, -1024, 1024},
-		{"no_votes", fields.NoVotes, 0, 64},
 		{"occupied_claims", fields.OccupiedClaims, 0, 64},
 		{"open_total", fields.OpenTotal, 0, 64},
 		{"open_unclaimed", fields.OpenUnclaimed, 0, 64},
@@ -322,10 +279,9 @@ func validateFactFields(fields FactFields, sequence int) error {
 		{"related_projected", fields.RelatedProjected, 0, 1},
 		{"related_total", fields.RelatedTotal, 0, 128},
 		{"payload_bytes", fields.PayloadBytes, 0, 32 << 10},
-		{"sample_size", fields.SampleSize, 0, 64}, {"votes_a", fields.VotesA, 0, 64},
 		{"success_count", fields.SuccessCount, 0, 256},
 		{"tool_error_count", fields.ToolErrorCount, 0, 256},
-		{"votes_b", fields.VotesB, 0, 64}, {"target_count", fields.TargetCount, 0, 16},
+		{"target_count", fields.TargetCount, 0, 16},
 		{"turn_limit", fields.TurnLimit, 1, 256}, {"turns_used", fields.TurnsUsed, 0, 256},
 	}
 	for _, value := range integers {

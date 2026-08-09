@@ -247,14 +247,14 @@
     .metric-value { display: block; font-size: 23px; color: var(--ink); }
     .metric-label { display: block; margin-top: 5px; color: var(--muted); font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; }
 
-    .gate-grid, .final-grid, .observation-grid {
+    .gate-grid, .final-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       gap: 10px;
       margin-top: 16px;
     }
 
-    .gate, .final-card, .observation-card {
+    .gate, .final-card {
       padding: 12px;
       border: 1px solid var(--line);
       border-radius: 11px;
@@ -284,7 +284,6 @@
     .fact-chip.runtime { border-color: var(--blue); }
     .fact-chip.r7_authority { border-color: var(--mint); }
     .fact-chip.transport { border-color: var(--violet); }
-    .fact-chip.r8_selector { border-color: var(--amber); }
     .fact-chip.oracle { border-color: var(--red); }
     .fact-chip .seq { color: var(--muted); }
     .fact-chip .kind { display: block; color: var(--ink); overflow-wrap: anywhere; }
@@ -308,7 +307,6 @@
     .dot.observation { background: var(--blue); }
     .dot.accepted_local_fact { background: var(--mint); }
     .dot.derived_projection { background: var(--violet); }
-    .dot.local_preference { background: var(--amber); }
     .dot.assertion { background: var(--red); }
 
     .chain-list { display: grid; gap: 12px; }
@@ -316,23 +314,6 @@
     .chain-key { color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
     .chain-steps { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
     .step { padding: 6px 8px; border-radius: 7px; background: var(--panel-2); font-size: 9px; }
-
-    .selection-warning {
-      margin-bottom: 14px;
-      padding: 11px 13px;
-      border: 1px solid rgba(245, 185, 66, 0.45);
-      border-radius: 10px;
-      color: var(--amber);
-      background: rgba(245, 185, 66, 0.07);
-      font-size: 11px;
-      line-height: 1.55;
-    }
-    .selection-group { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
-    .selection-group-title { margin: 0 0 10px; color: var(--ink); font-size: 12px; overflow-wrap: anywhere; }
-
-    .selection-empty { color: var(--muted); font-size: 12px; line-height: 1.6; }
-    .observation-card strong { display: block; color: var(--amber); margin-bottom: 7px; font-size: 11px; }
-    .observation-card span { color: var(--muted); font-size: 10px; line-height: 1.5; }
 
     footer { margin-top: 24px; color: var(--muted); font-size: 10px; line-height: 1.6; text-align: center; }
 
@@ -357,7 +338,7 @@
       <div>
         <p class="eyebrow">Harness evidence surface</p>
         <h1>Mnemon Test Observatory</h1>
-        <p class="lede">Replay sanitized Agent turns, admitted Events, remote causality, collaboration evidence, and optional R8 preference coloring. This page observes evidence; it never creates authority.</p>
+        <p class="lede">Replay sanitized Agent turns, admitted Events, remote causality, and collaboration evidence. This page observes evidence; it never creates authority.</p>
       </div>
       <span class="local-mark">local-only · no network</span>
     </header>
@@ -427,18 +408,9 @@
         <div id="finalState" class="final-grid"></div>
       </section>
 
-      <section id="selection" class="panel" aria-labelledby="selectionTitle">
-        <div class="panel-head">
-          <div>
-            <h2 id="selectionTitle">05 / R8 preference coloring</h2>
-            <p class="panel-kicker">Machine-frequency local observations partitioned by exact frozen binary SelectionID.</p>
-          </div>
-        </div>
-        <div id="selectionBody"></div>
-      </section>
     </main>
 
-    <footer>Observation is not authority · transport is not completion · local preference is not consensus</footer>
+    <footer>Observation is not authority · transport is not completion</footer>
   </div>
 
   <script>
@@ -454,10 +426,6 @@
       causalNodes: 12,
       collaborationFacts: 240,
       collaborationComponents: 24,
-      selectionGroups: 8,
-      selectionNodes: 16,
-      selectionRounds: 20,
-      selectionObservations: 64,
       canvasWidth: 2400,
       canvasHeight: 1000
     });
@@ -471,12 +439,11 @@
     const FACT_KEYS = Object.freeze(["schema", "version", "record", "seq", "id", "captured_at", "source", "agent", "turn", "kind", "truth", "causes", "refs", "facts"]);
     const RESULT_KEYS = Object.freeze(["schema", "version", "record", "status", "finished_at", "record_count", "trace_digest", "gates"]);
     const FACT_FIELDS = Object.freeze([
-      "action", "alpha", "artifact_count", "attempt_count", "authenticated", "batched_unattributed_count", "bypassed_hook", "byte_size",
-      "code", "consequence", "count", "duration_ms", "episode", "gate_id", "goal_digest", "goal_satisfied", "has_current", "hook_cue", "invalid_result_count", "invalid_votes",
-      "margin_after", "margin_before", "no_vote", "no_votes", "occupied_claims", "open_total", "open_unclaimed", "outcome", "payload_bytes", "phase",
-      "preference_after", "preference_before", "recolored", "related_projected", "related_total", "replayed", "reply_required", "result", "role", "round",
-      "sample_size", "semantic_kind", "state", "status", "success_count", "target_count", "targets", "timed_out", "tool_error_count", "truncated",
-      "turn_limit", "turns_used", "view_nonempty", "votes_a", "votes_b"
+      "action", "artifact_count", "attempt_count", "authenticated", "batched_unattributed_count", "bypassed_hook", "byte_size",
+      "code", "consequence", "count", "duration_ms", "episode", "gate_id", "goal_digest", "goal_satisfied", "has_current", "hook_cue", "invalid_result_count",
+      "occupied_claims", "open_total", "open_unclaimed", "outcome", "payload_bytes", "related_projected", "related_total", "replayed", "reply_required", "role", "round",
+      "semantic_kind", "state", "status", "success_count", "target_count", "targets", "timed_out", "tool_error_count", "truncated",
+      "turn_limit", "turns_used", "view_nonempty"
     ]);
     const INTENT_DENIAL_CODES = Object.freeze([
       "invalid_argument", "content_required", "content_too_large", "artifact_invalid",
@@ -512,11 +479,6 @@
       "r7.artifact.captured|r7_authority|accepted_local_fact",
       "r7.artifact.read|runtime|observation",
       "r7.artifact.verified|r7_authority|accepted_local_fact",
-      "r8.selection.seeded|r8_selector|local_preference",
-      "r8.round.frozen|r8_selector|local_preference",
-      "r8.vote.observed|r8_selector|observation",
-      "r8.round.settled|r8_selector|local_preference",
-      "r8.observation.produced|r8_selector|local_preference",
       "test.attention.wave|oracle|assertion",
       "test.attention.outcome|oracle|assertion",
       "test.attention.exhausted|oracle|assertion",
@@ -529,13 +491,12 @@
       return [kind, Object.freeze({ source, truth })];
     }));
     const KNOWN_KINDS = new Set(FACT_CLASSIFICATIONS.keys());
-    const SOURCE_CLASSES = new Set(["runtime", "r7_authority", "transport", "r8_selector", "oracle", "runner"]);
-    const TRUTH_CLASSES = new Set(["observation", "accepted_local_fact", "derived_projection", "local_preference", "assertion"]);
+    const SOURCE_CLASSES = new Set(["runtime", "r7_authority", "transport", "oracle", "runner"]);
+    const TRUTH_CLASSES = new Set(["observation", "accepted_local_fact", "derived_projection", "assertion"]);
     const truthColors = Object.freeze({
       observation: "#70a5ff",
       accepted_local_fact: "#6ee7b7",
       derived_projection: "#bc9cff",
-      local_preference: "#f5b942",
       assertion: "#ff7a82"
     });
     const state = { runs: [], selected: -1 };
@@ -557,8 +518,7 @@
       legend: document.getElementById("truthLegend"),
       collaborationNotice: document.getElementById("collaborationNotice"),
       chains: document.getElementById("chains"),
-      finalState: document.getElementById("finalState"),
-      selection: document.getElementById("selectionBody")
+      finalState: document.getElementById("finalState")
     });
 
     function node(tag, className, value) {
@@ -652,10 +612,9 @@
     }
 
     function validateRefs(refs, label) {
-      exactObject(refs, ["artifact", "correlation", "delivery", "event", "event_digest", "handling", "principal", "reference_head", "selection"], [], label);
+      exactObject(refs, ["artifact", "correlation", "delivery", "event", "event_digest", "handling", "principal", "reference_head"], [], label);
       optionalString(refs.artifact, DIGEST, label + ".artifact");
       optionalString(refs.event_digest, DIGEST, label + ".event_digest");
-      optionalString(refs.selection, DIGEST, label + ".selection");
       ["correlation", "delivery", "event", "handling", "principal", "reference_head"].forEach(key => optionalString(refs[key], TOKEN, label + "." + key));
     }
 
@@ -664,22 +623,13 @@
       if (facts.action !== undefined) requireEnum(facts.action, ["current", "submit", "capture", "read", "probe", "mutation", "other"], label + ".action");
       if (facts.consequence !== undefined) requireEnum(facts.consequence, ["handling.create", "handling.advance", "handling.resolve.completed", "handling.resolve.declined", "handling.resolve.unresolved", "reference.publish", "reference.supersede", "reference.retract", "observation.completed", "observation.declined", "observation.unresolved"], label + ".consequence");
       if (facts.outcome !== undefined) requireEnum(facts.outcome, ["accepted", "rejected", "replayed", "completed", "declined", "unresolved"], label + ".outcome");
-      if (facts.phase !== undefined) requireEnum(facts.phase, ["awaiting_seed", "active", "observed"], label + ".phase");
-      if (facts.preference_after !== undefined) requireEnum(facts.preference_after, ["A", "B"], label + ".preference_after");
-      if (facts.preference_before !== undefined) requireEnum(facts.preference_before, ["A", "B"], label + ".preference_before");
-      if (facts.result !== undefined) requireEnum(facts.result, ["threshold_reached", "inconclusive"], label + ".result");
       if (facts.state !== undefined) requireEnum(facts.state, ["open", "active", "pending", "settled", "expired", "retracted", "terminal"], label + ".state");
       if (facts.status !== undefined) requireEnum(facts.status, ["pass", "fail", "incomplete", "unknown", "not_applicable"], label + ".status");
-      optionalInteger(facts.alpha, 1, 64, label + ".alpha");
       optionalInteger(facts.artifact_count, 0, 64, label + ".artifact_count");
       optionalInteger(facts.attempt_count, 0, 256, label + ".attempt_count");
       optionalInteger(facts.batched_unattributed_count, 0, 256, label + ".batched_unattributed_count");
       optionalInteger(facts.count, 1, 256, label + ".count");
-      optionalInteger(facts.invalid_votes, 0, 128, label + ".invalid_votes");
       optionalInteger(facts.invalid_result_count, 0, 256, label + ".invalid_result_count");
-      optionalInteger(facts.margin_after, -1024, 1024, label + ".margin_after");
-      optionalInteger(facts.margin_before, -1024, 1024, label + ".margin_before");
-      optionalInteger(facts.no_votes, 0, 64, label + ".no_votes");
       optionalInteger(facts.occupied_claims, 0, 64, label + ".occupied_claims");
       optionalInteger(facts.open_total, 0, 64, label + ".open_total");
       optionalInteger(facts.open_unclaimed, 0, 64, label + ".open_unclaimed");
@@ -687,14 +637,11 @@
       optionalInteger(facts.round, 0, 1024, label + ".round");
       optionalInteger(facts.related_projected, 0, 1, label + ".related_projected");
       optionalInteger(facts.related_total, 0, 128, label + ".related_total");
-      optionalInteger(facts.sample_size, 0, 64, label + ".sample_size");
       optionalInteger(facts.success_count, 0, 256, label + ".success_count");
       optionalInteger(facts.target_count, 0, 16, label + ".target_count");
       optionalInteger(facts.tool_error_count, 0, 256, label + ".tool_error_count");
       optionalInteger(facts.turn_limit, 1, 256, label + ".turn_limit");
       optionalInteger(facts.turns_used, 0, 256, label + ".turns_used");
-      optionalInteger(facts.votes_a, 0, 64, label + ".votes_a");
-      optionalInteger(facts.votes_b, 0, 64, label + ".votes_b");
       optionalInteger(facts.byte_size, 0, 16777216, label + ".byte_size");
       optionalInteger(facts.duration_ms, 0, 3600000, label + ".duration_ms");
       const operationCounts = [facts.attempt_count, facts.success_count,
@@ -713,7 +660,7 @@
       if (facts.target_count !== undefined && facts.target_count !== (facts.targets || []).length) {
         fail(label + ".target_count", "must equal targets length");
       }
-      ["authenticated", "bypassed_hook", "goal_satisfied", "has_current", "hook_cue", "no_vote", "recolored", "replayed", "reply_required", "timed_out", "truncated", "view_nonempty"].forEach(key => optionalBoolean(facts[key], label + "." + key));
+      ["authenticated", "bypassed_hook", "goal_satisfied", "has_current", "hook_cue", "replayed", "reply_required", "timed_out", "truncated", "view_nonempty"].forEach(key => optionalBoolean(facts[key], label + "." + key));
       ["code", "episode", "gate_id", "role", "semantic_kind"].forEach(key => optionalString(facts[key], TOKEN, label + "." + key));
       if (facts.goal_digest !== undefined) requireString(facts.goal_digest, DIGEST, label + ".goal_digest");
       if ((facts.goal_digest === undefined) !== (facts.goal_satisfied === undefined)) {
@@ -748,9 +695,6 @@
       const classification = FACT_CLASSIFICATIONS.get(record.kind);
       if (!classification || classification.source !== record.source.class || classification.truth !== record.truth) {
         fail(label, "has an invalid kind/source/truth classification");
-      }
-      if (record.kind.startsWith("r8.") && record.refs.selection === undefined) {
-        fail(label + ".refs.selection", "is required for R8 preference evidence");
       }
       seen.add(record.id);
     }
@@ -840,21 +784,6 @@
           required(record.facts, ["gate_id", "status"], label + ".facts");
           requireEnum(record.facts.status,
             ["pass", "fail", "unknown", "not_applicable"], label + ".facts.status");
-          break;
-        case "r8.selection.seeded":
-          required(record.facts, ["preference_after", "phase"], label + ".facts");
-          break;
-        case "r8.round.frozen":
-          required(record.facts, ["round", "sample_size", "alpha", "preference_before", "margin_before"], label + ".facts");
-          break;
-        case "r8.vote.observed":
-          required(record.facts, ["round", "votes_a", "votes_b", "authenticated"], label + ".facts");
-          break;
-        case "r8.round.settled":
-          required(record.facts, ["round", "preference_before", "preference_after", "margin_before", "margin_after", "recolored", "phase"], label + ".facts");
-          break;
-        case "r8.observation.produced":
-          required(record.facts, ["round", "result", "preference_after", "margin_after", "phase"], label + ".facts");
           break;
       }
     }
@@ -1013,7 +942,6 @@
       renderAgents(run);
       renderCausality(run);
       renderCollaboration(run);
-      renderSelection(run);
     }
 
     function renderSummary(run) {
@@ -1264,7 +1192,7 @@
     }
 
     function renderCollaboration(run) {
-      const allFacts = run.facts.filter(fact => !fact.kind.startsWith("r8.") && fact.kind !== "test.gate.checked");
+      const allFacts = run.facts.filter(fact => fact.kind !== "test.gate.checked");
       const referencedCauses = new Set();
       allFacts.forEach(fact => fact.causes.forEach(cause => referencedCauses.add(cause)));
       const standaloneRuntimeFacts = allFacts.filter(fact =>
@@ -1286,7 +1214,7 @@
         : "");
       elements.chains.replaceChildren();
       if (!components.length) {
-        elements.chains.append(node("div", "selection-empty", "No collaboration facts are present in this trace."));
+        elements.chains.append(node("div", "message", "No collaboration facts are present in this trace."));
       }
       components.forEach((component, index) => {
         const participants = new Set(component.map(fact => fact.source.node));
@@ -1325,112 +1253,6 @@
       if (!finals.length) elements.finalState.append(node("div", "final-card", "No terminal Handling, Reference change, or later Artifact read was observed."));
     }
 
-    function renderSelection(run) {
-      elements.selection.replaceChildren();
-      const facts = run.facts.filter(fact => fact.kind.startsWith("r8."));
-      if (!facts.length) {
-        const applicability = run.facts.find(fact => fact.kind === "test.gate.checked" && fact.facts.gate_id === "r8.applicability");
-        const title = applicability && applicability.facts.status === "not_applicable" ? "R8 not applicable to this run." : "No R8 selector evidence is present.";
-        const detail = applicability && applicability.facts.code ? " " + applicability.facts.code.replaceAll("-", " ") + "." : " Load a separate selector trace to inspect coloring.";
-        elements.selection.append(node("div", "selection-empty", title + detail));
-        return;
-      }
-      elements.selection.append(node("div", "selection-warning", "LOCAL PREFERENCE ONLY — threshold_reached is not agreement, consensus, finality, truth, an R7 Effect, or completion."));
-      const bySelection = new Map();
-      facts.forEach(fact => {
-        const selection = fact.refs.selection;
-        if (!bySelection.has(selection)) bySelection.set(selection, []);
-        bySelection.get(selection).push(fact);
-      });
-      const groups = Array.from(bySelection.entries())
-        .sort((left, right) => left[1][0].seq - right[1][0].seq);
-      const visibleGroups = groups.slice(0, LIMITS.selectionGroups);
-      if (groups.length > visibleGroups.length) {
-        elements.selection.append(node("div", "message", "Rendering the first " + visibleGroups.length + " of " + groups.length + " SelectionIDs by first recorded sequence; no preference evidence is merged across selections."));
-      }
-      visibleGroups.forEach(([selection, selectionFacts]) => renderSelectionGroup(selection, selectionFacts));
-    }
-
-    function renderSelectionGroup(selection, facts) {
-      const group = node("div", "selection-group");
-      const allNodes = Array.from(new Set(facts.map(fact => fact.source.node)));
-      const nodes = allNodes.slice(0, LIMITS.selectionNodes);
-      const allRounds = Math.max(0, ...facts.map(fact => Number(fact.facts.round || 0)));
-      const rounds = Math.min(allRounds, LIMITS.selectionRounds);
-      const allObservations = facts.filter(fact => fact.kind === "r8.observation.produced");
-      const observations = allObservations.slice(0, LIMITS.selectionObservations);
-      const visibleNodes = new Set(nodes);
-      const seeds = new Map();
-      const settledRounds = new Map();
-      let repeatedCells = 0;
-      facts.forEach(fact => {
-        if (!visibleNodes.has(fact.source.node)) return;
-        if (fact.kind === "r8.selection.seeded") {
-          if (seeds.has(fact.source.node)) repeatedCells++;
-          else seeds.set(fact.source.node, fact);
-        }
-        if (fact.kind === "r8.round.settled" && fact.facts.round <= rounds) {
-          const key = fact.source.node + ":" + fact.facts.round;
-          if (settledRounds.has(key)) repeatedCells++;
-          else settledRounds.set(key, fact);
-        }
-      });
-      const truncation = [];
-      if (allNodes.length > nodes.length) truncation.push("nodes " + nodes.length + "/" + allNodes.length);
-      if (allRounds > rounds) truncation.push("rounds " + rounds + "/" + allRounds);
-      if (allObservations.length > observations.length) truncation.push("observations " + observations.length + "/" + allObservations.length);
-      if (repeatedCells) truncation.push("duplicate node/round records omitted " + repeatedCells);
-      const heading = node("h3", "selection-group-title", "Selection " + short(selection, 42) + " · " + facts.length + " facts · " + allNodes.length + " nodes");
-      heading.title = selection;
-      group.append(heading);
-      if (truncation.length) group.append(node("div", "message", "Rendering a bounded projection for this SelectionID (" + truncation.join(", ") + "); trace integrity and result status remain unchanged."));
-      const columnWidth = 95;
-      const width = Math.min(LIMITS.canvasWidth, Math.max(720, (rounds + 1) * columnWidth + 190));
-      const height = Math.min(LIMITS.canvasHeight, Math.max(240, nodes.length * 48 + 80));
-      const canvas = document.createElement("canvas");
-      canvas.setAttribute("aria-label", "R8 local preference coloring by peer and round");
-      canvas.textContent = "R8 local preference coloring";
-      const wrap = node("div", "canvas-wrap");
-      wrap.append(canvas);
-      group.append(wrap);
-      const context = fitCanvas(canvas, width, height);
-      context.font = "10px ui-monospace, monospace";
-      context.fillStyle = "#91a099";
-      context.fillText("seed", 170, 28);
-      for (let round = 1; round <= rounds; round++) context.fillText("round " + round, 170 + round * columnWidth, 28);
-      nodes.forEach((name, row) => {
-        const y = 52 + row * 48;
-        context.fillStyle = "#b8c4be";
-        context.fillText(name, 14, y + 17);
-        const seed = seeds.get(name);
-        drawPreferenceCell(context, 160, y, seed && seed.facts.preference_after, seed ? 0 : null);
-        for (let round = 1; round <= rounds; round++) {
-          const settled = settledRounds.get(name + ":" + round);
-          drawPreferenceCell(context, 160 + round * columnWidth, y, settled && settled.facts.preference_after, settled && settled.facts.margin_after);
-        }
-      });
-      const grid = node("div", "observation-grid");
-      observations.forEach(fact => {
-        const card = node("div", "observation-card");
-        card.append(node("strong", "", fact.source.node + " / " + (fact.facts.result || "unknown")));
-        card.append(node("span", "", "preference=" + (fact.facts.preference_after || "—") + " · margin=" + (fact.facts.margin_after ?? "—") + " · rounds=" + (fact.facts.round ?? "—")));
-        grid.append(card);
-      });
-      if (observations.length) group.append(grid);
-      else group.append(node("div", "selection-empty", "No terminal preference observation was recorded for this SelectionID."));
-      elements.selection.append(group);
-    }
-
-    function drawPreferenceCell(context, x, y, preference, margin) {
-      const color = preference === "A" ? "#70a5ff" : preference === "B" ? "#f5b942" : "#26332e";
-      context.fillStyle = color;
-      context.fillRect(x, y, 78, 31);
-      context.fillStyle = preference ? "#07100c" : "#91a099";
-      context.font = "700 11px ui-monospace, monospace";
-      const label = preference ? preference + (margin === null ? "" : "  m=" + margin) : "no observation";
-      context.fillText(label, x + 8, y + 20);
-    }
-
     elements.files.addEventListener("change", event => loadFiles(event.target.files));
     ["dragenter", "dragover"].forEach(type => elements.drop.addEventListener(type, event => {
       event.preventDefault();
@@ -1441,7 +1263,7 @@
       elements.drop.classList.remove("dragging");
     }));
     elements.drop.addEventListener("drop", event => loadFiles(event.dataTransfer.files));
-    window.addEventListener("resize", () => { if (state.selected >= 0) { renderCausality(state.runs[state.selected]); renderSelection(state.runs[state.selected]); } });
+    window.addEventListener("resize", () => { if (state.selected >= 0) renderCausality(state.runs[state.selected]); });
   </script>
 </body>
 </html>

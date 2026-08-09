@@ -2,7 +2,6 @@ package observer
 
 import (
 	"sort"
-	"strings"
 	"testing"
 )
 
@@ -11,7 +10,7 @@ func validFactClassification(fact factRecord) bool {
 	if !exists || fact.Source.Class != expected.source || fact.Truth != expected.truth {
 		return false
 	}
-	return !strings.HasPrefix(fact.Kind, "r8.") || fact.Refs.Selection != ""
+	return true
 }
 
 func knownFactKinds() []string {
@@ -42,9 +41,6 @@ func TestFactClassificationMatchesBrowser(t *testing.T) {
 func TestFactClassificationFailsClosed(t *testing.T) {
 	for kind, expected := range factClassifications {
 		fact := factRecord{Kind: kind, Source: sourceWire{Class: expected.source}, Truth: expected.truth}
-		if strings.HasPrefix(kind, "r8.") {
-			fact.Refs.Selection = "sha256:" + strings.Repeat("a", 64)
-		}
 		if !validFactClassification(fact) {
 			t.Fatalf("valid classification for %q was rejected", kind)
 		}
@@ -63,9 +59,5 @@ func TestFactClassificationFailsClosed(t *testing.T) {
 		if validFactClassification(fact) {
 			t.Fatalf("wrong truth for %q was accepted", kind)
 		}
-	}
-	r8 := factRecord{Kind: "r8.selection.seeded", Source: sourceWire{Class: "r8_selector"}, Truth: "local_preference"}
-	if validFactClassification(r8) {
-		t.Fatal("R8 fact without SelectionID was accepted")
 	}
 }

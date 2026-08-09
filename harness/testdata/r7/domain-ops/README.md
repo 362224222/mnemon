@@ -1,8 +1,7 @@
 # Federated Domain Operations Case
 
 This fixture exercises R7 federation and the View-driven evolution loop against
-a running checkout system. The optional R8 binary selector is verified by its
-independent deletion-safe suite and is deliberately not forced into this
+a running checkout system. Optional selection mechanisms remain outside this
 non-binary incident. This is a real service world, not a transcript fixture:
 requests cross HTTP service
 boundaries, state changes in the services, and an independent probe judges the
@@ -172,4 +171,4 @@ from Event causation or reply delivery.
 Files under `domains/` are projected into the corresponding Agent workspaces.
 They may teach the Agent how to observe and safely operate its own domain. They
 must remain independent of the incident seed. Removing these instructions must
-not change mnemond Core, Event physics, peer delivery, or R8 selection logic.
+not change mnemond Core, Event physics, or peer delivery.

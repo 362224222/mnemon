@@ -85,8 +85,6 @@ func writeTrace(destination io.Writer, proof evidence) error {
 		{ID: "scenario.evolution", Status: evolutionGateStatus(
 			proof.Report.Protocol.Evolution.Demonstrated),
 			Evidence: []string{gateFacts["scenario.evolution"]}},
-		{ID: "r8.applicability", Status: observer.GateNotApplicable,
-			Evidence: []string{gateFacts["r8.applicability"]}},
 	}
 	return writer.Finish(observer.Result{Status: observer.ResultPassed,
 		FinishedAt: finishedAt, Gates: gates})
@@ -256,7 +254,6 @@ func appendGateFacts(writer *observer.Writer, capturedAt time.Time, receiptFacts
 		{id: "scenario.isolation", status: "pass", code: "isolated-runtime"},
 		{id: "scenario.evolution", status: evolutionStatus, code: evolutionCode,
 			causes: limit(evolutionFacts)},
-		{id: "r8.applicability", status: "not_applicable", code: "independent-mas"},
 	}
 	if artifactCount < 0 {
 		return nil, errors.New("invalid Artifact evidence count")

@@ -84,12 +84,10 @@ type refsWire struct {
 	Handling      string `json:"handling,omitempty"`
 	Principal     string `json:"principal,omitempty"`
 	ReferenceHead string `json:"reference_head,omitempty"`
-	Selection     string `json:"selection,omitempty"`
 }
 
 type factsWire struct {
 	Action           string   `json:"action,omitempty"`
-	Alpha            *int     `json:"alpha,omitempty"`
 	ArtifactCount    *int     `json:"artifact_count,omitempty"`
 	AttemptCount     *int     `json:"attempt_count,omitempty"`
 	BatchedCount     *int     `json:"batched_unattributed_count,omitempty"`
@@ -106,29 +104,18 @@ type factsWire struct {
 	GoalSatisfied    *bool    `json:"goal_satisfied,omitempty"`
 	HasCurrent       *bool    `json:"has_current,omitempty"`
 	HookCue          *bool    `json:"hook_cue,omitempty"`
-	InvalidVotes     *int     `json:"invalid_votes,omitempty"`
 	InvalidCount     *int     `json:"invalid_result_count,omitempty"`
-	MarginAfter      *int     `json:"margin_after,omitempty"`
-	MarginBefore     *int     `json:"margin_before,omitempty"`
-	NoVote           *bool    `json:"no_vote,omitempty"`
-	NoVotes          *int     `json:"no_votes,omitempty"`
 	OccupiedClaims   *int     `json:"occupied_claims,omitempty"`
 	OpenTotal        *int     `json:"open_total,omitempty"`
 	OpenUnclaimed    *int     `json:"open_unclaimed,omitempty"`
 	Outcome          string   `json:"outcome,omitempty"`
 	PayloadBytes     *int     `json:"payload_bytes,omitempty"`
-	Phase            string   `json:"phase,omitempty"`
-	PreferenceAfter  string   `json:"preference_after,omitempty"`
-	PreferenceBefore string   `json:"preference_before,omitempty"`
-	Recolored        *bool    `json:"recolored,omitempty"`
 	Replayed         *bool    `json:"replayed,omitempty"`
 	ReplyRequired    *bool    `json:"reply_required,omitempty"`
-	Result           string   `json:"result,omitempty"`
 	RelatedProjected *int     `json:"related_projected,omitempty"`
 	RelatedTotal     *int     `json:"related_total,omitempty"`
 	Role             string   `json:"role,omitempty"`
 	Round            *int     `json:"round,omitempty"`
-	SampleSize       *int     `json:"sample_size,omitempty"`
 	SemanticKind     string   `json:"semantic_kind,omitempty"`
 	State            string   `json:"state,omitempty"`
 	Status           string   `json:"status,omitempty"`
@@ -141,8 +128,6 @@ type factsWire struct {
 	TurnLimit        *int     `json:"turn_limit,omitempty"`
 	TurnsUsed        *int     `json:"turns_used,omitempty"`
 	ViewNonempty     *bool    `json:"view_nonempty,omitempty"`
-	VotesA           *int     `json:"votes_a,omitempty"`
-	VotesB           *int     `json:"votes_b,omitempty"`
 }
 
 type resultRecord struct {
@@ -184,11 +169,10 @@ func TestObserverIsSingleFileLocalOnlyAndMarkupSafe(t *testing.T) {
 		`connect-src 'none'`, `id="traceFiles"`, `id="dropZone"`, `new FileReader()`,
 		`readAsArrayBuffer`, `crypto.subtle.digest`, `TextDecoder("utf-8", { fatal: true })`,
 		`id="summary"`, `id="agents"`, `id="causality"`, `id="collaboration"`,
-		`id="selection"`, `.textContent`, "LOCAL PREFERENCE ONLY",
-		"not agreement, consensus, finality, truth", "contains unknown field",
+		`.textContent`, "contains unknown field",
 		"does not refer to an earlier fact", "trace_digest does not cover",
 		"invalid kind/source/truth classification", "explicit backward causes",
-		"no preference evidence is merged across selections", "collaborationComponents",
+		"collaborationComponents",
 		"validateKindEvidence", "isStandaloneRuntimeComponent", "collaborationPriority",
 		"semantic_kind", "terminal Handling outcome", "Agent evidence lane",
 	} {
@@ -208,7 +192,7 @@ func TestObserverFilePickerAcceptsDocumentedTraceExtension(t *testing.T) {
 
 func TestObserverFixturesAreStrictRedactedRenderInputs(t *testing.T) {
 	paths, err := filepath.Glob("fixtures/*.trace")
-	if err != nil || len(paths) != 2 {
+	if err != nil || len(paths) != 1 {
 		t.Fatalf("fixture paths = %v, %v", paths, err)
 	}
 	var kinds []string
@@ -220,8 +204,7 @@ func TestObserverFixturesAreStrictRedactedRenderInputs(t *testing.T) {
 	}
 	for _, required := range []string{
 		"runtime.turn.started", "r7.event.accepted", "r7.delivery.readmitted",
-		"r7.handling.resolved", "r7.reference.published", "r8.selection.seeded",
-		"r8.round.settled", "r8.observation.produced", "test.gate.checked",
+		"r7.handling.resolved", "r7.reference.published", "test.gate.checked",
 	} {
 		if !slices.Contains(kinds, required) {
 			t.Fatalf("fixtures do not exercise %q", required)
@@ -405,7 +388,7 @@ func validateFactCauses(t *testing.T, fact factRecord, sequence int, seen map[st
 
 func validateFactReferences(t *testing.T, fact factRecord, sequence int) {
 	t.Helper()
-	for _, digest := range []string{fact.Refs.Artifact, fact.Refs.EventDigest, fact.Refs.Selection} {
+	for _, digest := range []string{fact.Refs.Artifact, fact.Refs.EventDigest} {
 		if digest != "" && !digestPattern.MatchString(digest) {
 			t.Fatalf("fact %d has invalid digest %q", sequence, digest)
 		}
@@ -440,34 +423,22 @@ func validateClosedFacts(t *testing.T, sequence int, facts factsWire) {
 		"observation.declined", "observation.unresolved",
 	})
 	checkEnum("outcome", facts.Outcome, []string{"accepted", "rejected", "replayed", "completed", "declined", "unresolved"})
-	checkEnum("phase", facts.Phase, []string{"awaiting_seed", "active", "observed"})
-	checkEnum("preference_after", facts.PreferenceAfter, []string{"A", "B"})
-	checkEnum("preference_before", facts.PreferenceBefore, []string{"A", "B"})
-	checkEnum("result", facts.Result, []string{"threshold_reached", "inconclusive"})
 	checkEnum("state", facts.State, []string{"open", "active", "pending", "settled", "expired", "retracted", "terminal"})
 	checkEnum("status", facts.Status, []string{"pass", "fail", "incomplete", "unknown", "not_applicable"})
-	validateOptionalInt(t, sequence, "alpha", facts.Alpha, 1, 64)
 	validateOptionalInt(t, sequence, "artifact_count", facts.ArtifactCount, 0, 64)
 	validateOptionalInt(t, sequence, "attempt_count", facts.AttemptCount, 0, 256)
 	validateOptionalInt(t, sequence, "batched_unattributed_count", facts.BatchedCount, 0, 256)
 	validateOptionalInt(t, sequence, "count", facts.Count, 1, 256)
-	validateOptionalInt(t, sequence, "invalid_votes", facts.InvalidVotes, 0, 128)
 	validateOptionalInt(t, sequence, "invalid_result_count", facts.InvalidCount, 0, 256)
-	validateOptionalInt(t, sequence, "margin_after", facts.MarginAfter, -1024, 1024)
-	validateOptionalInt(t, sequence, "margin_before", facts.MarginBefore, -1024, 1024)
-	validateOptionalInt(t, sequence, "no_votes", facts.NoVotes, 0, 64)
 	validateOptionalInt(t, sequence, "occupied_claims", facts.OccupiedClaims, 0, 64)
 	validateOptionalInt(t, sequence, "open_unclaimed", facts.OpenUnclaimed, 0, 64)
 	validateOptionalInt(t, sequence, "payload_bytes", facts.PayloadBytes, 0, 32<<10)
 	validateOptionalInt(t, sequence, "round", facts.Round, 0, 1024)
-	validateOptionalInt(t, sequence, "sample_size", facts.SampleSize, 0, 64)
 	validateOptionalInt(t, sequence, "success_count", facts.SuccessCount, 0, 256)
 	validateOptionalInt(t, sequence, "target_count", facts.TargetCount, 0, 16)
 	validateOptionalInt(t, sequence, "tool_error_count", facts.ToolErrorCount, 0, 256)
 	validateOptionalInt(t, sequence, "turn_limit", facts.TurnLimit, 1, 256)
 	validateOptionalInt(t, sequence, "turns_used", facts.TurnsUsed, 0, 256)
-	validateOptionalInt(t, sequence, "votes_a", facts.VotesA, 0, 64)
-	validateOptionalInt(t, sequence, "votes_b", facts.VotesB, 0, 64)
 	validateOptionalInt64(t, sequence, "byte_size", facts.ByteSize, 0, 16<<20)
 	validateOptionalInt64(t, sequence, "duration_ms", facts.DurationMillis, 0, 3600000)
 	if len(facts.Targets) > 16 {

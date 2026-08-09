@@ -114,9 +114,8 @@ func assertHarnessPackageDirectory(t *testing.T, path string) {
 	}
 	slices.Sort(got)
 	core := []string{"agency", "attach", "authority", "cas", "cli", "daemon", "peerlink"}
-	withSelector := append(slices.Clone(core), "selector")
-	if !slices.Equal(got, core) && !slices.Equal(got, withSelector) {
-		t.Fatalf("directories under %s = %v, want R7 Core %v with only optional selector", path, got, core)
+	if !slices.Equal(got, core) {
+		t.Fatalf("directories under %s = %v, want R7 Core %v", path, got, core)
 	}
 }
 

@@ -9,7 +9,6 @@ const (
 	SourceRuntime     SourceClass = "runtime"
 	SourceR7Authority SourceClass = "r7_authority"
 	SourceTransport   SourceClass = "transport"
-	SourceR8Selector  SourceClass = "r8_selector"
 	SourceOracle      SourceClass = "oracle"
 	SourceRunner      SourceClass = "runner"
 )
@@ -22,7 +21,6 @@ const (
 	TruthObservation       TruthClass = "observation"
 	TruthAcceptedLocalFact TruthClass = "accepted_local_fact"
 	TruthDerivedProjection TruthClass = "derived_projection"
-	TruthLocalPreference   TruthClass = "local_preference"
 	TruthAssertion         TruthClass = "assertion"
 )
 
@@ -86,14 +84,12 @@ type References struct {
 	Handling      string `json:"handling,omitempty"`
 	Principal     string `json:"principal,omitempty"`
 	ReferenceHead string `json:"reference_head,omitempty"`
-	Selection     string `json:"selection,omitempty"`
 }
 
 // FactFields is the closed metadata vocabulary rendered by the observer.
 // Pointer scalars distinguish an observed zero or false value from absence.
 type FactFields struct {
 	Action           string   `json:"action,omitempty"`
-	Alpha            *int     `json:"alpha,omitempty"`
 	ArtifactCount    *int     `json:"artifact_count,omitempty"`
 	AttemptCount     *int     `json:"attempt_count,omitempty"`
 	BatchedCount     *int     `json:"batched_unattributed_count,omitempty"`
@@ -110,29 +106,18 @@ type FactFields struct {
 	GoalSatisfied    *bool    `json:"goal_satisfied,omitempty"`
 	HasCurrent       *bool    `json:"has_current,omitempty"`
 	HookCue          *bool    `json:"hook_cue,omitempty"`
-	InvalidVotes     *int     `json:"invalid_votes,omitempty"`
 	InvalidCount     *int     `json:"invalid_result_count,omitempty"`
-	MarginAfter      *int     `json:"margin_after,omitempty"`
-	MarginBefore     *int     `json:"margin_before,omitempty"`
-	NoVote           *bool    `json:"no_vote,omitempty"`
-	NoVotes          *int     `json:"no_votes,omitempty"`
 	OccupiedClaims   *int     `json:"occupied_claims,omitempty"`
 	OpenTotal        *int     `json:"open_total,omitempty"`
 	OpenUnclaimed    *int     `json:"open_unclaimed,omitempty"`
 	Outcome          string   `json:"outcome,omitempty"`
 	PayloadBytes     *int     `json:"payload_bytes,omitempty"`
-	Phase            string   `json:"phase,omitempty"`
-	PreferenceAfter  string   `json:"preference_after,omitempty"`
-	PreferenceBefore string   `json:"preference_before,omitempty"`
-	Recolored        *bool    `json:"recolored,omitempty"`
 	Replayed         *bool    `json:"replayed,omitempty"`
 	ReplyRequired    *bool    `json:"reply_required,omitempty"`
-	Result           string   `json:"result,omitempty"`
 	RelatedProjected *int     `json:"related_projected,omitempty"`
 	RelatedTotal     *int     `json:"related_total,omitempty"`
 	Role             string   `json:"role,omitempty"`
 	Round            *int     `json:"round,omitempty"`
-	SampleSize       *int     `json:"sample_size,omitempty"`
 	SemanticKind     string   `json:"semantic_kind,omitempty"`
 	State            string   `json:"state,omitempty"`
 	Status           string   `json:"status,omitempty"`
@@ -145,8 +130,6 @@ type FactFields struct {
 	TurnLimit        *int     `json:"turn_limit,omitempty"`
 	TurnsUsed        *int     `json:"turns_used,omitempty"`
 	ViewNonempty     *bool    `json:"view_nonempty,omitempty"`
-	VotesA           *int     `json:"votes_a,omitempty"`
-	VotesB           *int     `json:"votes_b,omitempty"`
 }
 
 // Fact is one sanitized observation or committed effect. Sequence is assigned

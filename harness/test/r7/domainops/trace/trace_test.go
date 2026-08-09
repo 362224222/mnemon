@@ -469,22 +469,12 @@ func writeCandidateManifest(t *testing.T, path, digit string) {
 func assertTraceSeparation(t *testing.T, trace string) {
 	t.Helper()
 	runtimeIDs := make(map[string]struct{})
-	r8Facts := 0
-	foundR8Gate := false
 	for _, line := range strings.Split(strings.TrimSpace(trace), "\n") {
 		var record testTraceRecord
 		if err := json.Unmarshal([]byte(line), &record); err != nil {
 			t.Fatal(err)
 		}
-		factR8, hasR8Gate := inspectTestTraceRecord(t, record, runtimeIDs)
-		r8Facts += factR8
-		foundR8Gate = foundR8Gate || hasR8Gate
-	}
-	if !foundR8Gate {
-		t.Fatal("trace result omitted the explicit R8 not_applicable gate")
-	}
-	if r8Facts != 0 {
-		t.Fatalf("R7-only trace contains %d R8 facts", r8Facts)
+		inspectTestTraceRecord(t, record, runtimeIDs)
 	}
 	assertSuccessfulAttentionEvidence(t, trace)
 	if status := traceGateStatus(t, trace, "scenario.evolution"); status != "pass" {
@@ -494,7 +484,7 @@ func assertTraceSeparation(t *testing.T, trace string) {
 
 func inspectTestTraceRecord(t *testing.T, record testTraceRecord,
 	runtimeIDs map[string]struct{},
-) (int, bool) {
+) {
 	t.Helper()
 	if strings.HasPrefix(record.Kind, "runtime.") {
 		runtimeIDs[record.ID] = struct{}{}
@@ -509,15 +499,6 @@ func inspectTestTraceRecord(t *testing.T, record testTraceRecord,
 			}
 		}
 	}
-	r8Facts := 0
-	if strings.HasPrefix(record.Kind, "r8.") {
-		r8Facts = 1
-	}
-	foundGate := false
-	for _, gate := range record.Gates {
-		foundGate = foundGate || gate.ID == "r8.applicability" && gate.Status == "not_applicable"
-	}
-	return r8Facts, foundGate
 }
 
 func validStoredEvent(t *testing.T) storedEventRow {

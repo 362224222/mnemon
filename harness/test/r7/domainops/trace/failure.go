@@ -196,8 +196,6 @@ func finishFailedTrace(writer *observer.Writer, code string, attentionFacts []st
 	gates = append(gates,
 		observedProtocolGate("r7.operation-receipts", receiptFacts),
 		observedProtocolGate("r7.peer-accepted-effect", readmittedFacts))
-	gates = append(gates, observer.Gate{ID: "r8.applicability",
-		Status: observer.GateNotApplicable})
 	return writer.Finish(observer.Result{Status: observer.ResultFailed,
 		FinishedAt: finishedAt, Gates: gates})
 }

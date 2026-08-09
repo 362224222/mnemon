@@ -23,9 +23,6 @@ func TestHarnessArchitecture(t *testing.T) {
 	t.Run("attachments have one interactive issuer", func(t *testing.T) {
 		assertInteractiveAttachmentOnly(t, root)
 	})
-	t.Run("selector is not a Core dependency", func(t *testing.T) {
-		assertCoreDoesNotImportSelector(t, root)
-	})
 	t.Run("case semantics stay in fixtures", func(t *testing.T) {
 		assertCaseFixturesAreDataOnly(t, root)
 	})
@@ -98,7 +95,6 @@ func assertPackageGraph(t *testing.T, root string) {
 		"internal/cli":       {"internal/agency"},
 		"internal/daemon":    {"internal/agency", "internal/authority", "internal/cas", "internal/peerlink"},
 		"internal/peerlink":  {"internal/agency", "internal/cas"},
-		"internal/selector":  {"internal/agency"},
 		"cmd/mnemon-harness": {"internal/attach", "internal/cli", "internal/daemon"},
 		"cmd/mnemond":        {"internal/daemon"},
 	}
@@ -170,26 +166,6 @@ func assertInteractiveAttachmentOnly(t *testing.T, root string) {
 		"attachment issuer declaration")
 	assertSingleArchitectureMatch(t, calls, "/internal/daemon/", "IssueInteractiveAttachment",
 		"attachment issuer call")
-}
-
-func assertCoreDoesNotImportSelector(t *testing.T, root string) {
-	t.Helper()
-	selectorImport := modulePath + "/harness/internal/selector"
-	forEachProductionGoFile(t, root, func(path string, file *ast.File) {
-		if strings.Contains(filepath.ToSlash(path), "/internal/selector/") {
-			return
-		}
-		for _, spec := range file.Imports {
-			importPath, err := strconv.Unquote(spec.Path.Value)
-			if err != nil {
-				t.Errorf("%s: unquote import: %v", path, err)
-				continue
-			}
-			if importPath == selectorImport || strings.HasPrefix(importPath, selectorImport+"/") {
-				t.Errorf("%s imports optional selector package %q", path, importPath)
-			}
-		}
-	})
 }
 
 func assertCaseFixturesAreDataOnly(t *testing.T, root string) {

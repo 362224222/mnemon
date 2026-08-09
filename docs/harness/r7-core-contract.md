@@ -790,7 +790,7 @@ R7 uses direct tests rather than a second contract registry:
 | Level | Requirement |
 |---|---|
 | `make test` | Deterministic unit, projection, observer, and static architecture tests pass without real daemon readiness, CLI E2E, wall-clock scenarios, Docker, or providers. |
-| `make test-integration` | When explicitly requested, CLI E2E, full Harness package tests, Core race checks, the generic R7 Docker case runner, the Pi attachment boundary, the real service world, and the isolated R8 network pass once each. |
+| `make test-integration` | When explicitly requested, CLI E2E, full Harness package tests, Core race checks, the generic R7 Docker case runner, the Pi attachment boundary, and the real service world pass once each. |
 | `make test-live` | When explicitly authorized, real Pi/DeepSeek turns exercise the local and federated product scenarios. Model prose is never the pass/fail oracle. |
 
 The ordinary Go architecture tests enforce root/Harness isolation, the exact

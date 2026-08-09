@@ -1,21 +1,20 @@
 # Mnemon test observer
 
 This directory contains a local-only, static evidence viewer for Harness test
-runs. It is deliberately outside `daemon`, `authority`, `peerlink`, and
-`selector`: displaying a record must never create or alter an R7 fact or an R8
-preference.
+runs. It is deliberately outside `daemon`, `authority`, and `peerlink`:
+displaying a record must never create or alter an R7 fact.
 
 Open `index.html` directly in a browser, then load one or more
 `mnemon.test.trace` v2 JSONL files with the file picker or drag-and-drop surface.
 No server, package installation, build, network access, or browser storage is
-required. The two synthetic `.trace` files under `fixtures/` exercise the R7
-collaboration and R8 coloring views without masquerading as generated run
-transcripts. The browser validates the closed record shapes, order, bounds,
+required. The synthetic `.trace` file under `fixtures/` exercises the R7
+collaboration views without masquerading as a generated run transcript. The
+browser validates the closed record shapes, order, bounds,
 backward-only causes, gate references, and exact SHA-256 footer before it
 renders anything. A malformed or unverifiable file is rejected rather than
 shown as partial evidence.
 
-## What the five views mean
+## What the four views mean
 
 1. **Run integrity** shows the terminal trace status and explicit test gates.
    Missing evidence is `unknown` or `incomplete`, never an inferred pass.
@@ -34,16 +33,11 @@ shown as partial evidence.
    Open semantic kinds and bounded targets are displayed as labels. Terminal
    Handlings, Reference changes, and later Artifact reads are listed separately
    with their recorded outcome and state.
-5. **R8 preference coloring** partitions evidence by exact SelectionID before
-   displaying per-node colors and signed margins. Distinct selections are never
-   overlaid or counted together. Every result remains a local preference, not
-   consensus, finality, truth, completion, or an R7 Effect.
-
 The observer is not an oracle. Test runners and independent validators produce
 gate outcomes; the page only renders them.
 
 Large traces remain valid inputs, but every visual surface has a fixed rendering
-budget. When a lane, graph, component list, coloring round, or observation list
+budget. When a lane, graph, component list, or observation list
 is truncated, the page says so explicitly and renders an exact sequence prefix.
 Truncation never changes trace integrity or the reported test result.
 
@@ -72,19 +66,15 @@ Every fact declares one evidence class:
 | `observation` | Runtime, transport, or runner observation; not authority |
 | `accepted_local_fact` | A fact committed by one local R7 authority |
 | `derived_projection` | A bounded view derived from committed state |
-| `local_preference` | R8-local seed, color, round, or observation |
 | `assertion` | Independent test-oracle result |
 
 The Go validator closes the relation between each known `kind`, its allowed
 `source.class`, and its `truth` class. A runtime or transport observation cannot
 rename itself as an accepted R7 effect; `r7.delivery.readmitted` is authored by
-the receiving local authority after re-admission, not by transport. Every R8
-fact must carry a SelectionID digest, which is the isolation boundary for
-coloring and statistics. Kinds required by the visual evidence contract also
-carry their minimum display fields: accepted Events name their semantic kind
-and consequence, resolved Handlings carry an outcome, and R8 seeds, rounds,
-votes, and observations carry the exact preference evidence rendered by the
-coloring view. Attention snapshots report the exact authority predicates
+the receiving local authority after re-admission, not by transport. Kinds
+required by the visual evidence contract also carry their minimum display
+fields: accepted Events name their semantic kind and consequence, and resolved
+Handlings carry an outcome. Attention snapshots report the exact authority predicates
 `open_unclaimed` and `occupied_claims`. Goal-based final assertions bind the
 goal projection digest and observed result: an outcome may retain open
 responsibility but cannot retain an occupied claim, exhaustion and quiescence
@@ -121,18 +111,16 @@ inside a script element.
 
 Runners may sanitize a runtime's temporary JSON stream into this format before
 destroying the raw stream. A test-only, read-only exporter may snapshot durable
-R7 objects after a run and validate their canonical bytes. R8 test adapters may
-emit round summaries that they already own. None of these paths may:
+R7 objects after a run and validate their canonical bytes. None of these paths may:
 
 - add a daemon debug endpoint;
-- write an authority or selector store;
+- write an authority store;
 - run in the admission transaction;
 - make trace loss change a system fact;
 - infer a successful gate from absent evidence.
 
 Trace capture failure makes the test report `incomplete`. It does not roll back
-or manufacture Event, Handling, Reference, Receipt, Delivery, or
-PreferenceObservation state.
+or manufacture Event, Handling, Reference, Receipt, or Delivery state.
 
 Test-only exporters can use the small Go `Writer` in this package after they
 have independently sanitized their source evidence. The caller supplies a

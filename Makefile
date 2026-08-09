@@ -15,14 +15,10 @@ HARNESS_DETERMINISTIC_PKGS := \
 	./internal/attach \
 	./internal/authority \
 	./internal/cas \
-	./internal/selector \
-	./internal/selector/simtest \
 	./test/architecture \
 	./test/observer \
-	./test/r7/domainops/trace \
-	./test/r8/network/runner/trace
+	./test/r7/domainops/trace
 HARNESS_TESTDATA_PKGS := \
-	./internal/selector/testdata/network/cmd/r8-peer \
 	./testdata/r7/domain-ops/cmd/domain-load \
 	./testdata/r7/domain-ops/cmd/domain-world \
 	./testdata/r7/domain-ops/cmd/domainctl \
@@ -77,7 +73,6 @@ test-integration: ## Run opt-in E2E, timing, race, process, and Docker tests
 	harness/test/r7/runner/run_cases.sh
 	harness/test/r7/runtime/pi/run_delegate_oracle.sh
 	harness/test/r7/domainops/run_world.sh
-	harness/test/r8/network/runner/run_docker.sh
 
 test-live: ## Run the paid Pi/DeepSeek smoke and federated operations case
 	@test -n "$${DEEPSEEK_API_KEY:-}" || { echo "error: DEEPSEEK_API_KEY is required" >&2; exit 2; }

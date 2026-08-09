@@ -92,5 +92,4 @@ deliberately separate and do not invoke one another.
 
 The direct suites prove the ten R7 invariants, local continuity, federated
 re-admission, and the data-only collaboration cases. A plain Go architecture
-test keeps case vocabulary, fixtures, and the optional R8 selector outside the
-R7 Core dependency graph.
+test keeps case vocabulary and fixtures outside the R7 Core dependency graph.
