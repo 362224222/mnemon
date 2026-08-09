@@ -1,4 +1,4 @@
-package contracts_test
+package architecture_test
 
 import (
 	"bytes"
@@ -92,10 +92,6 @@ func TestRepositoryHygieneRulesRejectGeneratedFiles(t *testing.T) {
 
 func TestRepositoryHygieneRulesAcceptDurableJSONCategories(t *testing.T) {
 	for _, trackedPath := range []string{
-		"harness/test/contracts/r7-requirements.json",
-		"harness/test/contracts/go_quality_baseline.json",
-		"harness/test/contracts/go_architecture_debt.json",
-		"harness/test/observer/trace-schema.json",
 		"internal/setup/assets/openclaw/plugin/openclaw.plugin.json",
 		"internal/setup/assets/openclaw/plugin/package.json",
 	} {
@@ -239,16 +235,6 @@ func temporaryJSONNameReason(trackedPath string) string {
 
 func durableJSONCategory(trackedPath string) string {
 	switch {
-	case trackedPath == "harness/test/contracts/r7-requirements.json":
-		return "contract registry"
-	case trackedPath == "harness/test/contracts/go_architecture_debt.json":
-		return "quality"
-	case strings.HasPrefix(trackedPath, "harness/test/contracts/go_quality_") &&
-		!strings.Contains(strings.TrimPrefix(trackedPath,
-			"harness/test/contracts/"), "/"):
-		return "quality"
-	case trackedPath == "harness/test/observer/trace-schema.json":
-		return "test trace schema"
 	case strings.HasPrefix(trackedPath, "internal/setup/assets/"):
 		return "managed asset"
 	default:

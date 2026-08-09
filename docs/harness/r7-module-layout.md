@@ -264,25 +264,24 @@ no longer exists.
 
 C6 landed in the exact candidate tree that:
 
-- has R7 evidence at 10/10 with every section 9 gate green;
+- passed the direct R7 unit, architecture, process, and Docker suites;
 - marks R7 ACTIVE and R5 RETIRED;
-- points every parser, registry, Make target, and CI gate at R7;
+- points active Harness documentation and test entry points at R7;
 
-and satisfies `G-R7-AUTHORITY-CUTOVER`.
+with no remaining R5 implementation dependency.
 
-## 5. Steady-state structural oracles
+## 5. Steady-state architecture tests
 
-These checks are machine-readable evidence under the closed Core gates; they
-are not additional Gate identifiers. R8 deletion remains an R8 authorization
-condition and cannot expand the R7 gate set.
+These checks are ordinary Go tests under `harness/test/architecture`. They are
+direct assertions, not entries in a separate evidence registry.
 
-| Existing binding | Structural oracle |
+| Structural assertion | Meaning |
 |---|---|
-| `G-R7-AUTHORITY-CUTOVER` | `agency` has an empty internal import set. |
-| `G-R7-AUTHORITY-CUTOVER` | `authority`'s internal import set is exactly `{agency}`. |
-| R8 deletion condition | After removing `internal/selector`, both R7 commands build and every R7 Go conformance package passes. |
-| `G-R7-NO-CASE-KIND` | No production Go contains `channel`, `teamwork`, `review`, `contract-net`, `blackboard`, or `memory.wiki` as a semantic identifier. They may appear only as opaque `kind` values in testdata. |
-| `G-R7-AUTHORITY-CUTOVER` | `internal/` contains exactly the seven R7 packages in section 2 and may additionally contain only the optional `selector`; no dependency edge contradicts the graph there. |
+| `agency` has no internal import and `authority` imports only `agency`. | Canonical values do not depend on execution or storage. |
+| No R7 Core package imports `selector`. | The R8 mechanism remains an optional island. |
+| Production Go contains no case-specific semantic literal or fixture path. | Collaboration patterns remain data, not Core dispatch. |
+| Attachment issuance has one authority declaration and one daemon caller. | T0 has an interactive boundary, not a hidden managed wake path. |
+| `internal/` contains exactly the packages in section 2 plus optional `selector`. | A second domain model cannot silently return. |
 
 One human-readable check accompanies them: **every package states what it owns
 in one sentence.** Today's `store` cannot — it holds channel, peer, artifact,
@@ -291,8 +290,7 @@ R8 selector owns only its private selection state.
 
 ## 6. What this document does not authorize
 
-- Any change to `r7-core-contract.md` behavior, invariants, gates, or evidence
-  bindings.
+- Any change to `r7-core-contract.md` behavior or invariants.
 - Wiring `selector`. R8 activation is gated by its own preconditions, including
   a proven local outcome projection.
 - Any release-path change. The root `mnemon`, `mnemon setup`, and Legacy Memory

@@ -1,4 +1,4 @@
-package contracts_test
+package architecture_test
 
 import (
 	"bytes"
@@ -96,7 +96,7 @@ func assertHarnessPackages(t *testing.T, root string) {
 	assertHarnessPackageDirectory(t, filepath.Join(root, "harness", "internal"))
 }
 
-func TestR7InternalPackageSetAllowsSelectorDeletion(t *testing.T) {
+func TestHarnessInternalPackageSet(t *testing.T) {
 	assertHarnessPackageDirectory(t, filepath.Join(harnessModuleRoot(t), "internal"))
 }
 
@@ -153,20 +153,6 @@ func assertRootHelpIsReleaseOnly(t *testing.T, root string) {
 	}
 	if !bytes.Contains(output, []byte("\n  setup ")) || !bytes.Contains(output, []byte("\n  remember ")) {
 		t.Errorf("root help lost release commands:\n%s", output)
-	}
-}
-
-func TestR7HasNoManagedWakeIssuancePath(t *testing.T) {
-	root := repositoryRoot(t)
-	command := exec.Command("bash", "harness/test/r7/runner/run_no_managed_wake.sh")
-	command.Dir = root
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("managed-wake structural oracle: %v\n%s", err, output)
-	}
-	want := []byte("r7 static oracle passed: no managed attachment issuance surface\n")
-	if !bytes.Equal(output, want) {
-		t.Fatalf("managed-wake structural oracle output = %q, want %q", output, want)
 	}
 }
 

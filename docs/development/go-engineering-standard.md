@@ -218,13 +218,10 @@ does not own durable business policy; it owns process lifecycle.
 ## 8. Tests and change discipline
 
 - A behavior change MUST carry a focused test in the same logical commit.
-- Requirement evidence MUST bind every declared `path::test-symbol` to the
-  accepted history that introduced or accepted it. When a manifest stores test
-  symbols and accepted commits as separate arrays, each test symbol MUST exist
-  in the current tree and in at least one of that requirement's accepted commit
-  trees; a declaration with no accepted commit is invalid. This existential
-  rule avoids adding positional pairing semantics while allowing one commit to
-  accept multiple tests and multiple commits to contribute separate tests.
+- Protocol documents describe required behavior; ordinary tests directly
+  assert its observable consequences. Do not introduce a second manifest that
+  binds prose, test symbols, commands, and commit history merely to certify the
+  tests themselves.
 - A behavior-preserving refactor SHOULD begin with characterization tests when
   the current invariant is not already executable.
 - Test builders MAY compress setup. They MUST NOT merge independent replay,
@@ -238,12 +235,11 @@ does not own durable business policy; it owns process lifecycle.
 - Feature work and broad behavior-neutral refactoring SHOULD be separate logical
   commits. Each commit remains buildable, reviewable, and revertible.
 
-## 9. Quality ratchet
+## 9. Review thresholds
 
-Mnemon uses new-code thresholds immediately. A scope MAY adopt a tracked
-baseline ratchet so existing debt does not force an unsafe big-bang rewrite;
-R5 is required to do so at its 7Q checkpoint. Until a scope has a baseline,
-reviews apply the thresholds qualitatively and MUST NOT claim baseline evidence.
+The following values are review signals for new or meaningfully rewritten
+production code. They help reviewers find unclear ownership or excessive
+change amplification; they are not a separate source of architectural truth.
 
 For new or meaningfully rewritten production code:
 
@@ -256,96 +252,26 @@ For new or meaningfully rewritten production code:
 | control-flow nesting | <= 4 | > 4 without an exact exception |
 | normalized duplicate block | none | >= 150 tokens |
 
-R5 additionally targets at most 400 lines for a hand-written production file
-and 800 lines for an individual hand-written test file. These are
-responsibility-split signals, not permission to hide code generation or combine
-statements.
-
-In a scope with an adopted baseline, existing violations MUST NOT increase. The
-baseline MUST use a stable identity appropriate to the rule rather than a line
-number: function metrics use rule + path + symbol, file metrics use rule + path,
-and duplicate groups use an immutable repository-assigned debt ID plus the
-sorted owning path/symbol tuple. A normalized content fingerprint is matching
-evidence, not the primary identity, so partial cleanup does not become false
-new debt. In the v1 duplicate ratchet, a debt ID's fingerprint is immutable and
-its owners may only remain exact or shrink to a strict subset; rebinding the
-fingerprint, adding an owner, or matching ambiguous evidence is prohibited. If
-strict owner cleanup removes the first sorted owner, the duplicate entry's
-derived path follows the first remaining owner without changing its debt ID.
-Anonymous-function identities MUST use stable lexical context, a
-descendant-independent direct shape/metric key, and an ordinal from their first
-appearance; sibling cardinality and source-line position are not identity
-inputs. Closures may share an ordinal group only when their complete ratcheted
-observations—including actual metrics, duplicate tokens, and recursive child
-structure—are interchangeable; an otherwise ambiguous collision fails closed.
-When a measured value improves but remains above threshold, the same change
-MUST lower its baseline ceiling; it may not retain the old allowance. A removed
-or repaired violation is removed from the baseline; the baseline only
-decreases. The history gate retains per-commit lineage ledgers from the fixed
-baseline source commit, merges those ledgers across actual Git parent edges,
-and checks each merge against every relevant parent. An identity that ever
-appeared in the baseline cannot later become an exception, and a removed
-exception becomes a lifetime tombstone that cannot be resurrected. An exception
-MUST be exact, reviewed, justified with risk, and include an owner or removal
-checkpoint. Wildcard exceptions and unexplained `//nolint` directives are
-prohibited.
-
-When a scope enforces these rules automatically, new-code exceptions MUST live
-in a separate machine-readable manifest rather than raising the debt baseline.
-The manifest identifies the exact rule/path/symbol or component, reason, risk,
-owner, removal checkpoint, and a measured ceiling that follows the same
-non-increasing ratchet. A tracked baseline identity cannot be reclassified as
-an exception. An exception cannot waive correctness, security,
-release-isolation, authority/parity, unowned-goroutine, unbounded-resource, or
-required-race rules, nor the absolute prohibition on new cyclomatic complexity
-above 30. R5 creates its tracked manifest at
-`harness/test/contracts/go_quality_exceptions.json` during 7Q.
-
-Generated Go and Go files under `testdata` are included by default. Excluding
-either category from complexity, size, and duplication measurement requires an
-exact entry in the canonical tracked
-`harness/test/contracts/go_quality_exclusions.json`; a generated entry also
-requires Go's canonical generated-code directive. Such an entry is metric-only:
-format, explained `//nolint`, and dependency checks still inspect the file.
-
-Static architecture findings and their machine-readable debt entries are an
-exact bidirectional set: a new finding requires an entry, and an auto-detected
-entry becomes stale as soon as its finding disappears. Lifecycle, resource,
-authority, and similar manually reviewed rules remain path/symbol-evidence
-contracts rather than pretending to be auto-detected.
-
-The ratchet is a change-safety mechanism, not an instruction to optimize a
-global score. Security guards, protocol stages, and distinct test oracles do not
-count as wasteful duplication.
+Large files and functions SHOULD be split when that creates clearer ownership,
+not to satisfy a line-count score. Security guards, protocol stages, and
+independent failure oracles do not count as wasteful duplication. If a future
+analyzer materially improves review, it must remain a direct check with one
+configuration source; it must not grow a parallel evidence ledger.
 
 ## 10. Executable gates
 
-The repository currently provides these relevant commands:
+The repository exposes three non-overlapping test levels:
 
 ```sh
-gofmt -w <changed-go-files>
-go build -o mnemon .
-go test ./...
-go vet ./...
-bash scripts/e2e_test.sh
-
-make harness-build
-go -C harness test ./...
-go -C harness test -race ./...
-go -C harness vet ./...
-make harness-validate        # managed-asset and action-declaration validation
-make harness-quality         # pinned format/static/dependency/debt ratchets
-make harness-verify          # complete exact-tree R7 evidence report
+make test              # deterministic Go, architecture, fixture, and CLI tests
+make test-integration  # race plus real process and Docker boundaries
+make test-live         # explicit paid Pi/DeepSeek evaluation
 ```
 
-`make harness-validate` is not a full Harness quality or verification gate.
-The Harness uses the pinned, tracked `make harness-quality` target for
-format/static analysis, dependency checks, and complexity/duplication ratchets.
-`make harness-verify` remains the complete R7 evidence gate, including the
-expensive race, Docker-case, and deletion proofs; it is run for
-Harness-affecting changes and scheduled deep verification rather than every
-release-path change. Focused package and scenario checks should be invoked
-directly instead of adding overlapping umbrella targets.
+The levels do not invoke one another. Fast CI runs `make test`; Harness-affecting
+changes and scheduled CI run `make test-integration`; paid provider evaluation
+is manual. Focused packages may be invoked directly during development, but do
+not add overlapping umbrella targets.
 
 Any added analyzer MUST have a repository-owned version and configuration and
 be reproducible in CI. Do not depend on a developer's global tool version or
@@ -366,4 +292,5 @@ Before accepting a Go change, answer:
    point with completeness tests?
 7. Did the change preserve independent failure oracles and run the proportional
    build, test, race, and static gates?
-8. Does the quality baseline stay level or improve, with no broader exception?
+8. Did the change avoid introducing a second test registry, evidence ledger, or
+   duplicate orchestration path?

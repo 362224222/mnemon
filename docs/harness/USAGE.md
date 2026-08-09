@@ -100,21 +100,15 @@ arbitrary same-UID code with local shell and file access.
 
 ```sh
 make harness-build
-make harness-quality
+make test
 ```
 
-For managed integration asset changes:
+For race, process, and Docker boundaries:
 
 ```sh
-make harness-validate
+make test-integration
 ```
 
-For the complete evidence gate:
-
-```sh
-make harness-verify
-```
-
-`make harness-verify` is the complete local R7 evidence gate. See
+Paid Pi/DeepSeek evaluation uses `make test-live`. See
 [r7-core-contract.md](r7-core-contract.md) for normative behavior and
 [r7-module-layout.md](r7-module-layout.md) for the enforced package boundary.

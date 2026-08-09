@@ -13,7 +13,6 @@ Common commands:
 ```bash
 make deps
 make build
-make unit
 make test
 make install
 ```

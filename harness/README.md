@@ -21,23 +21,22 @@ Collaboration patterns are data-only descriptions and fixtures. The Core does
 not contain a Channel model, Teamwork registry, workflow engine, or semantic
 dispatch by Event kind.
 
-Use the fast development path for ordinary changes:
+Use the fast deterministic path for ordinary changes:
 
 ```sh
 make harness-build
-make harness-quality
+make test
 ```
 
-Run `make harness-validate` when changing managed integration assets. Run the
-complete evidence path only when required:
+Run the real process, race, and Docker boundary suite for Harness changes:
 
 ```sh
-make harness-verify
+make test-integration
 ```
 
-`harness-verify` is the full exact-tree evidence gate, including race, Docker
-case, and deletion proofs. Observer, domain-operations, and R8 checks remain
-focused suites rather than additional umbrella Make targets.
+Paid Pi/DeepSeek evaluation is an explicit `make test-live` operation. The
+three levels do not invoke one another, and direct behavior tests—not a separate
+evidence registry—decide pass or fail.
 
 See [the Harness documentation](../docs/harness/README.md), the
 [quickstart](../docs/harness/QUICKSTART.md), and the active

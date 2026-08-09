@@ -16,11 +16,17 @@ const (
 )
 
 var (
-	tokenPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
-	digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-	tracePattern  = regexp.MustCompile(`^trace:[A-Za-z0-9][A-Za-z0-9._:-]{0,121}$`)
-	sourceClasses = []string{"runtime", "r7_authority", "transport", "r8_selector", "oracle", "runner"}
-	truthClasses  = []string{"observation", "accepted_local_fact", "derived_projection", "local_preference", "assertion"}
+	tokenPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
+	digestPattern     = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	tracePattern      = regexp.MustCompile(`^trace:[A-Za-z0-9][A-Za-z0-9._:-]{0,121}$`)
+	sourceClasses     = []string{"runtime", "r7_authority", "transport", "r8_selector", "oracle", "runner"}
+	truthClasses      = []string{"observation", "accepted_local_fact", "derived_projection", "local_preference", "assertion"}
+	intentDenialCodes = []string{
+		"invalid_argument", "content_required", "content_too_large", "artifact_invalid",
+		"artifact_too_large", "authentication_failed", "context_required", "context_stale",
+		"asset_revision_mismatch", "action_not_allowed", "operation_mismatch",
+		"operation_pending", "mnemond_unavailable", "internal",
+	}
 )
 
 func validateWriterRun(run Run) (string, error) {
@@ -136,12 +142,7 @@ func operationCountSum(fields FactFields) int {
 func validIntentDenialEvidence(fact Fact) bool {
 	return len(fact.Causes) == 0 && fact.Fields.Action == "submit" &&
 		fact.Fields.Count != nil && *fact.Fields.Count > 0 &&
-		slices.Contains([]string{
-			"invalid_argument", "content_required", "content_too_large", "artifact_invalid",
-			"artifact_too_large", "authentication_failed", "context_required", "context_stale",
-			"asset_revision_mismatch", "action_not_allowed", "operation_mismatch",
-			"operation_pending", "mnemond_unavailable", "internal",
-		}, fact.Fields.Code)
+		slices.Contains(intentDenialCodes, fact.Fields.Code)
 }
 
 func validateKindEvidence(fact Fact, sequence int) error {

@@ -24,15 +24,13 @@ make build
 ## Running Tests
 
 ```bash
-make unit       # Go unit tests (go test ./...)
-make test       # Full E2E test suite (scripts/e2e_test.sh)
-make vet        # Static analysis (go vet ./...)
-make harness-quality # Pinned Harness format, static, architecture, and debt ratchets
-make harness-verify  # Harness binaries, declarations, quality, vet, and unit tests
+make test              # Fast deterministic tests for both Go modules and the CLI
+make test-integration  # Harness race, process, and Docker boundaries
+make test-live         # Explicit paid Pi/DeepSeek evaluation
 ```
 
-Both `make unit` and `make test` must pass before submitting a PR. A change to
-the experimental Harness must also pass `make harness-verify`.
+`make test` must pass before submitting a PR. Changes to the experimental
+Harness must also pass `make test-integration`.
 
 ## Code Style
 
@@ -41,8 +39,7 @@ the experimental Harness must also pass `make harness-verify`.
 - All exported functions and types must have doc comments
 - Use `fmt.Errorf("context: %w", err)` for error wrapping
 
-For architecture, concurrency, persistence, abstraction, test design, and the
-incremental quality ratchet, follow the
+For architecture, concurrency, persistence, abstraction, and test design, follow the
 [Go Engineering Standard](docs/development/go-engineering-standard.md). Design
 patterns and Go language features are tools for reducing change amplification,
 not quotas or substitutes for explicit safety checks.
@@ -64,8 +61,8 @@ imperative form. The CHANGELOG filter excludes `docs:`, `test:`, `ci:`, and
 ## Submitting Changes
 
 1. Fork the repository and create a feature branch from `master`.
-2. Make your changes and run the gates that cover them, including
-   `make harness-verify` for Harness changes.
+2. Make your changes and run the proportional test level, including
+   `make test-integration` for Harness changes.
 3. Update documentation (USAGE.md, DESIGN.md, or README) if your change affects user-facing behavior.
 4. For user-facing changes, describe the release-note impact in the PR body. Maintainers update `CHANGELOG.md` during release preparation unless they explicitly ask for a changelog entry in the PR.
 5. Open a pull request against `master`.

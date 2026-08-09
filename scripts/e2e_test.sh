@@ -109,19 +109,31 @@ extract_id() {
 # ── Setup ─────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-TESTDATA="$PROJECT_DIR/.testdata"
+TESTDATA=$(mktemp -d "${TMPDIR:-/tmp}/mnemon-e2e.XXXXXX")
 TESTDIR="$TESTDATA/m1"
-M="$PROJECT_DIR/mnemon"
+M="$TESTDATA/mnemon"
+
+cleanup() {
+  if [ "${E2E_KEEP:-0}" = 1 ]; then
+    echo -e "  ${DIM}Test data preserved at: $TESTDATA/${RESET}"
+    return
+  fi
+  if [ -d "$TESTDATA" ] && [ ! -L "$TESTDATA" ]; then
+    case "$(basename "$TESTDATA")" in
+      mnemon-e2e.??????) rm -rf -- "$TESTDATA" ;;
+      *) echo "refusing to remove unexpected E2E directory: $TESTDATA" >&2 ;;
+    esac
+  fi
+}
+trap cleanup EXIT
 
 banner "Building mnemon"
 cd "$PROJECT_DIR"
-go build -o mnemon .
+go build -o "$M" .
 echo -e "  ${GREEN}✔${RESET} Binary built: $M"
 
-# Clean previous test data
-rm -rf "$TESTDATA"
 mkdir -p "$TESTDIR"
-echo -e "  ${DIM}  Test data: $TESTDATA/${RESET}"
+echo -e "  ${DIM}Test data: $TESTDATA/${RESET}"
 
 # ══════════════════════════════════════════════════════════════════════
 banner "Milestone 0: Store Management & Data Isolation"
@@ -832,11 +844,6 @@ if [ "$FAIL" -gt 0 ]; then
   echo -e "  Failed: ${RED}${BOLD}$FAIL${RESET}"
 fi
 echo ""
-
-# Cleanup binary (keep .testdata for inspection)
-rm -f "$M"
-echo -e "  ${DIM}Test DBs preserved at: $TESTDATA/${RESET}"
-echo -e "  ${DIM}Run 'rm -rf .testdata' to clean up${RESET}"
 
 if [ "$FAIL" -gt 0 ]; then
   echo -e "  ${RED}${BOLD}FAIL${RESET}"

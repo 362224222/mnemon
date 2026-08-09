@@ -1,4 +1,4 @@
-name: Harness Deep Verification
+name: Integration
 
 on:
   pull_request:
@@ -7,14 +7,14 @@ on:
       - "harness/**"
       - "docs/harness/**"
       - "Makefile"
-      - ".github/workflows/harness-deep.yml"
+      - ".github/workflows/integration.yml"
   push:
     branches: [master]
     paths:
       - "harness/**"
       - "docs/harness/**"
       - "Makefile"
-      - ".github/workflows/harness-deep.yml"
+      - ".github/workflows/integration.yml"
   schedule:
     - cron: "17 18 * * *"
   workflow_dispatch:
@@ -23,12 +23,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: harness-deep-${{ github.ref }}
+  group: integration-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
@@ -44,16 +45,5 @@ jobs:
             go.sum
             harness/go.sum
 
-      - name: Run complete R7 evidence gate
-        env:
-          HARNESS_QUALITY_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
-        run: make harness-verify
-
-      - name: Test trace observer
-        run: go -C harness test ./test/observer -count=1
-
-      - name: Test domain-operations Runtime boundary
-        run: harness/test/r7/domainops/run_live_oracle.sh
-
-      - name: Test removable R8 selector
-        run: make harness-r8
+      - name: Run integration suite
+        run: make test-integration

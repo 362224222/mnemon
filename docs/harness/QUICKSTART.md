@@ -81,12 +81,15 @@ required Artifacts, and re-admitting the delivery.
 Repository maintainers run:
 
 ```sh
-make harness-verify
+make test
+make test-integration
 ```
 
-During local iteration, run the focused Go package or scenario being changed;
-do not add another umbrella Make target for each test grouping.
+During local iteration, run the focused Go package or scenario being changed.
+The deterministic and integration levels are deliberately separate and do not
+invoke one another.
 
-The gate proves the ten R7 invariants, local continuity, federated
-re-admission, three data-only collaboration cases, and that deleting all case
-descriptions leaves the generic Core conformance suite working.
+The direct suites prove the ten R7 invariants, local continuity, federated
+re-admission, and the data-only collaboration cases. A plain Go architecture
+test keeps case vocabulary, fixtures, and the optional R8 selector outside the
+R7 Core dependency graph.

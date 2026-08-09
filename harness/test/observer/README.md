@@ -49,8 +49,8 @@ Truncation never changes trace integrity or the reported test result.
 
 ## Trace contract
 
-`trace-schema.json` is the closed JSON Schema for one JSONL record. A complete
-file has exactly this shape:
+The Go `Writer` and strict decoder are the single closed definition of one
+JSONL trace. A complete file has exactly this shape:
 
 ```text
 run header
@@ -75,7 +75,7 @@ Every fact declares one evidence class:
 | `local_preference` | R8-local seed, color, round, or observation |
 | `assertion` | Independent test-oracle result |
 
-The schema also closes the relation between each known `kind`, its allowed
+The Go validator closes the relation between each known `kind`, its allowed
 `source.class`, and its `truth` class. A runtime or transport observation cannot
 rename itself as an accepted R7 effect; `r7.delivery.readmitted` is authored by
 the receiving local authority after re-admission, not by transport. Every R8
@@ -100,7 +100,7 @@ mismatch, or digest mismatch makes a trace incomplete.
 
 ## Mandatory redaction
 
-The schema is metadata-only. A conforming trace must not contain:
+The trace is metadata-only. A conforming trace must not contain:
 
 - prompts, messages, transcripts, model reasoning, or chain of thought;
 - shell commands, command arguments, environment contents, or tool results;
@@ -119,7 +119,7 @@ inside a script element.
 
 ## Integration boundary
 
-Runners may sanitize a runtime's temporary JSON stream into this schema before
+Runners may sanitize a runtime's temporary JSON stream into this format before
 destroying the raw stream. A test-only, read-only exporter may snapshot durable
 R7 objects after a run and validate their canonical bytes. R8 test adapters may
 emit round summaries that they already own. None of these paths may:
@@ -151,9 +151,8 @@ Run the focused observer checks with:
 go -C harness test ./test/observer
 ```
 
-The deep Harness workflow runs this focused command explicitly. The observer
-is not part of the R7 Core evidence ledger, so release-path CI and
-`make harness-verify` do not repeat it.
-The checks validate the schema asset, strict JSONL decoding, bounds,
+The deterministic Harness test sweep includes this package. The observer is a
+diagnostic surface, not a protocol oracle and not a second evidence authority.
+The checks validate strict JSONL decoding, bounds,
 redaction, trace linkage, footer digests, fixtures, Content Security Policy,
 and the absence of external resources or markup injection APIs.
