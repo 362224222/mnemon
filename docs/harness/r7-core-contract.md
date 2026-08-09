@@ -783,46 +783,29 @@ Not guaranteed:
 A collaboration description may require an Agent to choose a different target.
 mnemond does not promote that requirement into a global rule.
 
-## 9. Conformance gates
+## 9. Verification levels
 
-| Gate | Requirement |
+R7 uses direct tests rather than a second contract registry:
+
+| Level | Requirement |
 |---|---|
-| `G-R7-CORE` | Unit, race, process, and pinned Pi Runtime suites cover P-01 through P-10 and every named sub-assertion in section 10 with independent oracles. |
-| `G-R7-CASES` | `review/`, `contract-net/`, and `blackboard/` fixtures all exist under `harness/testdata/r7/cases/`, run, and pass their independent deterministic oracles. |
-| `G-R7-PATTERN-FREE` | In a temporary copy, deleting both `harness/testdata/r7/examples/` and `harness/testdata/r7/cases/` leaves the P-01 through P-10 Core conformance command passing; case acceptance and case-presence checks are excluded from this deletion run. |
-| `G-R7-NO-CASE-KIND` | No production Go source contains a case-specific kind literal such as `review.request`. |
-| `G-R7-CASE-DATA-ONLY` | Every executable or behavior-bearing case definition, prompt, playbook, expected output, oracle, and fixture is confined to `harness/testdata/r7/cases/`. Files under `harness/testdata/r7/examples/` are non-executable generic syntax illustrations; runners and case oracles never read them. Contracts and registries may name cases and gates but cannot encode their behavior; no production Go, schema, managed asset, or example contains case behavior. |
-| `G-R7-ONE-PATH` | One candidate binary digest runs all three cases through the same CLI, Event structure, Handling lifecycle, and peer path. |
-| `G-R7-CONTINUITY` | After daemon restart, a fresh Runtime process with no prior transcript resumes from a newly projected View derived from durable Event, Handling, Reference, and Artifact state. |
-| `G-R7-FEDERATION` | On a pre-enrolled node retaining durable identity and trust, a fresh Runtime resumes from locally re-admitted PeerDelivery, verified Artifact, and referenced description alone. |
-| `G-R7-ROOT-ISOLATION` | No release-path command imports `harness/`. |
-| `G-R7-AUTHORITY-CUTOVER` | In activation mode, the candidate tree has exactly one ACTIVE Core contract, marks R5 and older authority claims RETIRED/HISTORICAL, points every parser, registry, Make/CI gate, and active Harness document to R7, and is the exact tree bound by the activation report. |
+| `make test` | Deterministic unit, projection, observer, and static architecture tests pass without real daemon readiness, CLI E2E, wall-clock scenarios, Docker, or providers. |
+| `make test-integration` | When explicitly requested, CLI E2E, full Harness package tests, Core race checks, the generic R7 Docker case runner, the Pi attachment boundary, the real service world, and the isolated R8 network pass once each. |
+| `make test-live` | When explicitly authorized, real Pi/DeepSeek turns exercise the local and federated product scenarios. Model prose is never the pass/fail oracle. |
 
-The generality proof is the conjunction of P-02, `G-R7-CASES`,
-`G-R7-PATTERN-FREE`, `G-R7-NO-CASE-KIND`, `G-R7-CASE-DATA-ONLY`, and
-`G-R7-ONE-PATH`. This replaces
-"two Go packages share an interface", which can be satisfied by designing for
-symmetry. The data-only gate is change-isolation evidence, not by itself a
-claim that the protocol is universal.
+The ordinary Go architecture tests enforce root/Harness isolation, the exact
+package dependency graph, one interactive attachment issuer, absence of
+case-specific Core vocabulary, and data-only case fixtures. The Docker cases
+then prove that one candidate image runs different collaboration descriptions
+through the same CLI, Event, Handling, Artifact, Receipt, and peer paths.
 
-## 10. Evidence bindings
+## 10. Direct evidence
 
-Each invariant and gate has an evidence result derived from the current run;
-that result is never written into this document as contract lifecycle status.
-The tracked `harness/test/contracts/r7-requirements.json` is the sole evidence
-binding authority. Its versioned schema contains two closed lists:
-
-- `invariants`: P-01 through P-10, each bound to exact
-  `package::test-symbol` or deterministic oracle names;
-- `gates`: every gate in section 9, each bound to its required step IDs, exact
-  argv, and independent oracle.
-
-A machine-generated gate report binds the source tree, this contract digest,
-requirements registry digest, exact executed commands, exit results, and
-output digests. The validator rejects a missing, unknown, duplicate, skipped,
-or unexecuted binding; commands hard-coded only in validator code have no
-authority. This contract cannot activate while any invariant or gate is
-unbound, partially proven, or failing.
+The table below is a human-readable review index, not a machine registry. Test
+names and fixture layout may be refactored without synchronizing a second
+manifest, provided the direct observable behaviors remain independently
+asserted. A passing test command is evidence; a generated report about that
+command is not another authority.
 
 | ID | Required independently asserted behavior |
 |---|---|
@@ -837,30 +820,17 @@ unbound, partially proven, or failing.
 | P-09 | Any missing or mismatched Artifact keeps peer input unadmitted and cannot activate a Reference or complete; every Agent/peer resource bound, including the 64 reply-observations-per-anchor limit, fails closed independently and payload cannot raise it; pending-reply inspection is indexed by the exact local anchor rather than scanning retained delivery history; Pi executes no more than sixteen exploration calls plus two calls to its fixed no-shell Effect-settlement tool per governed run, never re-enables a Host-disabled tool, blocks excess calls, and after cutoff allows only one bounded final-response turn after the last settlement attempt; automatic continuation cannot refresh either budget; the maximum accepted payload, Artifact, Reference, route, current, observation, and related combination remains representable; related evidence has explicit prefix/count/truncation, and JSON-escaped current plus related payloads cannot overflow the focus or canonical View budget; more than the expiry-maintenance limit settles only the bounded prefix and leaves all excess claims unchanged for later natural turns. |
 | P-10 | Only explicit completed with attached verified Artifact projects completed; other terminal outcomes close without Artifact; final/exit/idle/provider/ACK/disposition, terminal reply observations, and the pending-observation projection cannot complete or settle the requester anchor or prohibit an explicit non-completed resolution. |
 
-Ten rows is the point. A row may bind several test symbols, but it is verified
-only when every named behavior in that row has independent evidence. A ledger
-small enough to close is worth more than a comprehensive one that never does.
+The ten rows keep the protocol reviewable. They do not require ten test files
+or freeze test-symbol names. Independent replay, stale-fence, restart,
+corruption, authorization, and race failures must not be merged merely to make
+the suite smaller.
 
 ## 11. Activation and retirement
 
-There is never a period in which an unmeasured contract holds authority.
-
-```
-The activated tree, with evidence 10/10 and every gate in section 9 green
-  R7 marked ACTIVE
-  R5 marked RETIRED
-  all contract parsers, registries, Make targets, CI, and active Harness docs
-    point to R7
-  make harness-verify runs the R7 gate
-
-On a non-authority branch this remains a candidate status marker. The switch
-becomes effective atomically when that unchanged tree reaches the protected
-authority branch.
-```
-
-Status markers on a non-authority branch are candidates, not authority. CI
-proves the candidate tree rather than a commit hash, so the same tree can become
-authoritative after merge without a self-referential evidence cycle.
+R7 is ACTIVE and R5 is RETIRED. An ordinary architecture test scans the tracked
+Core contract headers and requires exactly one ACTIVE document. No parser,
+registry, commit-history ledger, or generated activation report participates in
+protocol authority.
 
 On retirement, `docs/harness/r5-core-contract.md` records in its header: the
 contract that supersedes it, the reason, that retirement takes effect in the
@@ -869,27 +839,11 @@ stops growing, that it is reproducible only on a historical branch or tag, and
 that it no longer constrains the active Harness. It must not embed the hash of
 the commit that contains its own retirement text.
 
-The candidate and authority gates machine-check that exactly one tracked Core
-contract is marked ACTIVE. At the same switch, every older tracked Harness
-document that calls itself an authority, frozen face, or active ABI is either
-updated for R7 or explicitly marked HISTORICAL/RETIRED; active quickstarts must
-not teach an R7-forbidden registry or schema-loader path.
-
-### 11.1 Engineering prerequisites
-
-These are prerequisites for running the evidence, not part of the protocol
-model:
-
-- `cd harness && go build ./...` succeeds on darwin;
-- the contract tool parses `PROPOSED | ACTIVE | RETIRED`, rejects an activation
-  candidate tree without exactly one ACTIVE Core contract, and binds reports to
-  the exact candidate tree;
-- the fast release-path CI gate cannot generate or claim a complete R7 evidence
-  report; Harness-affecting changes and scheduled verification run the complete
-  `make harness-verify` gate.
-
-Without them the ledger cannot be produced on the maintainer's own machine or
-enforced on merge, and `10/10` would be a number in a document.
+Active quickstarts must not teach an R7-forbidden registry or schema-loader
+path. `make test` is the only regular CI gate. Boundary-affecting changes run
+`make test-integration` explicitly before merge; its timing and process tests
+are not regular CI. The paid `make test-live` evaluation remains explicit and
+cannot make an otherwise failing deterministic tree authoritative.
 
 ## 12. Non-normative material
 
@@ -898,7 +852,7 @@ Nothing in this section is a requirement.
 | Artifact | Role |
 |---|---|
 | `harness/.../mnemond.md` | One-page Agent-facing projection: how to read a View, submit an Intent, read a Receipt, and save or supersede a collaboration description. It is a projection, never authority, and must not contain an ordered workflow. |
-| `harness/testdata/r7/examples/view-intent-receipt.md` | A non-executable, pattern-neutral syntax illustration. It contains no topology, fault schedule, expected outcome, or oracle; runners never read it. It must be deletable — see `G-R7-PATTERN-FREE`. |
+| `harness/testdata/r7/examples/view-intent-receipt.md` | A non-executable, pattern-neutral syntax illustration. It contains no topology, fault schedule, expected outcome, or oracle; runners never read it. Deleting it must leave the Core tests green. |
 | Case 1, Case 2, Case 3 | Review, Contract Net, and Blackboard exist only as Markdown descriptions, fixtures, and independent oracles under `harness/testdata/r7/cases/`; each case directory is its sole behavior authority. |
 | `.mnemon-dev/architecture/r7/` | Derivation history. No authority. |
 | `.mnemon-dev/research/magent-wiki/` | A pattern corpus an Agent may read on demand. No pattern is built in. |

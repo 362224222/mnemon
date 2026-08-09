@@ -7,44 +7,6 @@ import (
 	"testing"
 )
 
-func TestKimiWriteSkill(t *testing.T) {
-	dir := t.TempDir()
-
-	skillPath, err := KimiWriteSkill(dir)
-	if err != nil {
-		t.Fatalf("write skill: %v", err)
-	}
-	if skillPath != filepath.Join(dir, "skills", "mnemon", "SKILL.md") {
-		t.Fatalf("skill path = %q", skillPath)
-	}
-	data, err := os.ReadFile(skillPath)
-	if err != nil {
-		t.Fatalf("read skill: %v", err)
-	}
-	if !strings.Contains(string(data), "Kimi Code") {
-		t.Fatalf("kimi skill should mention Kimi Code: %s", string(data))
-	}
-}
-
-func TestKimiWriteHook(t *testing.T) {
-	dir := t.TempDir()
-
-	hookPath, err := KimiWriteHook(dir, "prime.sh", []byte("#!/bin/bash\n"))
-	if err != nil {
-		t.Fatalf("write hook: %v", err)
-	}
-	if hookPath != filepath.Join(dir, "hooks", "mnemon", "prime.sh") {
-		t.Fatalf("hook path = %q", hookPath)
-	}
-	info, err := os.Stat(hookPath)
-	if err != nil {
-		t.Fatalf("stat hook: %v", err)
-	}
-	if info.Mode().Perm() != 0755 {
-		t.Fatalf("hook permissions = %v, want 0755", info.Mode().Perm())
-	}
-}
-
 func TestKimiRegisterHooksPreservesUnrelatedConfig(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")

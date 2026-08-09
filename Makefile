@@ -9,14 +9,30 @@ HARNESS_LDFLAGS := -s -w -X main.version=$(VERSION)
 GO_VERSION   := $(shell awk '$$1 == "go" { print $$2; exit }' go.mod)
 HARNESS_GO_VERSION := $(shell awk '$$1 == "go" { print $$2; exit }' harness/go.mod)
 HARNESS_GO   := env GOTOOLCHAIN=go$(HARNESS_GO_VERSION) GOFLAGS=-mod=readonly go -C harness
+HARNESS_DETERMINISTIC_PKGS := \
+	./cmd/mnemon-harness \
+	./internal/agency \
+	./internal/attach \
+	./internal/authority \
+	./internal/cas \
+	./internal/selector \
+	./internal/selector/simtest \
+	./test/architecture \
+	./test/observer \
+	./test/r7/domainops/trace \
+	./test/r8/network/runner/trace
+HARNESS_TESTDATA_PKGS := \
+	./internal/selector/testdata/network/cmd/r8-peer \
+	./testdata/r7/domain-ops/cmd/domain-load \
+	./testdata/r7/domain-ops/cmd/domain-world \
+	./testdata/r7/domain-ops/cmd/domainctl \
+	./testdata/r7/domain-ops/world
 GOBIN       := $(shell go env GOBIN)
 ifeq ($(GOBIN),)
   GOBIN     := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: deps build harness-build install uninstall test unit vet harness-validate harness-quality harness-verify
-.PHONY: harness-live-pi
-.PHONY: harness-r8 harness-r8-docker harness-domain-ops harness-domain-ops-live
+.PHONY: deps build harness-build install uninstall test test-integration test-live
 .PHONY: docker-build docker-run compose-up compose-down compose-dev release-snapshot clean help
 
 .DEFAULT_GOAL := help
@@ -48,46 +64,25 @@ uninstall: ## Remove mnemon binary from $GOBIN
 
 # ── Test ─────────────────────────────────────────────────────────────
 
-test: ## Run E2E test suite (the script builds the tested binary once)
-	bash scripts/e2e_test.sh
-
-unit: ## Run Go unit tests
-	go test ./...
-
-vet: ## Run go vet static analysis
+test: ## Run deterministic tests without E2E, real daemon, or provider calls
 	go vet ./...
+	go test ./...
+	$(HARNESS_GO) vet ./... $(HARNESS_TESTDATA_PKGS)
+	$(HARNESS_GO) test $(HARNESS_DETERMINISTIC_PKGS) -count=1
 
-harness-validate: ## Validate the R7 projection, contract, and evidence bindings
-	$(HARNESS_GO) test ./internal/attach ./tools/corecontract ./test/contracts -count=1
-
-harness-quality: ## Run pinned, non-mutating Harness quality gates
-	@base_ref="$${HARNESS_QUALITY_BASE_REF:-HEAD}"; \
-		$(HARNESS_GO) run ./tools/quality check --root .. --base-ref "$$base_ref"
-	$(HARNESS_GO) vet ./...
-	$(HARNESS_GO) test ./tools/quality -count=1
-
-harness-live-pi: ## Run the opt-in Pi/DeepSeek live smoke
-	@test "$${LIVE_PI:-}" = 1 || { echo "error: set LIVE_PI=1" >&2; exit 2; }
-	@test -n "$${DEEPSEEK_API_KEY:-}" || { echo "error: DEEPSEEK_API_KEY is required" >&2; exit 2; }
-	harness/test/r7/runner/run_live_pi.sh
-
-harness-r8: ## Test the optional, removable R8 selector and its proof adapters
-	$(HARNESS_GO) test ./internal/selector ./internal/selector/simtest ./internal/selector/testdata/network/cmd/r8-peer -count=1
-	$(HARNESS_GO) test -race ./internal/selector ./internal/selector/simtest ./internal/selector/testdata/network/cmd/r8-peer -count=1
-
-harness-r8-docker: harness-r8 ## Run the isolated five-peer R8 network proof
+test-integration: ## Run opt-in E2E, timing, race, process, and Docker tests
+	bash scripts/e2e_test.sh
+	$(HARNESS_GO) test -p 1 ./... $(HARNESS_TESTDATA_PKGS) -count=1
+	$(HARNESS_GO) test -race -p 1 ./internal/... $(HARNESS_TESTDATA_PKGS) -count=1
+	harness/test/r7/runner/run_cases.sh
+	harness/test/r7/runtime/pi/run_delegate_oracle.sh
+	harness/test/r7/domainops/run_world.sh
 	harness/test/r8/network/runner/run_docker.sh
 
-harness-domain-ops: ## Run the opt-in real-service federated operations world
-	harness/test/r7/domainops/run_world.sh
-
-harness-domain-ops-live: ## Run the paid autonomous Pi/DeepSeek operations case
-	@test "$${LIVE_DOMAIN_OPS:-}" = 1 || { echo "error: set LIVE_DOMAIN_OPS=1" >&2; exit 2; }
+test-live: ## Run the paid Pi/DeepSeek smoke and federated operations case
 	@test -n "$${DEEPSEEK_API_KEY:-}" || { echo "error: DEEPSEEK_API_KEY is required" >&2; exit 2; }
-	harness/test/r7/domainops/run_live.sh
-
-harness-verify: harness-quality ## Run the complete exact-tree R7 evidence gate and write its report
-	$(HARNESS_GO) run ./tools/corecontract/cmd/core-gate --root ..
+	LIVE_PI=1 harness/test/r7/runner/run_live_pi.sh
+	LIVE_DOMAIN_OPS=1 harness/test/r7/domainops/run_live.sh
 
 # ── Containers / Deployment ──────────────────────────────────────────
 

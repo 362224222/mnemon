@@ -304,17 +304,26 @@ func startEnsureRuntime(t *testing.T, state string) (*Runtime, chan error) {
 	serveErrors := make(chan error, 1)
 	go func() { serveErrors <- runtime.Serve(context.Background()) }()
 	deadline := time.Now().Add(5 * time.Second)
-	for {
-		ready, err := probeDaemonStatus(context.Background(), state)
-		if err == nil && ready {
+	var lastProbeErr error
+	for time.Now().Before(deadline) {
+		ready, probeErr := probeDaemonStatus(context.Background(), state)
+		if probeErr == nil && ready {
 			return runtime, serveErrors
 		}
-		if err != nil || !time.Now().Before(deadline) {
-			stopEnsureRuntime(t, runtime, serveErrors)
-			t.Fatalf("started daemon did not become ready: %v", err)
+		if probeErr != nil {
+			lastProbeErr = probeErr
+		}
+		select {
+		case serveErr := <-serveErrors:
+			t.Fatalf("started daemon exited before readiness: serve=%v last_probe=%v",
+				serveErr, lastProbeErr)
+		default:
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	stopEnsureRuntime(t, runtime, serveErrors)
+	t.Fatalf("started daemon did not become ready before deadline: last_probe=%v", lastProbeErr)
+	return nil, nil
 }
 
 func stopEnsureRuntime(t *testing.T, runtime *Runtime, serveErrors chan error) {

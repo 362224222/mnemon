@@ -331,7 +331,8 @@ Sub-agent 委派是可选执行策略。当 runtime 支持时，主 agent 可以
 ```bash
 make build          # 构建二进制
 make install        # 构建 + 安装到 $GOBIN
-make test           # 运行 E2E 测试套件
+make test           # 运行确定性 CI 测试
+make test-integration  # 按需运行 CLI E2E 与 Harness 边界测试
 mnemon setup        # 交互式设置（检测环境 + 部署钩子/技能/引导）
 mnemon setup --eject  # 移除所有集成
 make help           # 显示所有目标

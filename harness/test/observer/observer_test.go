@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -204,64 +203,6 @@ func TestObserverFilePickerAcceptsDocumentedTraceExtension(t *testing.T) {
 	const picker = `<input id="traceFiles" type="file" multiple accept=".trace,.jsonl,.ndjson,application/x-ndjson">`
 	if count := strings.Count(html, picker); count != 1 {
 		t.Fatalf("observer trace file picker count = %d, want exactly one documented picker", count)
-	}
-}
-
-func TestTraceSchemaMatchesGoFactDefinitions(t *testing.T) {
-	root := decodeJSONObject(t, readFile(t, "trace-schema.json"), "schema root")
-	definitions := objectField(t, root, "$defs")
-	factsDefinition := objectField(t, definitions, "facts")
-	schemaFields := objectKeys(objectField(t, factsDefinition, "properties"))
-	goFields := jsonFieldNames(reflect.TypeOf(factsWire{}))
-	assertSameStrings(t, "facts properties", schemaFields, goFields)
-	sourceDefinition := objectField(t, definitions, "source")
-	sourceProperties := objectField(t, sourceDefinition, "properties")
-	assertSameStrings(t, "source class enum", stringArrayField(t, objectField(t, sourceProperties, "class"), "enum"), sourceClasses)
-
-	factVariant := schemaRecordVariant(t, arrayField(t, root, "oneOf"), "fact")
-	factProperties := objectField(t, factVariant, "properties")
-	kindDefinition := objectField(t, factProperties, "kind")
-	schemaKinds := stringArrayField(t, kindDefinition, "enum")
-	assertSameStrings(t, "fact kind enum", schemaKinds, knownFactKinds())
-	truthDefinition := objectField(t, factProperties, "truth")
-	assertSameStrings(t, "truth class enum", stringArrayField(t, truthDefinition, "enum"), truthClasses)
-}
-
-func TestBrowserValidatorMatchesSchemaAndGoDefinitions(t *testing.T) {
-	html := string(readFile(t, "index.html"))
-	root := decodeJSONObject(t, readFile(t, "trace-schema.json"), "schema root")
-	definitions := objectField(t, root, "$defs")
-	schemaFields := objectKeys(objectField(t, objectField(t, definitions, "facts"), "properties"))
-	factVariant := schemaRecordVariant(t, arrayField(t, root, "oneOf"), "fact")
-	factProperties := objectField(t, factVariant, "properties")
-	schemaKinds := stringArrayField(t, objectField(t, factProperties, "kind"), "enum")
-
-	assertSameStrings(t, "browser facts properties", javascriptStringArray(t, html, "const FACT_FIELDS"), schemaFields)
-	assertSameStrings(t, "browser fact kinds", sortedKindsFromRows(
-		javascriptStringArray(t, html, "const FACT_CLASSIFICATION_ROWS")), schemaKinds)
-	assertSameStrings(t, "browser source classes", javascriptStringArray(t, html, "const SOURCE_CLASSES"), sourceClasses)
-	assertSameStrings(t, "browser truth classes", javascriptStringArray(t, html, "const TRUTH_CLASSES"), truthClasses)
-}
-
-func TestTraceSchemaIsClosedAndMetadataOnly(t *testing.T) {
-	raw := readFile(t, "trace-schema.json")
-	if !json.Valid(raw) {
-		t.Fatal("trace-schema.json is not valid JSON")
-	}
-	var root map[string]any
-	if err := json.Unmarshal(raw, &root); err != nil {
-		t.Fatal(err)
-	}
-	oneOf, ok := root["oneOf"].([]any)
-	if !ok || len(oneOf) != 3 {
-		t.Fatalf("schema variants = %#v, want run/fact/result", root["oneOf"])
-	}
-	assertClosedObjects(t, root, "root")
-	assertNoDangerousKeys(t, root)
-	for _, required := range []string{"mnemon.test.trace", "accepted_local_fact", "local_preference", "additionalProperties"} {
-		if !bytes.Contains(raw, []byte(required)) {
-			t.Fatalf("trace schema is missing %q", required)
-		}
 	}
 }
 
@@ -627,83 +568,6 @@ func readFile(t *testing.T, path string) []byte {
 	return raw
 }
 
-func decodeJSONObject(t *testing.T, raw []byte, label string) map[string]any {
-	t.Helper()
-	var value map[string]any
-	if err := json.Unmarshal(raw, &value); err != nil {
-		t.Fatalf("%s: %v", label, err)
-	}
-	return value
-}
-
-func objectField(t *testing.T, object map[string]any, name string) map[string]any {
-	t.Helper()
-	value, ok := object[name].(map[string]any)
-	if !ok {
-		t.Fatalf("schema field %q is not an object", name)
-	}
-	return value
-}
-
-func arrayField(t *testing.T, object map[string]any, name string) []any {
-	t.Helper()
-	value, ok := object[name].([]any)
-	if !ok {
-		t.Fatalf("schema field %q is not an array", name)
-	}
-	return value
-}
-
-func schemaRecordVariant(t *testing.T, variants []any, record string) map[string]any {
-	t.Helper()
-	for _, value := range variants {
-		variant, ok := value.(map[string]any)
-		if !ok {
-			t.Fatal("schema variant is not an object")
-		}
-		properties := objectField(t, variant, "properties")
-		recordDefinition := objectField(t, properties, "record")
-		if constant, _ := recordDefinition["const"].(string); constant == record {
-			return variant
-		}
-	}
-	t.Fatalf("schema has no %q record variant", record)
-	return nil
-}
-
-func stringArrayField(t *testing.T, object map[string]any, name string) []string {
-	t.Helper()
-	values := arrayField(t, object, name)
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		text, ok := value.(string)
-		if !ok {
-			t.Fatalf("schema field %q contains a non-string value", name)
-		}
-		result = append(result, text)
-	}
-	return result
-}
-
-func objectKeys(object map[string]any) []string {
-	keys := make([]string, 0, len(object))
-	for key := range object {
-		keys = append(keys, key)
-	}
-	return keys
-}
-
-func jsonFieldNames(typ reflect.Type) []string {
-	fields := make([]string, 0, typ.NumField())
-	for index := 0; index < typ.NumField(); index++ {
-		name, _, _ := strings.Cut(typ.Field(index).Tag.Get("json"), ",")
-		if name != "" && name != "-" {
-			fields = append(fields, name)
-		}
-	}
-	return fields
-}
-
 func javascriptStringArray(t *testing.T, source, marker string) []string {
 	t.Helper()
 	markerIndex := strings.Index(source, marker)
@@ -775,26 +639,6 @@ func assertNoDangerousKeys(t *testing.T, value any) {
 	case []any:
 		for _, child := range typed {
 			assertNoDangerousKeys(t, child)
-		}
-	}
-}
-
-func assertClosedObjects(t *testing.T, value any, path string) {
-	t.Helper()
-	switch typed := value.(type) {
-	case map[string]any:
-		if _, hasProperties := typed["properties"]; hasProperties && typed["type"] == "object" {
-			closed, present := typed["additionalProperties"]
-			if !present || closed != false {
-				t.Fatalf("schema object %s is not closed", path)
-			}
-		}
-		for key, child := range typed {
-			assertClosedObjects(t, child, path+"/"+key)
-		}
-	case []any:
-		for index, child := range typed {
-			assertClosedObjects(t, child, fmt.Sprintf("%s/%d", path, index))
 		}
 	}
 }

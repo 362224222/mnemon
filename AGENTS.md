@@ -3,11 +3,12 @@
 ## Development
 
 - Build with `go build -o mnemon .`.
-- Run the E2E suite with `bash scripts/e2e_test.sh` or `make test`.
-- Validate harness module manifests with `make harness-validate` when changing
-  harness module assets.
-- Run `make harness-quality` for the pinned Harness quality ratchet and
-  `make harness-verify` for the complete local Harness build and test gate.
+- Run `make test` for the deterministic CI suite. It excludes real daemon
+  readiness, CLI E2E, wall-clock scenarios, Docker, and provider calls.
+- Run `make test-integration` explicitly for CLI E2E plus Harness timing, race,
+  process, and Docker boundaries; it is not a regular CI gate.
+- Run `make test-live` only when explicitly validating the paid Pi/DeepSeek
+  scenarios.
 - Treat `harness/` as an experimental, not-yet-released harness layer. Do not
   use it as an implementation dependency for release-path commands such as
   `mnemon setup`; formal integrations belong under `cmd/` and `internal/`.
@@ -25,9 +26,8 @@
 - Keep authority, digest, fence, bounds, CAS cardinality, and fail-closed checks
   explicit. Every goroutine must have an owner, cancellation, bounded work, and
   a wait path.
-- In a scope with a tracked engineering-quality baseline, new or modified code
-  must not increase it. Preserve independent test oracles while compressing
-  fixtures.
+- Preserve independent replay, crash, authorization, and race oracles while
+  compressing fixtures and shared setup.
 
 ## Commit Discipline
 

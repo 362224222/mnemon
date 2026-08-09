@@ -6,15 +6,15 @@ Prerequisites:
 
 - Go 1.24.6 or newer in the 1.24 series
 - `make`
-- `jq` for the E2E test script
+- `jq` only when running the opt-in CLI E2E/integration suite
 
 Common commands:
 
 ```bash
 make deps
 make build
-make unit
-make test
+make test              # deterministic CI suite
+make test-integration  # optional E2E/process/Docker suite
 make install
 ```
 

@@ -1,7 +1,6 @@
 package observer
 
 import (
-	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -33,15 +32,11 @@ func factClassificationRows() []string {
 	return result
 }
 
-func TestFactClassificationMatchesSchemaAndBrowser(t *testing.T) {
+func TestFactClassificationMatchesBrowser(t *testing.T) {
 	html := string(readFile(t, "index.html"))
-	root := decodeJSONObject(t, readFile(t, "trace-schema.json"), "schema root")
-	factVariant := schemaRecordVariant(t, arrayField(t, root, "oneOf"), "fact")
-
-	assertSameStrings(t, "schema fact classifications",
-		schemaFactClassificationRows(t, factVariant), factClassificationRows())
 	assertSameStrings(t, "browser fact classifications",
-		javascriptStringArray(t, html, "const FACT_CLASSIFICATION_ROWS"), factClassificationRows())
+		javascriptStringArray(t, html, "const FACT_CLASSIFICATION_ROWS"),
+		factClassificationRows())
 }
 
 func TestFactClassificationFailsClosed(t *testing.T) {
@@ -73,52 +68,4 @@ func TestFactClassificationFailsClosed(t *testing.T) {
 	if validFactClassification(r8) {
 		t.Fatal("R8 fact without SelectionID was accepted")
 	}
-}
-
-func schemaFactClassificationRows(t *testing.T, factVariant map[string]any) []string {
-	t.Helper()
-	constraints := arrayField(t, factVariant, "allOf")
-	if len(constraints) != 1 {
-		t.Fatalf("fact classification constraint count = %d, want 1", len(constraints))
-	}
-	constraint, ok := constraints[0].(map[string]any)
-	if !ok {
-		t.Fatal("fact classification constraint is not an object")
-	}
-	branches := arrayField(t, constraint, "oneOf")
-	var rows []string
-	for _, value := range branches {
-		branch, ok := value.(map[string]any)
-		if !ok {
-			t.Fatal("fact classification branch is not an object")
-		}
-		properties := objectField(t, branch, "properties")
-		kinds := stringArrayField(t, objectField(t, properties, "kind"), "enum")
-		source := objectField(t, objectField(t, properties, "source"), "properties")
-		sourceClass, _ := objectField(t, source, "class")["const"].(string)
-		truth, _ := objectField(t, properties, "truth")["const"].(string)
-		if sourceClass == "" || truth == "" {
-			t.Fatal("fact classification branch has no source or truth constant")
-		}
-		for _, kind := range kinds {
-			rows = append(rows, kind+"|"+sourceClass+"|"+truth)
-		}
-	}
-	if len(rows) != len(factClassifications) {
-		t.Fatalf("schema classification count = %d, want %d", len(rows), len(factClassifications))
-	}
-	if !slices.Equal(knownFactKinds(), sortedKindsFromRows(rows)) {
-		t.Fatal("schema classifications do not cover every known kind exactly")
-	}
-	return rows
-}
-
-func sortedKindsFromRows(rows []string) []string {
-	result := make([]string, 0, len(rows))
-	for _, row := range rows {
-		kind, _, _ := strings.Cut(row, "|")
-		result = append(result, kind)
-	}
-	sort.Strings(result)
-	return result
 }

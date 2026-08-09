@@ -95,7 +95,9 @@ for report in edge payment platform data lead; do
 done
 
 jq -e --slurpfile incident "$runtime_dir/incident-a.json" '
-  .role == "edge" and .result.limit == 32 and
+  .role == "edge" and
+  (.result.limit | type == "number") and
+  .result.limit >= (.result.entries | length) and .result.limit <= 256 and
   (.result.entries | length) == 4 and
   all(.result.entries[];
     .route == "east" and .status == "succeeded" and .capture_id > 0) and

@@ -59,13 +59,16 @@ go -C harness build -o ../mnemon-harness ./cmd/mnemon-harness
 
 ## 4. 验证声明
 
-仓库维护者可以验证规范的 managed Host 资产和 Teamwork action 声明：
+仓库维护者可以运行确定性测试与真实集成测试：
 
 ```sh
-make harness-validate
+make test
+make test-integration
 ```
 
-这是开发检查，不是普通用户工作流的一部分。
+普通 CI 只运行 `make test`；涉及 CLI E2E、时序、进程、传输或 Docker
+边界时，才显式运行 `make test-integration`。付费的 Pi/DeepSeek 场景使用
+`make test-live`。这些是开发检查，不是普通用户工作流的一部分。
 
 ## Trust model — a governance contract, not a sandbox
 

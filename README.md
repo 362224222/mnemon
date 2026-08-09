@@ -382,7 +382,8 @@ Mnemon architecture.
 ```bash
 make build          # build binary
 make install        # build + install to $GOBIN
-make test           # run E2E test suite
+make test           # run deterministic CI tests
+make test-integration  # opt-in CLI E2E and Harness boundary tests
 mnemon setup        # interactive setup
 mnemon setup --eject  # remove all integrations
 make help           # show all targets
@@ -395,7 +396,7 @@ See [Development and Deployment](docs/DEPLOYMENT.md) for Docker, Compose, Ollama
 ## Documentation
 
 - [Mnemon Harness Beta](harness/README.md) — experimental host-agent lifecycle state
-- [Go Engineering Standard](docs/development/go-engineering-standard.md) — maintainability, concurrency, persistence, testing, and quality ratchets
+- [Go Engineering Standard](docs/development/go-engineering-standard.md) — maintainability, concurrency, persistence, testing, and review thresholds
 - [Design & Architecture](docs/DESIGN.md) — current engine architecture, algorithms, integration design
 - [Usage & Reference](docs/USAGE.md) — CLI commands, embedding support, architecture overview
 - [Memory Import Guide](docs/IMPORT.md) — schema and LLM prompt for importing historical chats

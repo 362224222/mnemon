@@ -193,26 +193,6 @@ func TestR8FrozenProfileExposesOppositeThresholdCounterexample(t *testing.T) {
 	}
 }
 
-func TestR8PartitionAtTauIsCharacterized(t *testing.T) {
-	experiment := experiment{
-		nodes: 64, percentA: 50, fault: faultPartition,
-		partitionDuration: marginThreshold,
-	}
-	if experiment.effectivePartitionDuration() < marginThreshold {
-		t.Fatalf("partition duration %d is below tau %d",
-			experiment.effectivePartitionDuration(), marginThreshold)
-	}
-	for _, seed := range experimentSeeds {
-		t.Run(experiment.name(seed), func(t *testing.T) {
-			got := runSelection(t, experiment, seed, false)
-			assertSelectionAccounting(t, experiment, got, sampleSize)
-			t.Logf("tau-partition threshold=%dA/%dB opposite=%t inconclusive=%d epochs=%d node_rounds=%d messages=%d",
-				got.thresholdA, got.thresholdB, got.oppositeThreshold, got.inconclusive,
-				got.epochs, got.nodeRounds, got.messages)
-		})
-	}
-}
-
 func TestR8StrategicByzantineUsesOneRequesterSpecificVote(t *testing.T) {
 	experiment := experiment{
 		nodes: 32, percentA: 50, fault: faultStrategic, faultPercent: 20,
@@ -242,29 +222,6 @@ func TestR8StrategicByzantineUsesOneRequesterSpecificVote(t *testing.T) {
 		votesB[0].Preference() != selector.PreferenceB {
 		t.Fatalf("strategic peer did not tailor its single vote by requester: A=%s B=%s",
 			votesA[0].Preference(), votesB[0].Preference())
-	}
-}
-
-func TestR8N128TwentyPercentFaultCharacterization(t *testing.T) {
-	experiments := []experiment{
-		{nodes: 128, percentA: 55, fault: faultRefusal, faultPercent: 20},
-		{nodes: 128, percentA: 55, fault: faultEquivocate, faultPercent: 20},
-		{nodes: 128, percentA: 55, fault: faultStrategic, faultPercent: 20},
-		{
-			nodes: 128, percentA: 50, fault: faultPartition,
-			partitionDuration: marginThreshold,
-		},
-	}
-	for _, experiment := range experiments {
-		for _, seed := range experimentSeeds {
-			t.Run(experiment.name(seed), func(t *testing.T) {
-				sampled := runSelection(t, experiment, seed, false)
-				assertSelectionAccounting(t, experiment, sampled, sampleSize)
-				t.Logf("adversarial threshold=%dA/%dB opposite=%t inconclusive=%d epochs=%d node_rounds=%d messages=%d",
-					sampled.thresholdA, sampled.thresholdB, sampled.oppositeThreshold, sampled.inconclusive,
-					sampled.epochs, sampled.nodeRounds, sampled.messages)
-			})
-		}
 	}
 }
 
