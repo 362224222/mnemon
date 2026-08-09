@@ -23,11 +23,11 @@ func TestEnsureReturnsWhenProvisionedDaemonIsAlreadyReady(t *testing.T) {
 	err := ensure(context.Background(), state, ensureDependencies{
 		resolveExecutable: func() (string, error) {
 			resolves.Add(1)
-			return "", errors.New("ready path resolved a companion")
+			return "", errors.New("ready path resolved an executable")
 		},
 		start: func(string, string) (ensureChild, error) {
 			starts.Add(1)
-			return nil, errors.New("ready path started a companion")
+			return nil, errors.New("ready path started an agency daemon")
 		},
 	})
 	if err != nil {
@@ -46,7 +46,7 @@ func TestConcurrentEnsureStartsOneProvisionedDaemon(t *testing.T) {
 	var startedRuntime *Runtime
 	var startedErrors chan error
 	deps := ensureDependencies{
-		resolveExecutable: func() (string, error) { return "/test/mnemond", nil },
+		resolveExecutable: func() (string, error) { return "/test/mnemon", nil },
 		start: func(_ string, gotState string) (ensureChild, error) {
 			starts.Add(1)
 			runtime, err := OpenProvisioned(context.Background(), gotState)
@@ -103,7 +103,7 @@ func TestEnsureKillsItsChildWhenReadinessContextEnds(t *testing.T) {
 		cancel()
 	}()
 	err := ensure(ctx, state, ensureDependencies{
-		resolveExecutable: func() (string, error) { return "/test/mnemond", nil },
+		resolveExecutable: func() (string, error) { return "/test/mnemon", nil },
 		start: func(string, string) (ensureChild, error) {
 			close(started)
 			return child, nil
@@ -122,7 +122,7 @@ func TestEnsureSettlesAChildThatExitsBeforeReadiness(t *testing.T) {
 	state := provisionEnsureState(t)
 	child := &testEnsureChild{exited: true, status: "exit 2"}
 	err := ensure(context.Background(), state, ensureDependencies{
-		resolveExecutable: func() (string, error) { return "/test/mnemond", nil },
+		resolveExecutable: func() (string, error) { return "/test/mnemon", nil },
 		start:             func(string, string) (ensureChild, error) { return child, nil },
 	})
 	if err == nil || child.kills.Load() != 1 || child.releases.Load() != 0 {
@@ -139,7 +139,7 @@ func TestEnsureRejectsMissingStartupLockWithoutRepair(t *testing.T) {
 	}
 	var starts atomic.Int32
 	err := ensure(context.Background(), state, ensureDependencies{
-		resolveExecutable: func() (string, error) { return "/test/mnemond", nil },
+		resolveExecutable: func() (string, error) { return "/test/mnemon", nil },
 		start: func(string, string) (ensureChild, error) {
 			starts.Add(1)
 			return &testEnsureChild{}, nil
@@ -178,7 +178,7 @@ func TestEnsureRejectsMalformedActiveStatusWithoutStarting(t *testing.T) {
 
 	var starts atomic.Int32
 	err = ensure(context.Background(), state, ensureDependencies{
-		resolveExecutable: func() (string, error) { return "/test/mnemond", nil },
+		resolveExecutable: func() (string, error) { return "/test/mnemon", nil },
 		start: func(string, string) (ensureChild, error) {
 			starts.Add(1)
 			return &testEnsureChild{}, nil
@@ -192,21 +192,21 @@ func TestEnsureRejectsMalformedActiveStatusWithoutStarting(t *testing.T) {
 	}
 }
 
-func TestStartMnemondReachesTheRealReadyEndpoint(t *testing.T) {
+func TestStartMnemonAgencyReachesTheRealReadyEndpoint(t *testing.T) {
 	state := provisionEnsureState(t)
 	buildDirectory := canonicalTempDir(t)
-	executable := filepath.Join(buildDirectory, "mnemond")
-	build := exec.Command("go", "build", "-o", executable, "../../cmd/mnemond")
+	executable := filepath.Join(buildDirectory, "mnemon")
+	build := exec.Command("go", "build", "-o", executable, "../..")
 	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build real mnemond: %v\n%s", err, output)
+		t.Fatalf("build real mnemon: %v\n%s", err, output)
 	}
-	child, err := startMnemond(executable, state)
+	child, err := startMnemonAgency(executable, state)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
 		if err := child.KillAndWait(); err != nil {
-			t.Errorf("settle real mnemond: %v", err)
+			t.Errorf("settle real mnemon agency: %v", err)
 		}
 	}()
 	deadline := time.Now().Add(5 * time.Second)
@@ -217,15 +217,15 @@ func TestStartMnemondReachesTheRealReadyEndpoint(t *testing.T) {
 		}
 		exited, status, childErr := child.Exited()
 		if childErr != nil || exited {
-			t.Fatalf("real mnemond stopped before readiness: status=%q error=%v probe=%v",
+			t.Fatalf("real mnemon agency stopped before readiness: status=%q error=%v probe=%v",
 				status, childErr, probeErr)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("real mnemond did not become ready")
+	t.Fatal("real mnemon agency did not become ready")
 }
 
-func TestCompanionAcceptsOnlyCurrentOrRootOwner(t *testing.T) {
+func TestExecutableAcceptsOnlyCurrentOrRootOwner(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
 		name      string
@@ -244,6 +244,30 @@ func TestCompanionAcceptsOnlyCurrentOrRootOwner(t *testing.T) {
 					test.owner, test.effective, got, test.want)
 			}
 		})
+	}
+}
+
+func TestPhysicalMnemonExecutableResolvesOnlyAProtectedCurrentBinary(t *testing.T) {
+	t.Parallel()
+	directory := canonicalTempDir(t)
+	executable := filepath.Join(directory, "mnemon-physical")
+	if err := os.WriteFile(executable, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(directory, "mnemon")
+	if err := os.Symlink(executable, link); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := physicalMnemonExecutable(link)
+	if err != nil || resolved != executable {
+		t.Fatalf("physicalMnemonExecutable(symlink) = (%q, %v), want %q", resolved, err,
+			executable)
+	}
+	if err := os.Chmod(executable, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := physicalMnemonExecutable(link); err == nil {
+		t.Fatal("physicalMnemonExecutable accepted a group-writable binary")
 	}
 }
 

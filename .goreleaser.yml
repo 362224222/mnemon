@@ -7,30 +7,12 @@ before:
 
 builds:
   - id: mnemon
-    main: ./cmd/mnemon
+    main: .
     binary: mnemon
     env:
       - CGO_ENABLED=0
     ldflags:
-      - -s -w -X github.com/mnemon-dev/mnemon/internal/mnemoncli.version={{.Version}}
-    goos:
-      - linux
-      - darwin
-      - windows
-    goarch:
-      - amd64
-      - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
-
-  - id: mnemond
-    main: ./cmd/mnemond
-    binary: mnemond
-    env:
-      - CGO_ENABLED=0
-    ldflags:
-      - -s -w -X main.version={{.Version}}
+      - -s -w -X github.com/mnemon-dev/mnemon/cmd.version={{.Version}}
     goos:
       - linux
       - darwin
@@ -42,17 +24,9 @@ archives:
   - id: default
     ids:
       - mnemon
-      - mnemond
-    # Windows archives intentionally contain only mnemon; mnemond's owner-local
-    # Unix transport is released for Linux and macOS.
-    allow_different_binary_count: true
     formats:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format_overrides:
-      - goos: windows
-        formats:
-          - zip
 
 checksum:
   name_template: "checksums.txt"
@@ -80,7 +54,6 @@ homebrew_casks:
       - default
     binaries:
       - mnemon
-      - mnemond
     repository:
       owner: mnemon-dev
       name: homebrew-tap
@@ -96,4 +69,4 @@ release:
   prerelease: auto
   name_template: "v{{.Version}}"
   header: |
-    v{{.Version}} ships Mnemon Memory as `mnemon` and the local Agency authority as `mnemond`.
+    v{{.Version}} ships Mnemon Memory and the local Agency authority in one `mnemon` binary.

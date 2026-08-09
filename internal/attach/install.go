@@ -22,6 +22,17 @@ const (
 var (
 	ErrUnsafe = errors.New("attach: unsafe path")
 	ErrDrift  = errors.New("attach: owned projection drift")
+
+	legacyPiMnemondRevision = ownershipJournal{
+		Files: []fileRecord{
+			{Digest: "sha256:f86a075da301d86037873adc1a455e918f034b0a0c7da403f5e35021e6dce70d", Mode: "0644", Path: ".pi/extensions/mnemond-current.ts"},
+			{Digest: "sha256:35aa597448af21bb940e6da7e7531129bfebd13ae781354559d1b326fb4156a2", Mode: "0644", Path: ".pi/extensions/mnemond.ts"},
+			{Digest: "sha256:7cc7d0ceaebd59ef1e37d5248f172ae759665921fe754b4c363dfb9bd5be23ce", Mode: "0644", Path: ".pi/skills/mnemond/SKILL.md"},
+		},
+		Revision: "sha256:b5d2923cf302648efef97434c4fbb09d34fb1cca91b43691497c385b86b8d36c",
+		Runtime:  piRuntime,
+		Schema:   journalSchema,
+	}
 )
 
 // InstallReceipt identifies only the exact files owned by this projection.
@@ -86,10 +97,19 @@ func installPi(workspace string, boundary installBoundary) (InstallReceipt, erro
 	switch {
 	case statErr == nil:
 		err = readJournal(plan)
-		if err == nil {
-			err = cleanupStage(filepath.Dir(plan.journalPath), plan.journalPath,
-				plan.journalBytes, journalMode)
+		if err != nil {
+			upgraded, upgradeErr := upgradeKnownPiRevision(plan, boundary)
+			if upgradeErr != nil {
+				return InstallReceipt{}, upgradeErr
+			}
+			if !upgraded {
+				return InstallReceipt{}, err
+			}
+			receipt.Replayed = false
+			return receipt, nil
 		}
+		err = cleanupStage(filepath.Dir(plan.journalPath), plan.journalPath,
+			plan.journalBytes, journalMode)
 	case errors.Is(statErr, os.ErrNotExist):
 		err = beginInstall(plan)
 	default:
@@ -244,20 +264,84 @@ func convergeInstall(plan installPlan, boundary installBoundary) (bool, error) {
 }
 
 func readJournal(plan installPlan) error {
-	if err := requireDirectoryChain(plan.workspace, journalDirectoryRelative()); err != nil {
-		return err
-	}
-	if err := requireSafeDirectory(filepath.Dir(plan.journalPath), true); err != nil {
-		return err
-	}
-	raw, _, err := readExactFile(plan.journalPath, journalMode, 64<<10)
+	raw, err := readJournalBytes(plan)
 	if err != nil {
-		return fmt.Errorf("%w: read ownership journal: %v", ErrDrift, err)
+		return err
 	}
 	if !bytes.Equal(raw, plan.journalBytes) {
 		return fmt.Errorf("%w: journal does not own this revision", ErrDrift)
 	}
 	return nil
+}
+
+func readJournalBytes(plan installPlan) ([]byte, error) {
+	if err := requireDirectoryChain(plan.workspace, journalDirectoryRelative()); err != nil {
+		return nil, err
+	}
+	if err := requireSafeDirectory(filepath.Dir(plan.journalPath), true); err != nil {
+		return nil, err
+	}
+	raw, _, err := readExactFile(plan.journalPath, journalMode, 64<<10)
+	if err != nil {
+		return nil, fmt.Errorf("%w: read ownership journal: %v", ErrDrift, err)
+	}
+	return raw, nil
+}
+
+func upgradeKnownPiRevision(plan installPlan, boundary installBoundary) (bool, error) {
+	legacyBytes, err := canonicalJournal(legacyPiMnemondRevision)
+	if err != nil {
+		return false, err
+	}
+	raw, err := readJournalBytes(plan)
+	if err != nil {
+		return false, err
+	}
+	if !bytes.Equal(raw, legacyBytes) {
+		return false, nil
+	}
+	legacy := make(map[string]fileRecord, len(legacyPiMnemondRevision.Files))
+	for _, record := range legacyPiMnemondRevision.Files {
+		legacy[record.Path] = record
+	}
+	if len(legacy) != len(plan.files) {
+		return false, fmt.Errorf("%w: known revision file set changed", ErrDrift)
+	}
+	for _, file := range plan.files {
+		record, ok := legacy[file.record.Path]
+		if !ok || record.Mode != file.record.Mode {
+			return false, fmt.Errorf("%w: known revision file set changed", ErrDrift)
+		}
+		content, _, readErr := readExactFile(file.path, projectedMode, maxProjectedFileBytes)
+		if errors.Is(readErr, os.ErrNotExist) {
+			continue
+		}
+		if readErr != nil || (digest(content) != record.Digest && !bytes.Equal(content, file.content)) {
+			return false, fmt.Errorf("%w: known projection bytes changed", ErrDrift)
+		}
+	}
+	for _, file := range plan.files {
+		record := legacy[file.record.Path]
+		if _, err := replaceKnownProjectedFile(filepath.Dir(plan.journalPath), file,
+			record.Digest); err != nil {
+			return false, err
+		}
+		if err := runBoundary(boundary, "after_upgrade_file:"+file.record.Path); err != nil {
+			return false, err
+		}
+	}
+	if err := verifyFiles(plan); err != nil {
+		return false, err
+	}
+	if _, err := replaceExactFile(filepath.Dir(plan.journalPath), plan.journalPath,
+		legacyBytes, plan.journalBytes, journalMode, 64<<10); err != nil {
+		return false, fmt.Errorf("%w: replace known ownership journal: %v", ErrDrift, err)
+	}
+	if err := runBoundary(boundary, "after_upgrade_journal"); err != nil {
+		return false, err
+	}
+	return true, cleanupStage(filepath.Dir(plan.journalPath), plan.journalPath,
+		plan.journalBytes, journalMode)
 }
 
 func digest(content []byte) string {

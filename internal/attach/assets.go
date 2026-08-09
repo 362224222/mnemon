@@ -109,8 +109,11 @@ func validateNeutralProjection(guide []byte, cue string, extension, currentExten
 	if strings.Count(source, "content: HOOK_CUE") != 1 ||
 		strings.Count(source, "text: receiptText") != 1 ||
 		!strings.Contains(source, "const HOOK_CUE = "+strconv.Quote(cue)+";") ||
-		!strings.Contains(source, `pi.on("before_agent_start"`) {
-		return errors.New("attach: Pi extension does not have one fixed cue and one bounded Receipt surface")
+		!strings.Contains(source, `pi.on("before_agent_start"`) ||
+		!strings.Contains(source, `execFileSync("mnemon", ["agency", ...args]`) ||
+		!strings.Contains(source,
+			`execFile("mnemon", ["agency", "agent", "submit", "--json"]`) {
+		return errors.New("attach: Pi extension does not have one fixed command, cue, and bounded Receipt surface")
 	}
 	for _, forbidden := range []string{
 		"process.env", "stdout", "stderr", "json.parse(", "content: raw",
@@ -124,7 +127,7 @@ func validateNeutralProjection(guide []byte, cue string, extension, currentExten
 	}
 	currentSource := string(currentExtension)
 	for _, required := range []string{
-		`name: CURRENT_TOOL`, `execFile("mnemond", ["agent", "current", "--json"]`,
+		`name: CURRENT_TOOL`, `execFile("mnemon", ["agency", "agent", "current", "--json"]`,
 		`shell: false`, `setTimeout(interrupt, CURRENT_TIMEOUT_MS)`,
 		`CURRENT_SHUTDOWN_GRACE_MS`, `child.kill(signal)`, `"SIGTERM"`, `"SIGKILL"`,
 		`removeEventListener("abort", interrupt)`, `maxBuffer: MAX_CURRENT_OUTPUT_BYTES`,

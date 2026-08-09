@@ -7,7 +7,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -o /out/domain-world ./testdata/mnemond/domainops/cmd/domain-world && \
     CGO_ENABLED=0 go build -trimpath -o /out/domain-load ./testdata/mnemond/domainops/cmd/domain-load && \
     CGO_ENABLED=0 go build -trimpath -o /out/domainctl ./testdata/mnemond/domainops/cmd/domainctl && \
-    CGO_ENABLED=0 go build -trimpath -o /out/mnemond ./cmd/mnemond
+    CGO_ENABLED=0 go build -trimpath -o /out/mnemon .
 
 FROM alpine:3.22 AS world
 
@@ -29,7 +29,7 @@ RUN apk add --no-cache bash ca-certificates jq sqlite && \
 COPY --chown=10001:10001 test/mnemond/runtime/pi/delegate.ts \
   test/mnemond/runtime/pi/delegate-runtime.mjs /opt/mnemon/pi-delegate/
 COPY --from=build --chown=10001:10001 /out/domainctl /usr/local/bin/domainctl
-COPY --from=build --chown=10001:10001 /out/mnemond /usr/local/bin/mnemond
+COPY --from=build --chown=10001:10001 /out/mnemon /usr/local/bin/mnemon
 
 USER agent
 WORKDIR /workspace

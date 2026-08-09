@@ -15,7 +15,7 @@ func TestPiEffectSettlementUsesOneNativeBoundedToolWithoutShellInference(t *test
 		`const EFFECT_SETTLEMENT_TOOL = "mnemond_submit";`,
 		"const MAX_EFFECT_SETTLEMENT_ATTEMPTS = 2;",
 		`pi.registerTool({`, `name: EFFECT_SETTLEMENT_TOOL`,
-		`execFile("mnemond", ["agent", "submit", "--json"]`,
+		`execFile("mnemon", ["agency", "agent", "submit", "--json"]`,
 		`shell: false`, `child.stdin.end(encoded);`,
 		`_event.toolName === EFFECT_SETTLEMENT_TOOL`,
 		`effectSettlementAttempts >= MAX_EFFECT_SETTLEMENT_ATTEMPTS`,
@@ -26,7 +26,7 @@ func TestPiEffectSettlementUsesOneNativeBoundedToolWithoutShellInference(t *test
 		}
 	}
 	for _, forbidden := range []string{
-		`exec("`, `execSync(`, `spawn(`, `.includes("mnemond`,
+		`exec("`, `execSync(`, `spawn(`, `.includes("mnemon`,
 		`.includes("submit`, `.match(`,
 	} {
 		if strings.Contains(source, forbidden) {

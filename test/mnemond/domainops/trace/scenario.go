@@ -52,7 +52,7 @@ var candidateBinaryPaths = []string{
 	"/opt/mnemon/pi-delegate/delegate-runtime.mjs",
 	"/opt/mnemon/pi-delegate/delegate.ts",
 	"/usr/local/bin/domainctl",
-	"/usr/local/bin/mnemond",
+	"/usr/local/bin/mnemon",
 }
 
 type scenarioEvidence struct {

@@ -33,7 +33,7 @@ function boundaryEnvelope(boundary: string): string {
 
 function runBoundary(args: string[], boundary: string): boolean {
   try {
-    execFileSync("mnemond", args, {
+    execFileSync("mnemon", ["agency", ...args], {
       input: boundaryEnvelope(boundary),
       maxBuffer: MAX_OUTPUT_BYTES,
       stdio: ["pipe", "ignore", "ignore"],
@@ -70,7 +70,7 @@ function intentInput(value: unknown): string | undefined {
 
 function submitIntent(encoded: string, signal: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = execFile("mnemond", ["agent", "submit", "--json"], {
+    const child = execFile("mnemon", ["agency", "agent", "submit", "--json"], {
       encoding: "utf8",
       maxBuffer: MAX_OUTPUT_BYTES,
       shell: false,
@@ -86,7 +86,6 @@ function submitIntent(encoded: string, signal: AbortSignal): Promise<string> {
       return;
     }
     child.stdin.on("error", () => {
-      // The owned child callback reports the bounded process outcome.
     });
     child.stdin.end(encoded);
   });

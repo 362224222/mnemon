@@ -33,7 +33,7 @@ r7_build_image() {
     -t "$R7_IMAGE" "$R7_REPOSITORY_ROOT" >/dev/null
   R7_IMAGE_ID=$(docker image inspect --format '{{.Id}}' "$R7_IMAGE")
   R7_BINARY_DIGESTS=$(docker run --rm --entrypoint sha256sum "$R7_IMAGE" \
-    /usr/local/bin/mnemond)
+    /usr/local/bin/mnemon)
   test -n "$R7_IMAGE_ID" && test -n "$R7_BINARY_DIGESTS" || \
     r7_fail "candidate image identity is unavailable"
 }
@@ -75,13 +75,13 @@ r7_begin_case() {
       --label mnemon.r7.case="$R7_CASE_NAME" "$R7_IMAGE" >/dev/null
     test "$(docker inspect --format '{{.Image}}' "$container")" = "$R7_IMAGE_ID" || \
       r7_fail "node $node does not run the candidate image"
-    test "$(docker exec "$container" sha256sum /usr/local/bin/mnemond)" = \
+    test "$(docker exec "$container" sha256sum /usr/local/bin/mnemon)" = \
       "$R7_BINARY_DIGESTS" || r7_fail "node $node does not run the candidate binary"
   done <<<"$R7_NODES"
 
   while IFS= read -r node; do
     container=$(r7_container "$node")
-    docker exec -w /workspace "$container" mnemond peer prepare \
+    docker exec -w /workspace "$container" mnemon agency peer prepare \
       --listen 0.0.0.0:7447 --advertise "$node:7447" --project-root /workspace \
       >"$R7_RUNTIME_DIR/$node.card.json"
   done <<<"$R7_NODES"
@@ -90,11 +90,11 @@ r7_begin_case() {
     while IFS= read -r remote; do
       test "$origin" = "$remote" && continue
       docker exec -i -w /workspace "$(r7_container "$origin")" \
-        mnemond peer enroll --alias "$remote" --project-root /workspace \
+        mnemon agency peer enroll --alias "$remote" --project-root /workspace \
         <"$R7_RUNTIME_DIR/$remote.card.json" >/dev/null
     done <<<"$R7_NODES"
     docker exec -w /workspace "$(r7_container "$origin")" \
-      mnemond setup --runtime pi --project-root /workspace >/dev/null
+      mnemon agency setup --runtime pi --project-root /workspace >/dev/null
   done <<<"$R7_NODES"
 }
 
@@ -140,11 +140,11 @@ r7_boundary_envelope() {
 
 r7_attach() {
   r7_boundary_envelope | docker exec -i -w /workspace "$(r7_container "$1")" \
-    mnemond hook attach --json >/dev/null
+    mnemon agency hook attach --json >/dev/null
 }
 
 r7_current() {
-  r7_exec "$1" mnemond agent current --json
+  r7_exec "$1" mnemon agency agent current --json
 }
 
 r7_fresh_current() {
@@ -172,18 +172,18 @@ r7_capture() {
   local node=$1 path=$2
   test -f "$path" || r7_fail "Artifact fixture is missing: $path"
   docker exec -i -w /workspace "$(r7_container "$node")" \
-    mnemond artifact capture --json <"$path"
+    mnemon agency artifact capture --json <"$path"
 }
 
 r7_read_artifact() {
   local node=$1 handle=$2
-  r7_exec "$node" mnemond artifact read "$handle"
+  r7_exec "$node" mnemon agency artifact read "$handle"
 }
 
 r7_submit() {
   local node=$1 intent=$2
   printf '%s' "$intent" | docker exec -i -w /workspace "$(r7_container "$node")" \
-    mnemond agent submit --json
+    mnemon agency agent submit --json
 }
 
 r7_expect_accepted() {

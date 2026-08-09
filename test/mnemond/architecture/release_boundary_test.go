@@ -22,13 +22,13 @@ func TestReleaseBoundary(t *testing.T) {
 	t.Run("all retained Go packages belong to the root module", func(t *testing.T) {
 		assertSingleModuleImportLaw(t, root)
 	})
-	t.Run("formal command set is mnemon and mnemond", func(t *testing.T) {
+	t.Run("the release has one mnemon executable with two command domains", func(t *testing.T) {
 		assertFormalCommands(t, root)
 	})
-	t.Run("retired Harness topology is absent", func(t *testing.T) {
+	t.Run("retired command and Harness topology is absent", func(t *testing.T) {
 		assertRetiredHarnessAbsent(t, root)
 	})
-	t.Run("command help preserves product separation", func(t *testing.T) {
+	t.Run("command help preserves Memory and Agency separation", func(t *testing.T) {
 		assertCommandHelpSeparation(t, root)
 	})
 }
@@ -123,68 +123,71 @@ func assertImportsUseRootModule(t *testing.T, base string) {
 
 func assertFormalCommands(t *testing.T, root string) {
 	t.Helper()
-	assertDirectoryNames(t, filepath.Join(root, "cmd"), []string{"mnemon", "mnemond"})
-	assertRootCompatibilityWrapper(t, root)
-	for _, name := range []string{"mnemon", "mnemond"} {
-		command := exec.Command("go", "list", "-f", "{{.Name}}", "./cmd/"+name)
+	assertDirectoryNames(t, filepath.Join(root, "cmd"), []string{"agency", "memory"})
+	assertRootCommandDelegatesToCmd(t, root)
+	for target, want := range map[string]string{
+		".":            "main",
+		"./cmd":        "cmd",
+		"./cmd/agency": "agency",
+		"./cmd/memory": "memory",
+	} {
+		command := exec.Command("go", "list", "-f", "{{.Name}}", target)
 		command.Dir = root
 		command.Env = withoutGoWork(os.Environ())
 		output, err := command.CombinedOutput()
 		if err != nil {
-			t.Fatalf("list cmd/%s: %v\n%s", name, err, output)
+			t.Fatalf("list %s: %v\n%s", target, err, output)
 		}
-		if strings.TrimSpace(string(output)) != "main" {
-			t.Errorf("cmd/%s package = %q, want main", name, strings.TrimSpace(string(output)))
+		if got := strings.TrimSpace(string(output)); got != want {
+			t.Errorf("%s package = %q, want %q", target, got, want)
 		}
 	}
 }
 
-func assertRootCompatibilityWrapper(t *testing.T, root string) {
+func assertRootCommandDelegatesToCmd(t *testing.T, root string) {
 	t.Helper()
 	path := filepath.Join(root, "main.go")
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
 	if err != nil {
-		t.Fatalf("parse root compatibility wrapper: %v", err)
+		t.Fatalf("parse root command: %v", err)
 	}
-	if len(file.Imports) != 1 {
-		t.Fatalf("root compatibility wrapper imports = %d, want one", len(file.Imports))
-	}
-	importPath, err := strconv.Unquote(file.Imports[0].Path.Value)
-	if err != nil || importPath != modulePath+"/internal/mnemoncli" {
-		t.Fatalf("root compatibility wrapper import = %q, want internal/mnemoncli", importPath)
-	}
-	var mainFunction *ast.FuncDecl
-	for _, declaration := range file.Decls {
-		function, ok := declaration.(*ast.FuncDecl)
-		if ok && function.Name.Name == "main" {
-			mainFunction = function
+	importsCmd := false
+	for _, spec := range file.Imports {
+		importPath, err := strconv.Unquote(spec.Path.Value)
+		if err == nil && importPath == modulePath+"/cmd" {
+			importsCmd = true
 		}
 	}
-	if mainFunction == nil || mainFunction.Body == nil || len(mainFunction.Body.List) != 1 {
-		t.Fatal("root compatibility wrapper must contain one main statement")
+	if !importsCmd {
+		t.Fatal("root main must import the product cmd package")
 	}
-	statement, ok := mainFunction.Body.List[0].(*ast.ExprStmt)
-	if !ok {
-		t.Fatal("root compatibility wrapper main statement must be a call")
-	}
-	call, callOK := statement.X.(*ast.CallExpr)
-	if !callOK {
-		t.Fatal("root compatibility wrapper main statement must be a call")
-	}
-	selector, selectorOK := call.Fun.(*ast.SelectorExpr)
-	if !selectorOK {
-		t.Fatal("root compatibility wrapper must call mnemoncli.Execute()")
-	}
-	identifier, identifierOK := selector.X.(*ast.Ident)
-	if !identifierOK || identifier.Name != "mnemoncli" ||
-		selector.Sel.Name != "Execute" || len(call.Args) != 0 {
-		t.Fatal("root compatibility wrapper must only call mnemoncli.Execute()")
+	callsExecute := false
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "Execute" {
+			return true
+		}
+		identifier, ok := selector.X.(*ast.Ident)
+		if ok && identifier.Name == "cmd" {
+			callsExecute = true
+		}
+		return true
+	})
+	if !callsExecute {
+		t.Fatal("root main must delegate execution to cmd.Execute")
 	}
 }
 
 func assertRetiredHarnessAbsent(t *testing.T, root string) {
 	t.Helper()
-	for _, path := range []string{"harness", "cmd/mnemon-harness"} {
+	for _, path := range []string{
+		"harness", "cmd/mnemon-harness", "cmd/mnemon", "cmd/mnemond",
+		"internal/mnemoncli", "internal/cli",
+	} {
 		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(path))); !os.IsNotExist(err) {
 			t.Errorf("retired path still exists: %s", path)
 		}
@@ -193,9 +196,9 @@ func assertRetiredHarnessAbsent(t *testing.T, root string) {
 
 func assertCommandHelpSeparation(t *testing.T, root string) {
 	t.Helper()
-	mnemon := commandHelp(t, root, "mnemon")
+	mnemon := commandHelp(t, root)
 	wantMnemon := []string{
-		"completion", "embed", "forget", "gc", "help", "import", "link", "log",
+		"agency", "completion", "embed", "forget", "gc", "help", "import", "link", "log",
 		"recall", "receipt", "related", "remember", "search", "setup", "status",
 		"store", "viz",
 	}
@@ -203,9 +206,9 @@ func assertCommandHelpSeparation(t *testing.T, root string) {
 		t.Errorf("mnemon top-level commands = %v, want %v", got, wantMnemon)
 	}
 
-	mnemond := commandHelp(t, root, "mnemond")
-	if got, want := mnemondUsageCommands(mnemond), []string{"peer", "serve", "setup"}; !slices.Equal(got, want) {
-		t.Errorf("mnemond top-level commands = %v, want %v", got, want)
+	agency := commandHelp(t, root, "agency")
+	if got, want := agencyUsageCommands(agency), []string{"peer", "serve", "setup"}; !slices.Equal(got, want) {
+		t.Errorf("mnemon agency top-level commands = %v, want %v", got, want)
 	}
 }
 
@@ -232,31 +235,34 @@ func cobraTopLevelCommands(help []byte) []string {
 	return commands
 }
 
-func mnemondUsageCommands(help []byte) []string {
+func agencyUsageCommands(help []byte) []string {
 	lines := strings.Split(string(help), "\n")
 	var commands []string
 	for _, line := range lines {
-		if !strings.HasPrefix(line, "  mnemond ") {
+		if !strings.HasPrefix(line, "  mnemon agency ") {
 			continue
 		}
 		fields := strings.Fields(line)
-		if len(fields) < 2 || fields[0] != "mnemond" || strings.HasPrefix(fields[1], "-") {
+		if len(fields) < 3 || fields[0] != "mnemon" || fields[1] != "agency" ||
+			strings.HasPrefix(fields[2], "-") {
 			continue
 		}
-		commands = append(commands, fields[1])
+		commands = append(commands, fields[2])
 	}
 	slices.Sort(commands)
 	return slices.Compact(commands)
 }
 
-func commandHelp(t *testing.T, root, name string) []byte {
+func commandHelp(t *testing.T, root string, args ...string) []byte {
 	t.Helper()
-	command := exec.Command("go", "run", "./cmd/"+name, "--help")
+	commandArgs := append([]string{"run", "."}, args...)
+	commandArgs = append(commandArgs, "--help")
+	command := exec.Command("go", commandArgs...)
 	command.Dir = root
 	command.Env = withoutGoWork(os.Environ())
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("%s help: %v\n%s", name, err, output)
+		t.Fatalf("mnemon %s help: %v\n%s", strings.Join(args, " "), err, output)
 	}
 	return output
 }

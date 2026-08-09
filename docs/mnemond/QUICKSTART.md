@@ -1,20 +1,19 @@
 # mnemond Agency R7 Quickstart
 
-R7 is Pi-first. Build the two product binaries from the repository root:
+R7 is Pi-first. Build the single product executable from the repository root:
 
 ```sh
-go build -o mnemon ./cmd/mnemon
-go build -o mnemond ./cmd/mnemond
+go build -o mnemon .
 ```
 
-Put both binaries on `PATH` before starting Pi.
+Put `mnemon` on `PATH` before starting Pi.
 
 ## One local Agent
 
 From the physical project directory, run setup once:
 
 ```sh
-mnemond setup --runtime pi --project-root .
+mnemon agency setup --runtime pi --project-root .
 ```
 
 Setup provisions `.mnemon/agency/`, ensures the local daemon, and installs
@@ -44,12 +43,12 @@ Each command prints that node's public Peer Card:
 
 ```sh
 # Node A
-mnemond peer prepare \
+mnemon agency peer prepare \
   --listen 0.0.0.0:7447 --advertise node-a.example:7447 \
   --project-root /work/a > node-a.card.json
 
 # Node B
-mnemond peer prepare \
+mnemon agency peer prepare \
   --listen 0.0.0.0:7447 --advertise node-b.example:7447 \
   --project-root /work/b > node-b.card.json
 ```
@@ -58,17 +57,17 @@ Exchange the public cards out of band, then enroll one stable local alias at
 each node:
 
 ```sh
-mnemond peer enroll --alias node-b --project-root /work/a \
+mnemon agency peer enroll --alias node-b --project-root /work/a \
   < node-b.card.json
-mnemond peer enroll --alias node-a --project-root /work/b \
+mnemon agency peer enroll --alias node-a --project-root /work/b \
   < node-a.card.json
 ```
 
 Finish the once-per-workspace Pi setup:
 
 ```sh
-mnemond setup --runtime pi --project-root /work/a
-mnemond setup --runtime pi --project-root /work/b
+mnemon agency setup --runtime pi --project-root /work/a
+mnemon agency setup --runtime pi --project-root /work/b
 ```
 
 The two nodes still have separate authority. Sending to `node-b` creates a

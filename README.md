@@ -19,10 +19,11 @@ LLM agents forget everything between sessions. Context compaction drops critical
 
 Mnemon gives your agent persistent, cross-session memory — a four-graph knowledge store with intent-aware recall, importance decay, and automatic deduplication. The `mnemon` memory path remains one local binary with zero API keys and one setup command.
 
-Mnemon ships two product binaries with separate authority surfaces. `mnemon`
-remains the existing memory CLI. `mnemond` is the project-local Agency authority:
-it owns durable View → Intent → Receipt state under `.mnemon/agency` and the
-optional peer boundary. See the [mnemond Agency documentation](docs/mnemond/README.md).
+Mnemon ships one product executable with two deliberately separate authority
+surfaces. Existing Memory commands remain at the `mnemon` root. Agency lives at
+`mnemon agency ...`; its local daemon/protocol role is called `mnemond` and owns
+durable View → Intent → Receipt state under `.mnemon/agency` plus the optional
+peer boundary. See the [mnemond Agency documentation](docs/mnemond/README.md).
 
 > **Claude Max / Pro subscriber?** Mnemon works entirely through your existing subscription — no separate API key required. Your LLM subscription *is* the intelligence layer. Two commands and you're done.
 
@@ -65,16 +66,10 @@ See [Design & Architecture](docs/DESIGN.md) for details.
 brew install --cask mnemon-dev/tap/mnemon
 ```
 
-**Memory CLI** (macOS / Linux / Windows):
+**Go install** (macOS / Linux):
 
 ```bash
 go install github.com/mnemon-dev/mnemon@latest
-```
-
-**Agency authority** (macOS / Linux):
-
-```bash
-go install github.com/mnemon-dev/mnemon/cmd/mnemond@latest
 ```
 
 **From source** (macOS / Linux):
@@ -88,7 +83,7 @@ make install
 
 ```bash
 mnemon --version
-mnemond --version  # macOS / Linux
+mnemon agency --version  # Agency is available on macOS / Linux
 ```
 
 ### [Claude Code](https://github.com/anthropics/claude-code)
@@ -387,7 +382,7 @@ Mnemon architecture.
 ## Development
 
 ```bash
-make build          # build the mnemon and mnemond binaries
+make build          # build the single mnemon executable
 make install        # build + install to $GOBIN
 make test           # run deterministic CI tests
 make test-integration  # opt-in CLI E2E and mnemond Agency boundary tests
@@ -402,7 +397,7 @@ See [Development and Deployment](docs/DEPLOYMENT.md) for Docker, Compose, Ollama
 
 ## Documentation
 
-- [mnemond Agency](docs/mnemond/README.md) — durable project-local Agent authority and optional peer federation
+- [mnemond Agency](docs/mnemond/README.md) — the `mnemon agency` surface for durable project-local Agent authority and optional peer federation
 - [Go Engineering Standard](docs/development/go-engineering-standard.md) — maintainability, concurrency, persistence, testing, and review thresholds
 - [Design & Architecture](docs/DESIGN.md) — current engine architecture, algorithms, integration design
 - [Usage & Reference](docs/USAGE.md) — CLI commands, embedding support, architecture overview

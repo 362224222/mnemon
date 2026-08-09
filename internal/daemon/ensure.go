@@ -46,8 +46,8 @@ type ensureDependencies struct {
 // Agent turn.
 func Ensure(ctx context.Context, stateDirectory string) error {
 	return ensure(ctx, stateDirectory, ensureDependencies{
-		resolveExecutable: siblingMnemondExecutable,
-		start:             startMnemond,
+		resolveExecutable: currentMnemonExecutable,
+		start:             startMnemonAgency,
 	})
 }
 
@@ -95,11 +95,11 @@ func ensure(ctx context.Context, stateDirectory string, deps ensureDependencies)
 	}
 	executable, err := deps.resolveExecutable()
 	if err != nil {
-		return fmt.Errorf("%w: resolve companion: %w", ErrEnsure, err)
+		return fmt.Errorf("%w: resolve current executable: %w", ErrEnsure, err)
 	}
 	child, err := deps.start(executable, stateDirectory)
 	if err != nil {
-		return fmt.Errorf("%w: start companion: %w", ErrEnsure, err)
+		return fmt.Errorf("%w: start agency daemon: %w", ErrEnsure, err)
 	}
 	return waitForStartedDaemon(ensureContext, stateDirectory, child)
 }
@@ -127,7 +127,7 @@ func waitForStartedDaemon(ctx context.Context, stateDirectory string,
 	child ensureChild,
 ) (err error) {
 	if child == nil {
-		return fmt.Errorf("%w: started companion is unavailable", ErrEnsure)
+		return fmt.Errorf("%w: started agency daemon is unavailable", ErrEnsure)
 	}
 	released := false
 	defer func() {
@@ -251,43 +251,48 @@ func ownerStatusClient(socket string, ownerUID uint32,
 		transport
 }
 
-func siblingMnemondExecutable() (string, error) {
+func currentMnemonExecutable() (string, error) {
 	current, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
+	return physicalMnemonExecutable(current)
+}
+
+func physicalMnemonExecutable(current string) (string, error) {
+	if current == "" || !filepath.IsAbs(current) || filepath.Clean(current) != current {
+		return "", errors.New("current mnemon executable path is not absolute and clean")
+	}
 	physicalCurrent, err := filepath.EvalSymlinks(current)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("resolve physical mnemon executable: %w", err)
 	}
-	candidate := filepath.Join(filepath.Dir(physicalCurrent), "mnemond")
-	physicalCandidate, err := filepath.EvalSymlinks(candidate)
-	if err != nil || physicalCandidate != candidate {
-		return "", errors.New("sibling mnemond must be a physical path")
+	if !filepath.IsAbs(physicalCurrent) || filepath.Clean(physicalCurrent) != physicalCurrent {
+		return "", errors.New("physical mnemon executable path is not absolute and clean")
 	}
-	info, err := os.Lstat(candidate)
+	info, err := os.Lstat(physicalCurrent)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 ||
 		info.Mode().Perm()&0o022 != 0 {
-		return "", errors.New("sibling mnemond must be a protected executable")
+		return "", errors.New("current mnemon executable must be a protected regular file")
 	}
 	owner, ownerErr := fileOwnerUID(info)
 	if ownerErr != nil || !trustedExecutableOwner(owner, uint32(os.Geteuid())) {
-		return "", errors.New("sibling mnemond has the wrong owner")
+		return "", errors.New("current mnemon executable has the wrong owner")
 	}
-	return candidate, nil
+	return physicalCurrent, nil
 }
 
 func trustedExecutableOwner(owner, effectiveUser uint32) bool {
 	return owner == effectiveUser || owner == 0
 }
 
-func startMnemond(executable, stateDirectory string) (ensureChild, error) {
+func startMnemonAgency(executable, stateDirectory string) (ensureChild, error) {
 	null, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
 		return nil, err
 	}
 	process, startErr := os.StartProcess(executable,
-		[]string{executable, "serve", "--state-dir", stateDirectory}, &os.ProcAttr{
+		[]string{executable, "agency", "serve", "--state-dir", stateDirectory}, &os.ProcAttr{
 			Dir: stateDirectory, Env: []string{}, Files: []*os.File{null, null, null},
 			Sys: &syscall.SysProcAttr{Setsid: true},
 		})

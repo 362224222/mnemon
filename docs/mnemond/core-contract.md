@@ -17,9 +17,10 @@ The derivation history, research evidence, and superseded R7 design material
 live in `.mnemon-dev/architecture/r7/` and `.mnemon-dev/research/`. Those
 documents may explain why a rule exists. They cannot add a requirement.
 
-R7 is implemented by `cmd/mnemond` and its Agency packages under `internal/`.
-The `mnemon` release path, `mnemon setup`, and Legacy Memory remain unchanged;
-the `mnemon` command path must not depend on Agency packages.
+R7 is exposed by `mnemon agency ...` and implemented by `cmd/agency` plus its
+Agency packages under `internal/`. The root `mnemon` release path,
+`mnemon setup`, and Legacy Memory remain behaviorally unchanged. Sharing one
+physical executable does not merge Memory and Agency authority.
 
 ## 1. Product outcome
 
@@ -634,7 +635,7 @@ rather than being truncated, and no semantic payload can raise a bound.
 The Pi reference attachment separates two closed budgets in one governed run:
 at most sixteen exploration tool calls and at most two calls to one native
 Effect-settlement tool. The latter executes only the fixed
-`mnemond agent submit --json` argv without a shell, accepts one bounded
+`mnemon agency agent submit --json` argv without a shell, accepts one bounded
 Intent object on stdin, and returns only the bounded Agent-terminal result. It
 does not inspect Event kind or payload, choose an Intent, or imply acceptance.
 The first excess exploration call is blocked before execution and later
@@ -794,9 +795,10 @@ R7 uses direct tests rather than a second contract registry:
 | `make test-integration` | When explicitly requested, CLI E2E, full mnemond package tests, Core race checks, the generic R7 Docker case runner, the Pi attachment boundary, and the real service world pass once each. |
 | `make test-live` | When explicitly authorized, real Pi/DeepSeek turns exercise the local and federated product scenarios. Model prose is never the pass/fail oracle. |
 
-The ordinary Go architecture tests enforce the `mnemon`/`mnemond` product
-boundary, the exact Agency package dependency graph, one interactive attachment
-issuer, absence of case-specific Core vocabulary, and data-only case fixtures.
+The ordinary Go architecture tests enforce the Memory/Agency authority
+boundary inside the single `mnemon` executable, the exact Agency package
+dependency graph, one interactive attachment issuer, absence of case-specific
+Core vocabulary, and data-only case fixtures.
 Those product boundary suites live under `test/mnemond`; their fixtures live
 under `testdata/mnemond`. The Docker cases then prove that one candidate image
 runs different collaboration descriptions through the same CLI, Event,

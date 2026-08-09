@@ -2,10 +2,11 @@
 
 set -eu
 
-test "$#" = 3
-test "$1" = agent
-test "$2" = current
-test "$3" = --json
+test "$#" = 4
+test "$1" = agency
+test "$2" = agent
+test "$3" = current
+test "$4" = --json
 test -z "$(cat)"
 
 if test "${MNEMON_CURRENT_RPC_MODE:-projected}" = failed; then

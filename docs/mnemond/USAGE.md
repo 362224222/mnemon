@@ -3,8 +3,7 @@
 Build from the repository root:
 
 ```sh
-go build -o mnemon ./cmd/mnemon
-go build -o mnemond ./cmd/mnemond
+go build -o mnemon .
 ```
 
 ## Setup
@@ -12,7 +11,7 @@ go build -o mnemond ./cmd/mnemond
 Pi is the only T0 Runtime adapter:
 
 ```sh
-mnemond setup --runtime pi --project-root /absolute/project
+mnemon agency setup --runtime pi --project-root /absolute/project
 ```
 
 `--project-root` may be omitted when the current directory is the project.
@@ -25,7 +24,7 @@ and secrets remain outside Mnemon Agency state.
 Prepare a durable transport identity and listening configuration:
 
 ```sh
-mnemond peer prepare \
+mnemon agency peer prepare \
   --listen 0.0.0.0:7447 \
   --advertise agent-a.example:7447 \
   --project-root /absolute/project > agent-a.card.json
@@ -35,7 +34,7 @@ The card is public setup material. Enroll a card received through an
 owner-chosen channel under a local alias:
 
 ```sh
-mnemond peer enroll \
+mnemon agency peer enroll \
   --alias agent-b \
   --project-root /absolute/project < agent-b.card.json
 ```
@@ -51,11 +50,11 @@ These commands are used by the installed Pi Hook and guide. They are hidden
 from ordinary help because the normal user workflow does not invoke them:
 
 ```sh
-mnemond hook attach --json
-mnemond agent current --json
-mnemond artifact capture --json < artifact.txt
-mnemond artifact read <view-offered-handle>
-mnemond agent submit --json < intent.json
+mnemon agency hook attach --json
+mnemon agency agent current --json
+mnemon agency artifact capture --json < artifact.txt
+mnemon agency artifact read <view-offered-handle>
+mnemon agency agent submit --json < intent.json
 ```
 
 The sequence is strict:
@@ -78,11 +77,12 @@ Setup normally owns daemon readiness. Supervisors may serve an already
 provisioned node directly:
 
 ```sh
-mnemond serve --state-dir /absolute/project/.mnemon/agency
+mnemon agency serve --state-dir /absolute/project/.mnemon/agency
 ```
 
-`mnemond` never provisions a blank node. One daemon owns the local SQLite
-writer, CAS, control socket, and optional peer workers.
+The `mnemond` daemon role never provisions a blank node. One daemon owns the
+local SQLite writer, CAS, control socket, and optional peer workers. It is
+started by the same physical `mnemon` executable in `agency serve` mode.
 
 ## Completion and trust
 

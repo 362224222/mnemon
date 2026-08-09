@@ -19,9 +19,11 @@ LLM 智能体在会话之间会遗忘一切。上下文压缩丢失关键决策�
 
 Mnemon 为你的 LLM 提供持久的跨会话记忆 — 四图知识存储、意图感知检索、重要度衰减、自动去重。`mnemon` 记忆路径仍是一个本地二进制，零 API 密钥，一条命令完成部署。
 
-Mnemon 提供两个职责独立的正式产品二进制。`mnemon` 保持现有记忆 CLI；
-`mnemond` 是 project-local Agency authority，负责 `.mnemon/agency` 下持久化的
-View → Intent → Receipt 状态与可选 peer boundary。见
+Mnemon 只发布一个 `mnemon` 可执行文件，但保持两个职责独立的 authority
+surface。现有 Memory 命令继续位于 `mnemon` 根级；Agency 通过
+`mnemon agency ...` 暴露。`mnemond` 是其 project-local daemon/协议角色，
+负责 `.mnemon/agency` 下持久化的 View → Intent → Receipt 状态与可选
+peer boundary。见
 [mnemond Agency 文档](../mnemond/README.md)。
 
 > **Claude Max / Pro 订阅用户？** Mnemon 完全通过你现有的订阅运作——不需要额外的 API 密钥。你的 LLM 订阅*本身*就是智能层。两条命令即可完成。
@@ -65,16 +67,10 @@ Mnemon 同时填补了协议栈中的空白。MCP 标准化了 LLM 如何发现�
 brew install --cask mnemon-dev/tap/mnemon
 ```
 
-**Memory CLI**（macOS / Linux / Windows）：
+**Go install**（macOS / Linux）：
 
 ```bash
 go install github.com/mnemon-dev/mnemon@latest
-```
-
-**Agency authority**（macOS / Linux）：
-
-```bash
-go install github.com/mnemon-dev/mnemon/cmd/mnemond@latest
 ```
 
 **从源码构建**（macOS / Linux）：
@@ -88,7 +84,7 @@ make install
 
 ```bash
 mnemon --version
-mnemond --version  # macOS / Linux
+mnemon agency --version  # Agency 支持 macOS / Linux
 ```
 
 ### [Claude Code](https://github.com/anthropics/claude-code)
@@ -336,7 +332,7 @@ Sub-agent 委派是可选执行策略。当 runtime 支持时，主 agent 可以
 ## 开发
 
 ```bash
-make build          # 构建 mnemon 与 mnemond 二进制
+make build          # 构建单一 mnemon 可执行文件
 make install        # 构建 + 安装到 $GOBIN
 make test           # 运行确定性 CI 测试
 make test-integration  # 按需运行 CLI E2E 与 mnemond Agency 边界测试
@@ -351,7 +347,7 @@ make help           # 显示所有目标
 
 ## 文档
 
-- [mnemond Agency](../mnemond/README.md) — 持久化的 project-local Agent authority 与可选 peer federation
+- [mnemond Agency](../mnemond/README.md) — `mnemon agency` 下持久化的 project-local Agent authority 与可选 peer federation
 - [Go 工程规范](../development/go-engineering-standard.md) — 可维护性、并发、持久化、测试与质量 ratchet
 - [设计与架构](DESIGN.md) — 当前 engine architecture、核心概念、算法、集成设计
 - [用法与参考](USAGE.md) — CLI 命令、嵌入向量支持、架构概览

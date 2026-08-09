@@ -15,7 +15,7 @@ const view = '{"schema":"mnemon.agent.view","version":7,"view":"view:test",' +
 
 async function withFakeMnemond(fn) {
   const directory = await mkdtemp(path.join(tmpdir(), "mnemon-pi-current-"));
-  const executable = path.join(directory, "mnemond");
+  const executable = path.join(directory, "mnemon");
   const log = path.join(directory, "calls.log");
   const oldPath = process.env.PATH;
   const oldLog = process.env.MNEMON_CURRENT_LOG;
@@ -121,7 +121,7 @@ test("native Current executes one fixed argv and returns one View v7", async () 
       toolName: "mnemond_current", details: result.details,
     }), undefined);
     assert.equal(getEventListeners(controller.signal, "abort").length, listeners);
-    assert.equal(await readFile(log, "utf8"), "agent current --json|0\n");
+    assert.equal(await readFile(log, "utf8"), "agency agent current --json|0\n");
   });
 });
 
@@ -135,8 +135,8 @@ test("native Current internally replays one journaled operation after transport 
     assert.equal(result.details.status, "projected");
     assert.equal(result.content[0].text, view);
     assert.deepEqual((await readFile(log, "utf8")).trim().split("\n"), [
-      "agent current --json|0",
-      "agent current --json|0",
+      "agency agent current --json|0",
+      "agency agent current --json|0",
     ]);
   });
 });

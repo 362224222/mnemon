@@ -8,25 +8,24 @@ endif
 
 BIN_DIR        := bin
 MNEMON         := $(BIN_DIR)/mnemon
-MNEMOND        := $(BIN_DIR)/mnemond
-MNEMON_LDFLAGS := -s -w -X github.com/mnemon-dev/mnemon/internal/mnemoncli.version=$(VERSION)
-MNEMOND_LDFLAGS := -s -w -X main.version=$(VERSION)
+MNEMON_LDFLAGS := -s -w -X github.com/mnemon-dev/mnemon/cmd.version=$(VERSION)
 
 # Regular CI deliberately excludes real daemon readiness, process, TCP, Docker,
 # JavaScript runtime, and paid-provider tests. Those belong to the explicit
 # integration and live tiers below.
 DETERMINISTIC_PKGS := \
 	. \
-	./cmd/mnemon \
-	./cmd/mnemond \
+	./cmd \
+	./cmd/agency \
+	./cmd/memory \
 	./internal/agency \
+	./internal/agencyclient \
 	./internal/attach \
 	./internal/authority \
 	./internal/cas \
 	./internal/embed \
 	./internal/graph \
 	./internal/importdraft \
-	./internal/mnemoncli \
 	./internal/model \
 	./internal/search \
 	./internal/setup \
@@ -50,21 +49,18 @@ TESTDATA_PKGS := \
 deps: ## Download Go dependencies
 	go mod download
 
-build: ## Build mnemon and mnemond
+build: ## Build the mnemon product binary
 	@mkdir -p $(BIN_DIR)
-	go build -ldflags "$(MNEMON_LDFLAGS)" -o $(MNEMON) ./cmd/mnemon
-	go build -ldflags "$(MNEMOND_LDFLAGS)" -o $(MNEMOND) ./cmd/mnemond
+	go build -ldflags "$(MNEMON_LDFLAGS)" -o $(MNEMON) .
 
-install: build ## Install mnemon and mnemond to GOBIN
+install: build ## Install mnemon to GOBIN
 	@mkdir -p $(GOBIN)
 	cp $(MNEMON) $(GOBIN)/mnemon
-	cp $(MNEMOND) $(GOBIN)/mnemond
 	@echo "Installed: $(GOBIN)/mnemon"
-	@echo "Installed: $(GOBIN)/mnemond"
 
-uninstall: ## Remove mnemon and mnemond from GOBIN
-	rm -f $(GOBIN)/mnemon $(GOBIN)/mnemond
-	@echo "Removed: $(GOBIN)/mnemon and $(GOBIN)/mnemond"
+uninstall: ## Remove mnemon from GOBIN
+	rm -f $(GOBIN)/mnemon
+	@echo "Removed: $(GOBIN)/mnemon"
 	@echo "Run 'mnemon setup --eject' first to remove Memory integrations."
 
 test: ## Run the deterministic CI suite
@@ -74,7 +70,7 @@ test: ## Run the deterministic CI suite
 test-integration: ## Run opt-in E2E, process, network, race, runtime, and Docker tests
 	bash scripts/e2e_test.sh
 	go test -p 1 ./... $(TESTDATA_PKGS) -count=1
-	go test -race -p 1 ./internal/... ./cmd/mnemond $(TESTDATA_PKGS) -count=1
+	go test -race -p 1 ./internal/... ./cmd/agency $(TESTDATA_PKGS) -count=1
 	test/mnemond/scenarios/run_cases.sh
 	test/mnemond/runtime/pi/run_delegate_oracle.sh
 	test/mnemond/domainops/run_world.sh
@@ -103,8 +99,8 @@ release-snapshot: ## Build local GoReleaser snapshot artifacts
 	goreleaser release --snapshot --clean
 
 clean: ## Remove build artifacts and test data
-	rm -f mnemon mnemond
-	rm -f $(BIN_DIR)/mnemon $(BIN_DIR)/mnemond
+	rm -f mnemon
+	rm -f $(BIN_DIR)/mnemon
 	rm -rf .testdata
 
 help: ## Show this help

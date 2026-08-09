@@ -4,12 +4,12 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -o /out/mnemond ./cmd/mnemond
+RUN CGO_ENABLED=0 go build -trimpath -o /out/mnemon .
 
 FROM alpine:3.22
 
 RUN adduser -D -u 10001 agent && mkdir -p /workspace && chown agent:agent /workspace
-COPY --from=build --chown=10001:10001 /out/mnemond /usr/local/bin/mnemond
+COPY --from=build --chown=10001:10001 /out/mnemon /usr/local/bin/mnemon
 
 USER agent
 WORKDIR /workspace

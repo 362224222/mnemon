@@ -33,7 +33,7 @@ func TestLoadHasOneFixedCueOneBoundedReceiptAndNoAuthorityOrSecretSurface(t *tes
 	assertGuideTerminalSurface(t, string(guide))
 	source := string(extension)
 	for _, required := range []string{
-		`pi.on("before_agent_start"`, `execFileSync("mnemond"`,
+		`pi.on("before_agent_start"`, `execFileSync("mnemon", ["agency", ...args]`,
 		`["hook", "attach", "--json"]`, `["hook", "end", "--json"]`,
 		`pi.on("session_shutdown"`, `randomBytes(32).toString("base64url")`,
 		`stdio: ["pipe", "ignore", "ignore"]`, `input: boundaryEnvelope(boundary)`,
@@ -77,8 +77,8 @@ func assertGuideTerminalSurface(t *testing.T, guide string) {
 	for _, required := range []string{
 		"mnemond_current {}",
 		"Choose one `allowed_intents` shape, submit once",
-		"mnemond artifact capture --json < PATH",
-		"mnemond artifact read \"$HANDLE\"",
+		"mnemon agency artifact capture --json < PATH",
+		"mnemon agency artifact read \"$HANDLE\"",
 		"exactly one nonempty",
 		"no Markdown",
 		"VIEW_TARGET", "VIEW_REPLY_TARGET", "CURRENT_HANDLE", "CAPTURE_HANDLE",
@@ -528,6 +528,64 @@ func TestInstallPiExactReplayDoesNotRewriteOwnedFiles(t *testing.T) {
 	}
 }
 
+func TestInstallPiUpgradesTheKnownMnemondRevisionWithoutOverwritingDrift(t *testing.T) {
+	t.Run("exact known revision", func(t *testing.T) {
+		workspace := testWorkspace(t)
+		installLegacyMnemondProjection(t, workspace)
+		receipt, err := InstallPi(workspace)
+		if err != nil || receipt.Replayed || receipt.Revision == legacyPiMnemondRevision.Revision {
+			t.Fatalf("InstallPi(known revision) = (%#v, %v)", receipt, err)
+		}
+		if err := VerifyPi(workspace); err != nil {
+			t.Fatalf("VerifyPi(upgraded) = %v", err)
+		}
+	})
+
+	t.Run("user-modified known file", func(t *testing.T) {
+		workspace := testWorkspace(t)
+		installLegacyMnemondProjection(t, workspace)
+		path := filepath.Join(workspace, ".pi", "extensions", "mnemond.ts")
+		modified := []byte("user-modified projection\n")
+		if err := os.WriteFile(path, modified, projectedMode); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := InstallPi(workspace); !errors.Is(err, ErrDrift) {
+			t.Fatalf("InstallPi(modified known revision) = %v", err)
+		}
+		assertFile(t, path, modified, projectedMode)
+	})
+}
+
+func TestInstallPiRecoversEveryKnownRevisionUpgradeInterruption(t *testing.T) {
+	stages := []string{
+		"after_upgrade_file:.pi/extensions/mnemond-current.ts",
+		"after_upgrade_file:.pi/extensions/mnemond.ts",
+		"after_upgrade_file:.pi/skills/mnemond/SKILL.md",
+		"after_upgrade_journal",
+	}
+	interrupted := errors.New("test upgrade interruption")
+	for _, stage := range stages {
+		t.Run(stage, func(t *testing.T) {
+			workspace := testWorkspace(t)
+			installLegacyMnemondProjection(t, workspace)
+			if _, err := installPi(workspace, func(current string) error {
+				if current == stage {
+					return interrupted
+				}
+				return nil
+			}); !errors.Is(err, interrupted) {
+				t.Fatalf("interrupted upgrade = %v", err)
+			}
+			if _, err := InstallPi(workspace); err != nil {
+				t.Fatalf("recovered upgrade = %v", err)
+			}
+			if err := VerifyPi(workspace); err != nil {
+				t.Fatalf("VerifyPi(recovered upgrade) = %v", err)
+			}
+		})
+	}
+}
+
 func TestInstallPiRecoversEveryDurableInterruption(t *testing.T) {
 	stages := []string{
 		"after_journal",
@@ -754,6 +812,69 @@ func mustPlan(t *testing.T, workspace string) installPlan {
 		t.Fatal(err)
 	}
 	return plan
+}
+
+func installLegacyMnemondProjection(t *testing.T, workspace string) {
+	t.Helper()
+	plan := mustPlan(t, workspace)
+	if err := ensureJournalDirectory(plan); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureProjectionDirectories(plan); err != nil {
+		t.Fatal(err)
+	}
+	legacyByPath := make(map[string]fileRecord, len(legacyPiMnemondRevision.Files))
+	for _, record := range legacyPiMnemondRevision.Files {
+		legacyByPath[record.Path] = record
+	}
+	for _, file := range plan.files {
+		content := legacyMnemondContent(t, file.record.Path, file.content)
+		record, ok := legacyByPath[file.record.Path]
+		if !ok || digest(content) != record.Digest {
+			t.Fatalf("legacy fixture digest for %s = %s, want %#v", file.record.Path,
+				digest(content), record)
+		}
+		if err := os.WriteFile(file.path, content, projectedMode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	journal, err := canonicalJournal(legacyPiMnemondRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plan.journalPath, journal, journalMode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func legacyMnemondContent(t *testing.T, path string, current []byte) []byte {
+	t.Helper()
+	content := string(current)
+	switch path {
+	case ".pi/extensions/mnemond-current.ts":
+		content = strings.Replace(content,
+			`execFile("mnemon", ["agency", "agent", "current", "--json"]`,
+			`execFile("mnemond", ["agent", "current", "--json"]`, 1)
+		content = strings.Replace(content,
+			"async function readCurrentWithReplay(signal: AbortSignal): Promise<string> {\n",
+			"async function readCurrentWithReplay(signal: AbortSignal): Promise<string> {\n"+
+				"  // The CLI journals one operation key before transport. Repeating this exact\n"+
+				"  // argv therefore replays one Current; it cannot claim a second subject.\n", 1)
+	case ".pi/extensions/mnemond.ts":
+		content = strings.Replace(content, `execFileSync("mnemon", ["agency", ...args]`,
+			`execFileSync("mnemond", args`, 1)
+		content = strings.Replace(content,
+			`execFile("mnemon", ["agency", "agent", "submit", "--json"]`,
+			`execFile("mnemond", ["agent", "submit", "--json"]`, 1)
+		content = strings.Replace(content, "    child.stdin.on(\"error\", () => {\n",
+			"    child.stdin.on(\"error\", () => {\n"+
+				"      // The owned child callback reports the bounded process outcome.\n", 1)
+	case ".pi/skills/mnemond/SKILL.md":
+		content = strings.ReplaceAll(content, "mnemon agency artifact", "mnemond artifact")
+	default:
+		t.Fatalf("unknown legacy projection path %q", path)
+	}
+	return []byte(content)
 }
 
 func testWorkspace(t *testing.T) string {

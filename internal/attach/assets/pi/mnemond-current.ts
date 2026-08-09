@@ -69,7 +69,7 @@ function readCurrent(signal: AbortSignal): Promise<string> {
       if (listeningForAbort) signal.removeEventListener("abort", interrupt);
       child.stdin?.off("error", stdinError);
     };
-    child = execFile("mnemond", ["agent", "current", "--json"], {
+    child = execFile("mnemon", ["agency", "agent", "current", "--json"], {
       encoding: "utf8",
       maxBuffer: MAX_CURRENT_OUTPUT_BYTES,
       shell: false,
@@ -102,8 +102,6 @@ function readCurrent(signal: AbortSignal): Promise<string> {
 }
 
 async function readCurrentWithReplay(signal: AbortSignal): Promise<string> {
-  // The CLI journals one operation key before transport. Repeating this exact
-  // argv therefore replays one Current; it cannot claim a second subject.
   for (let attempt = 0; attempt < CURRENT_ATTEMPTS; attempt += 1) {
     try {
       return await readCurrent(signal);

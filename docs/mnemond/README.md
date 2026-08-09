@@ -1,8 +1,10 @@
 # mnemond Agency R7
 
-`mnemond` is Mnemon's formal project-local Agency binary. R7 is Pi-first and
-owns one durable authority below `.mnemon/agency`. The existing `mnemon`
-Memory CLI remains a separate product surface with unchanged behavior.
+`mnemond` is Mnemon's project-local Agency daemon and protocol role. It is not a
+second executable: users and Runtime projections reach it through
+`mnemon agency ...`. R7 is Pi-first and owns one durable authority below
+`.mnemon/agency`. Existing `mnemon` Memory commands remain at the root with
+unchanged behavior.
 
 ## Product model
 
@@ -28,12 +30,12 @@ provider success, or transport acknowledgement is never completion.
 The ordinary user runs one command per workspace:
 
 ```sh
-mnemond setup --runtime pi --project-root .
+mnemon agency setup --runtime pi --project-root .
 ```
 
-Setup provisions the local node, ensures one mnemond, and installs the
-project-local Pi Hook and `mnemond` guide. Normal Pi work then uses that Hook;
-the user does not manually operate governance commands.
+Setup provisions the local node, ensures one mnemond daemon role, and installs
+the project-local Pi Hook and `mnemond` guide. Normal Pi work then uses that
+Hook; the user does not manually operate governance commands.
 
 Peer federation is optional. Operators explicitly prepare a listening node,
 exchange public Peer Cards, and enroll stable aliases. A remote delivery is a
@@ -46,9 +48,10 @@ Teamwork registry, semantic schema loader, or global truth store. Event `kind`
 and first-publish Reference keys are bounded open labels; machine consequences
 remain a closed set enforced by local admission.
 
-The `mnemon` binary, `mnemon setup`, and Legacy Memory do not depend on Agency
-packages. Pi provider and model configuration, including credentials, remain
-Pi-owned and must not enter Agency state, Events, logs, or evidence.
+The single executable does not merge the two authorities: `mnemon setup` and
+Legacy Memory remain independent from Agency state and lifecycle. Pi provider
+and model configuration, including credentials, remain Pi-owned and must not
+enter Agency state, Events, logs, or evidence.
 
 Start with [QUICKSTART.md](QUICKSTART.md), use [USAGE.md](USAGE.md) as the
 command reference, and treat the [R7 Core contract](core-contract.md) as the

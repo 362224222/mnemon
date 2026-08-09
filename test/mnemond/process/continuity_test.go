@@ -108,10 +108,10 @@ func newProcessFixture(t *testing.T) *processFixture {
 	root := moduleRoot(t)
 	binDirectory := t.TempDir()
 	fixture := &processFixture{
-		binary:    filepath.Join(binDirectory, "mnemond"),
+		binary:    filepath.Join(binDirectory, "mnemon"),
 		workspace: shortWorkspace(t),
 	}
-	buildBinary(t, root, "./cmd/mnemond", fixture.binary)
+	buildBinary(t, root, ".", fixture.binary)
 	ctx, cancel := context.WithTimeout(context.Background(), commandBudget)
 	result, err := daemon.Provision(ctx, fixture.workspace)
 	cancel()
@@ -171,7 +171,7 @@ type daemonProcess struct {
 func startDaemon(t *testing.T, binary, stateDirectory string) *daemonProcess {
 	t.Helper()
 	process := &daemonProcess{wait: make(chan error, 1)}
-	process.command = exec.Command(binary, "serve", "--state-dir", stateDirectory)
+	process.command = exec.Command(binary, "agency", "serve", "--state-dir", stateDirectory)
 	process.command.Dir = stateDirectory
 	process.command.Stdout = &process.stdout
 	process.command.Stderr = &process.stderr
@@ -229,7 +229,8 @@ func runTerminal(t *testing.T, binary, workspace, stdin string, args ...string) 
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), commandBudget)
 	defer cancel()
-	command := exec.CommandContext(ctx, binary, args...)
+	commandArgs := append([]string{"agency"}, args...)
+	command := exec.CommandContext(ctx, binary, commandArgs...)
 	command.Dir = workspace
 	command.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer

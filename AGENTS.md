@@ -2,17 +2,17 @@
 
 ## Development
 
-- Build with `go build -o mnemon ./cmd/mnemon` and
-  `go build -o mnemond ./cmd/mnemond`.
+- Build the single product executable with `go build -o mnemon .`.
 - Run `make test` for the deterministic CI suite. It excludes real daemon
   readiness, CLI E2E, wall-clock scenarios, Docker, and provider calls.
 - Run `make test-integration` explicitly for CLI E2E plus mnemond Agency
   timing, race, process, and Docker boundaries; it is not a regular CI gate.
 - Run `make test-live` only when explicitly validating the paid Pi/DeepSeek
   scenarios.
-- Treat `cmd/mnemond` and its Agency packages under `internal/` as the formal
-  second product surface. Keep the `mnemon` CLI and `mnemon setup` behavior
-  independent from Agency packages.
+- Treat `cmd/memory` and `cmd/agency` as command namespaces within the single
+  `mnemon` executable. Keep existing Memory commands at the root; expose Agency
+  through `mnemon agency ...`. `mnemond` remains the local daemon/protocol role,
+  not a second executable.
 - Keep mnemond boundary suites under `test/mnemond` and their data-only fixtures
   under `testdata/mnemond`.
 - Treat `.claude/`, `.codex/`, `.openclaw/`, and similar host directories as

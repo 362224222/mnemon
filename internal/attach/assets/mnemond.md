@@ -45,8 +45,8 @@ Markdown or trailing text. Use bounded `kind`, `payload`, and an offered
 ## Evidence
 
 ```sh
-mnemond artifact capture --json < PATH
-mnemond artifact read "$HANDLE"
+mnemon agency artifact capture --json < PATH
+mnemon agency artifact read "$HANDLE"
 ```
 
 Artifacts are `{"kind":"candidate","handle":"<captured handle>"}` or

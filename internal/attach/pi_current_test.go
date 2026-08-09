@@ -35,7 +35,7 @@ func TestPiCurrentIsTheOnlyViewSurfaceInThePiGuide(t *testing.T) {
 		}
 	}
 	for _, fallback := range []string{
-		"mnemond agent current", "mnemond agent submit",
+		"mnemon agency agent current", "mnemon agency agent submit",
 	} {
 		if strings.Contains(guide, fallback) {
 			t.Fatalf("Pi guide exposes CLI fallback %q", fallback)
@@ -57,7 +57,7 @@ func TestPiCurrentUsesOneNativeBoundedToolWithoutShellInference(t *testing.T) {
 		`const CURRENT_ATTEMPTS = 2;`,
 		`const MAX_CURRENT_OUTPUT_BYTES = (16 << 10) + 1;`,
 		`properties: {}`, `additionalProperties: false`,
-		`execFile("mnemond", ["agent", "current", "--json"]`,
+		`execFile("mnemon", ["agency", "agent", "current", "--json"]`,
 		`return await readCurrent(signal);`,
 		`error instanceof CurrentInterruptedError`,
 		`shell: false`, `setTimeout(interrupt, CURRENT_TIMEOUT_MS)`,
@@ -79,7 +79,7 @@ func TestPiCurrentUsesOneNativeBoundedToolWithoutShellInference(t *testing.T) {
 	}
 	for _, forbidden := range []string{
 		`exec("`, `execSync(`, `spawn(`, `shell: true`, `process.env`,
-		`.includes("mnemond`, `.match(`,
+		`.includes("mnemon`, `.match(`,
 	} {
 		if strings.Contains(source, forbidden) {
 			t.Fatalf("Pi native Current infers authority from an unsafe surface %q", forbidden)

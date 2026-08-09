@@ -37,12 +37,13 @@ func TestMnemondArchitecture(t *testing.T) {
 func assertNativeMemoryDoesNotImportAgency(t *testing.T, root string) {
 	t.Helper()
 	agency := map[string]struct{}{
-		"internal/agency": {}, "internal/attach": {}, "internal/authority": {},
-		"internal/cas": {}, "internal/cli": {}, "internal/daemon": {},
+		"cmd/agency":      {},
+		"internal/agency": {}, "internal/agencyclient": {}, "internal/attach": {}, "internal/authority": {},
+		"internal/cas": {}, "internal/daemon": {},
 		"internal/peerlink": {},
 	}
 	for _, component := range []string{
-		"cmd/mnemon", "internal/mnemoncli", "internal/embed", "internal/graph",
+		"cmd/memory", "internal/embed", "internal/graph",
 		"internal/importdraft", "internal/model", "internal/search", "internal/setup",
 		"internal/store",
 	} {
@@ -103,14 +104,18 @@ func TestExactlyOneActiveMnemondContract(t *testing.T) {
 func assertMnemondPackageGraph(t *testing.T, root string) {
 	t.Helper()
 	want := map[string][]string{
-		"internal/agency":    {},
-		"internal/attach":    {},
-		"internal/authority": {"internal/agency"},
-		"internal/cas":       {"internal/agency"},
-		"internal/cli":       {"internal/agency"},
-		"internal/daemon":    {"internal/agency", "internal/authority", "internal/cas", "internal/peerlink"},
-		"internal/peerlink":  {"internal/agency", "internal/cas"},
-		"cmd/mnemond":        {"internal/attach", "internal/cli", "internal/daemon"},
+		"internal/agency":       {},
+		"internal/agencyclient": {"internal/agency"},
+		"internal/attach":       {},
+		"internal/authority":    {"internal/agency"},
+		"internal/cas":          {"internal/agency"},
+		"internal/daemon":       {"internal/agency", "internal/authority", "internal/cas", "internal/peerlink"},
+		"internal/peerlink":     {"internal/agency", "internal/cas"},
+		"cmd/agency":            {"internal/agencyclient", "internal/attach", "internal/daemon"},
+		"cmd/memory": {
+			"internal/embed", "internal/graph", "internal/importdraft", "internal/model",
+			"internal/search", "internal/setup", "internal/store",
+		},
 	}
 	got := make(map[string]map[string]struct{}, len(want))
 	for component := range want {

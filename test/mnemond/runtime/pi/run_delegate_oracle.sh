@@ -29,7 +29,7 @@ docker info >/dev/null 2>&1 || {
 docker build --quiet --target agent -f "$runner_dir/Dockerfile" \
   -t "$image" "$repository_root" >/dev/null
 mkdir -p "$scratch/bin"
-install -m 0755 "$runtime_dir/current-rpc-mnemond.sh" "$scratch/bin/mnemond"
+install -m 0755 "$runtime_dir/current-rpc-mnemond.sh" "$scratch/bin/mnemon"
 smoke=$(printf '%s\n' '{"id":"state","type":"get_state"}' |
   docker run --rm -i --entrypoint pi "$image" \
     --mode rpc --no-session --no-extensions \

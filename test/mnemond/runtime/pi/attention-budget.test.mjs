@@ -10,7 +10,7 @@ const { default: mnemondExtension } = await import(extensionPath);
 
 async function withFakeMnemond(fn) {
   const directory = await mkdtemp(path.join(tmpdir(), "mnemon-pi-attention-"));
-  const executable = path.join(directory, "mnemond");
+  const executable = path.join(directory, "mnemon");
   const log = path.join(directory, "calls.log");
   const submitInput = path.join(directory, "submit.jsonl");
   const oldPath = process.env.PATH;
@@ -20,7 +20,7 @@ async function withFakeMnemond(fn) {
   await writeFile(
     executable,
     '#!/bin/sh\ninput=$(cat)\nprintf "%s\\n" "$*" >>"$MNEMON_HOOK_LOG"\n' +
-      'if test "$*" = "agent submit --json"; then printf "%s\\n" "$input" >>"$MNEMON_SUBMIT_INPUT"; ' +
+      'if test "$*" = "agency agent submit --json"; then printf "%s\\n" "$input" >>"$MNEMON_SUBMIT_INPUT"; ' +
       'printf "%s\\n" \'{"schema":"mnemon.agent.receipt","version":1,"outcome":"accepted","replayed":false}\'; fi\n' +
       'test "${MNEMON_HOOK_FAIL:-0}" != 1\n',
   );
@@ -136,7 +136,7 @@ test("a governed Pi run preserves only a bounded native Effect slot after sixtee
       ["mnemond_submit"],
       ["bash", "read", "delegate", "mnemond_submit"],
     ]);
-    assert.deepEqual((await readFile(log, "utf8")).trim().split("\n"), ["hook attach --json"]);
+    assert.deepEqual((await readFile(log, "utf8")).trim().split("\n"), ["agency hook attach --json"]);
   });
 });
 
@@ -192,9 +192,9 @@ test("Effect settlement is separate from exploration and executes exactly one fi
       JSON.stringify(secondIntent),
     ]);
     assert.deepEqual((await readFile(log, "utf8")).trim().split("\n"), [
-      "hook attach --json",
-      "agent submit --json",
-      "agent submit --json",
+      "agency hook attach --json",
+      "agency agent submit --json",
+      "agency agent submit --json",
     ]);
   });
 });
@@ -251,7 +251,7 @@ test("automatic continuation cannot remint attachment or attention before settle
     assert.equal(await runtime.handlers.get("before_agent_start")({}, {}), undefined);
     assert.deepEqual(runtime.activeTools(), []);
     assert.deepEqual((await readFile(log, "utf8")).trim().split("\n"), [
-      "hook attach --json",
+      "agency hook attach --json",
     ]);
 
     await runtime.handlers.get("agent_settled")({}, {});
@@ -285,9 +285,9 @@ test("automatic continuation cannot remint attachment or attention before settle
     await runtime.handlers.get("session_shutdown")({}, {});
     assert.deepEqual(runtime.activeTools(), ["bash", "read", "delegate"]);
     assert.deepEqual((await readFile(log, "utf8")).trim().split("\n"), [
-      "hook attach --json",
-      "hook attach --json",
-      "hook end --json",
+      "agency hook attach --json",
+      "agency hook attach --json",
+      "agency hook end --json",
     ]);
   });
 });
@@ -340,7 +340,7 @@ test("a failed tool restore retains authority and blocks the next governed run",
     assert.deepEqual(runtime.activeTools(), ["mnemond_submit"]);
     assert.equal(await runtime.handlers.get("before_agent_start")({}, {}), undefined);
     assert.deepEqual(runtime.activeTools(), ["mnemond_submit"]);
-    assert.deepEqual((await readFile(log, "utf8")).trim().split("\n"), ["hook attach --json"]);
+    assert.deepEqual((await readFile(log, "utf8")).trim().split("\n"), ["agency hook attach --json"]);
 
     runtime.failSet(false);
     await attach(runtime);

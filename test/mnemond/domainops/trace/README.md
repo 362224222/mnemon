@@ -12,7 +12,7 @@ The trace header's `scenario.digest` is content addressed. It binds:
   mission, five domain projections, Compose world, tools, tests, and fixtures;
 - the paid runner, Agent Dockerfile, and load/world entry points that determine
   the attention schedule, Runtime image, and external oracle;
-- the exact `domainctl`, `mnemond`, and bounded Pi delegate
+- the exact `domainctl`, `mnemon` Agency, and bounded Pi delegate
   asset digests observed in the Agent image.
 
 Attention-wave counts, timestamps, model output, and successful outcomes are

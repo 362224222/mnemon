@@ -181,7 +181,7 @@ build_and_start_world() {
     -t "$agent_image" "$repository_root" >/dev/null
   agent_image_id=$(docker image inspect --format '{{.Id}}' "$agent_image")
   agent_binary_digests=$(docker run --rm --entrypoint sha256sum "$agent_image" \
-    /usr/local/bin/mnemond /usr/local/bin/domainctl \
+    /usr/local/bin/mnemon /usr/local/bin/domainctl \
     /opt/mnemon/pi-delegate/delegate.ts /opt/mnemon/pi-delegate/delegate-runtime.mjs)
   test -n "$agent_image_id" && test -n "$agent_binary_digests" ||
     fail 'candidate Agent image identity is unavailable'
@@ -272,7 +272,7 @@ start_agent_container() {
   docker network connect "${project}_${role}-ops" "$container"
   test "$(docker inspect --format '{{.Image}}' "$container")" = "$agent_image_id" ||
     fail "$role does not run the candidate Agent image"
-  test "$(docker exec "$container" sha256sum /usr/local/bin/mnemond \
+  test "$(docker exec "$container" sha256sum /usr/local/bin/mnemon \
     /usr/local/bin/domainctl \
     /opt/mnemon/pi-delegate/delegate.ts \
     /opt/mnemon/pi-delegate/delegate-runtime.mjs)" = "$agent_binary_digests" ||
@@ -332,7 +332,7 @@ prepare_agents() {
     reported_version=$(docker exec "$container" pi --version)
     test "$reported_version" = "$pi_version" ||
       fail "$role Pi version = $reported_version, want $pi_version"
-    docker exec -w /workspace "$container" mnemond peer prepare \
+    docker exec -w /workspace "$container" mnemon agency peer prepare \
       --listen 0.0.0.0:7447 --advertise "$role:7447" --project-root /workspace \
       >"$runtime_root/cards/$role.json"
   done
@@ -340,11 +340,11 @@ prepare_agents() {
     container=$(container_for "$role")
     for remote in $roles; do
       test "$role" = "$remote" && continue
-      docker exec -i -w /workspace "$container" mnemond peer enroll \
+      docker exec -i -w /workspace "$container" mnemon agency peer enroll \
         --alias "$remote" --project-root /workspace \
         <"$runtime_root/cards/$remote.json" >/dev/null
     done
-    docker exec -w /workspace "$container" mnemond setup \
+    docker exec -w /workspace "$container" mnemon agency setup \
       --runtime pi --project-root /workspace >"$runtime_root/setup-$role.json"
     jq -e '.schema == "mnemon.setup" and .version == 1 and .status == "ready"' \
       "$runtime_root/setup-$role.json" >/dev/null || fail "$role setup was not ready"
@@ -352,7 +352,7 @@ prepare_agents() {
       'umask 077; mkdir -p /runtime/pi-state /workspace/.mnemon/live && chmod 700 /runtime/pi-state /workspace/.mnemon/live'
     docker exec -u 0 "$container" chmod 0711 /runtime
     docker exec -d "$container" sh -c \
-      "exec mnemond serve --state-dir $state_dir >/workspace/.mnemon/live/mnemond.log 2>&1"
+      "exec mnemon agency serve --state-dir $state_dir >/workspace/.mnemon/live/mnemond.log 2>&1"
   done
   authority_started=1
   for role in $roles; do
@@ -485,17 +485,18 @@ sanitize_turn() {
     --arg captured_at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" '
     def command: (.args.command // "");
     def invocation_pattern($verb):
-      (("(^|[|;&\n][[:space:]]*)([^[:space:];|&]*/)?mnemond" +
-        "[[:space:]]+agent[[:space:]]+" + $verb + "([[:space:];|&]|$)"));
+      (("(^|[|;&\n][[:space:]]*)([^[:space:];|&]*/)?mnemon" +
+        "[[:space:]]+agency[[:space:]]+agent[[:space:]]+" + $verb +
+        "([[:space:];|&]|$)"));
     def invocation_count($verb): [command | scan(invocation_pattern($verb))] | length;
     def invokes($verb):
       (invocation_count($verb) > 0);
     def mentions_current:
       (command | test(
-        "mnemond[[:space:]]+agent[[:space:]]+current([[:space:]]|$)"));
+        "mnemon[[:space:]]+agency[[:space:]]+agent[[:space:]]+current([[:space:]]|$)"));
     def invokes_exact_current:
       (command | test(
-        "^[[:space:]]*mnemond[[:space:]]+agent" +
+        "^[[:space:]]*mnemon[[:space:]]+agency[[:space:]]+agent" +
         "[[:space:]]+current[[:space:]]+--json[[:space:]]*$"));
     def is_submit_start:
       .type == "tool_execution_start" and
@@ -1008,7 +1009,7 @@ sanitize_turn() {
   ' "$raw" >"$output" || return 1
   jq -s -e '
     all(.[] | select(.type == "tool_execution_start" and .toolName == "bash");
-      ((.args.command // "") | contains("mnemond hook attach") | not))
+      ((.args.command // "") | contains("mnemon agency hook attach") | not))
   ' "$raw" >/dev/null
 }
 
@@ -1064,15 +1065,16 @@ summarize_partial_turn() {
   jq -s -c --arg attention_exhausted "$attention_exhausted_reason" '
     def command: (.args.command // "");
     def invocation_pattern($verb):
-      (("(^|[|;&\n][[:space:]]*)([^[:space:];|&]*/)?mnemond" +
-        "[[:space:]]+agent[[:space:]]+" + $verb + "([[:space:];|&]|$)"));
+      (("(^|[|;&\n][[:space:]]*)([^[:space:];|&]*/)?mnemon" +
+        "[[:space:]]+agency[[:space:]]+agent[[:space:]]+" + $verb +
+        "([[:space:];|&]|$)"));
     def invocation_count($verb): [command | scan(invocation_pattern($verb))] | length;
     def mentions_current:
       (command | test(
-        "mnemond[[:space:]]+agent[[:space:]]+current([[:space:]]|$)"));
+        "mnemon[[:space:]]+agency[[:space:]]+agent[[:space:]]+current([[:space:]]|$)"));
     def invokes_exact_current:
       (command | test(
-        "^[[:space:]]*mnemond[[:space:]]+agent" +
+        "^[[:space:]]*mnemon[[:space:]]+agency[[:space:]]+agent" +
         "[[:space:]]+current[[:space:]]+--json[[:space:]]*$"));
     def domain_invocation_pattern($verb):
       (("(^|[|;&\n])[[:space:]]*([^[:space:];|&]*/)?domainctl" +
@@ -1288,7 +1290,8 @@ summarize_partial_turn() {
         (.type == "message_start" or .type == "message_end") and
         .message.role == "custom" and .message.customType == "mnemond")] | length),
       forbidden_hook_attach:([.[] | select(.type == "tool_execution_start" and
-        .toolName == "bash" and (command | contains("mnemond hook attach")))] | length),
+        .toolName == "bash" and
+        (command | contains("mnemon agency hook attach")))] | length),
       forbidden_secret_probe:([.[] | select(.type == "tool_execution_start" and
         .toolName == "bash" and
         (command | test("DEEPSEEK|API_KEY|printenv|auth\\.json|provider-key")))] | length),
@@ -2134,7 +2137,7 @@ restart_agent_runtimes() {
     tar -C "$restore" -cf - . | docker exec -i "$container" sh -c \
       'umask 077; tar -C /workspace/.mnemon/agency -xf -'
     assert_agent_boundary "$role"
-    docker exec -w /workspace "$container" mnemond setup \
+    docker exec -w /workspace "$container" mnemon agency setup \
       --runtime pi --project-root /workspace >"$runtime_root/restart-setup-$role.json"
     jq -e '.schema == "mnemon.setup" and .version == 1 and .status == "ready"' \
       "$runtime_root/restart-setup-$role.json" >/dev/null ||
@@ -2143,7 +2146,7 @@ restart_agent_runtimes() {
       'umask 077; mkdir -p /runtime/pi-state /workspace/.mnemon/live && chmod 700 /runtime/pi-state /workspace/.mnemon/live'
     docker exec -u 0 "$container" chmod 0711 /runtime
     docker exec -d "$container" sh -c \
-      "exec mnemond serve --state-dir $state_dir >/workspace/.mnemon/live/mnemond.log 2>&1"
+      "exec mnemon agency serve --state-dir $state_dir >/workspace/.mnemon/live/mnemond.log 2>&1"
   done
 
   for role in $roles; do

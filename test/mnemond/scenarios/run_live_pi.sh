@@ -92,10 +92,10 @@ r7_live_build_binaries() {
   go_version=$(awk '$1 == "go" { print $2; exit }' "$R7_LIVE_REPOSITORY_ROOT/go.mod")
   test -n "$go_version" || r7_live_fail 'repository Go version is unavailable'
   if ! env -u DEEPSEEK_API_KEY GOTOOLCHAIN="go$go_version" GOFLAGS=-mod=readonly \
-    go -C "$R7_LIVE_REPOSITORY_ROOT" build -o "$R7_LIVE_ROOT/bin/mnemond" \
-      ./cmd/mnemond >"$build_log" 2>&1; then
+    go -C "$R7_LIVE_REPOSITORY_ROOT" build -o "$R7_LIVE_ROOT/bin/mnemon" \
+      . >"$build_log" 2>&1; then
     r7_live_tail_safe_log "$build_log"
-    r7_live_fail 'mnemond build failed'
+    r7_live_fail 'mnemon build failed'
   fi
 }
 
@@ -160,19 +160,19 @@ r7_live_start_workspace() {
   R7_LIVE_WORKSPACE=$(cd "$R7_LIVE_ROOT/workspace" && pwd -P)
   R7_LIVE_STATE=$R7_LIVE_WORKSPACE/.mnemon/agency
 
-  if ! env -u DEEPSEEK_API_KEY "$R7_LIVE_ROOT/bin/mnemond" peer prepare \
+  if ! env -u DEEPSEEK_API_KEY "$R7_LIVE_ROOT/bin/mnemon" agency peer prepare \
     --listen 127.0.0.1:17447 --advertise 127.0.0.1:17447 \
     --project-root "$R7_LIVE_WORKSPACE" >"$card" 2>"$R7_LIVE_ROOT/prepare.err"; then
     r7_live_tail_safe_log "$R7_LIVE_ROOT/prepare.err"
     r7_live_fail 'workspace provisioning failed'
   fi
 
-  env -u DEEPSEEK_API_KEY "$R7_LIVE_ROOT/bin/mnemond" serve --state-dir "$R7_LIVE_STATE" \
+  env -u DEEPSEEK_API_KEY "$R7_LIVE_ROOT/bin/mnemon" agency serve --state-dir "$R7_LIVE_STATE" \
     >"$R7_LIVE_ROOT/daemon.out" 2>"$R7_LIVE_ROOT/daemon.err" &
   R7_LIVE_DAEMON_PID=$!
 
   if ! env -u DEEPSEEK_API_KEY PATH="$R7_LIVE_ROOT/bin:$PATH" \
-    "$R7_LIVE_ROOT/bin/mnemond" setup --runtime pi \
+    "$R7_LIVE_ROOT/bin/mnemon" agency setup --runtime pi \
       --project-root "$R7_LIVE_WORKSPACE" >"$setup" 2>"$R7_LIVE_ROOT/setup.err"; then
     r7_live_tail_safe_log "$R7_LIVE_ROOT/setup.err"
     r7_live_fail 'Pi projection setup failed'
@@ -313,14 +313,14 @@ r7_live_assert_committed_effect() {
   if ! r7_live_boundary_envelope | (
     cd "$R7_LIVE_WORKSPACE" &&
       env -u DEEPSEEK_API_KEY PATH="$R7_LIVE_ROOT/bin:$PATH" \
-        "$R7_LIVE_ROOT/bin/mnemond" hook attach --json
+        "$R7_LIVE_ROOT/bin/mnemon" agency hook attach --json
   ) >"$hook" 2>/dev/null; then
     r7_live_fail 'a fresh attachment could not inspect the post-Pi authority state'
   fi
   if ! (
     cd "$R7_LIVE_WORKSPACE" &&
       env -u DEEPSEEK_API_KEY PATH="$R7_LIVE_ROOT/bin:$PATH" \
-        "$R7_LIVE_ROOT/bin/mnemond" agent current --json
+        "$R7_LIVE_ROOT/bin/mnemon" agency agent current --json
   ) >"$view" 2>/dev/null; then
     r7_live_fail 'a fresh attachment could not obtain the post-Pi View'
   fi
