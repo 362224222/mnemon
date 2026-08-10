@@ -9,7 +9,7 @@ const extensionPath = process.env.MNEMON_PI_CURRENT_EXTENSION;
 if (!extensionPath) throw new Error("MNEMON_PI_CURRENT_EXTENSION is required");
 const { default: currentExtension } = await import(extensionPath);
 
-const view = '{"schema":"mnemon.agent.view","version":7,"view":"view:test",' +
+const view = '{"schema":"mnemon.agent.view","version":8,"view":"view:test",' +
   '"outstanding":{"open_total":0,"related_total":0,"related_projected":0,' +
   '"truncated":false},"allowed_intents":[]}';
 
@@ -103,7 +103,7 @@ function fakePi() {
   return { tool, toolResult };
 }
 
-test("native Current executes one fixed argv and returns one View v7", async () => {
+test("native Current executes one fixed argv and returns one View v8", async () => {
   await withFakeMnemond(async ({ log }) => {
     const runtime = fakePi();
     assert.equal(runtime.tool.name, "mnemond_current");
@@ -153,9 +153,9 @@ test("native Current fails closed on parameters, framing, schema, and process fa
       '{}\n',
       '{"schema":"mnemon.agent.view","version":5,"view":"view:test"}\n',
       `${view}\n${view}\n`,
-      '{"schema":"mnemon.agent.view","version":7,"view":"view:test"\n',
+      '{"schema":"mnemon.agent.view","version":8,"view":"view:test"\n',
       `${JSON.stringify({
-        schema: "mnemon.agent.view", version: 7, view: "x".repeat(16 << 10),
+        schema: "mnemon.agent.view", version: 8, view: "x".repeat(16 << 10),
       })}\n`,
     ]) {
       process.env.MNEMON_CURRENT_OUTPUT = output;

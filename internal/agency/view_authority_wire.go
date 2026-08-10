@@ -24,15 +24,8 @@ type viewSubjectWire struct {
 }
 
 type viewReferenceWire struct {
-	Handle           string                    `json:"handle"`
-	Head             referenceExpectationWire  `json:"head"`
-	TerminalOutcomes *viewTerminalOutcomesWire `json:"terminal_outcomes,omitempty"`
-}
-
-type viewTerminalOutcomesWire struct {
-	Completed  int64 `json:"completed,omitempty"`
-	Declined   int64 `json:"declined,omitempty"`
-	Unresolved int64 `json:"unresolved,omitempty"`
+	Handle string                   `json:"handle"`
+	Head   referenceExpectationWire `json:"head"`
 }
 
 type viewTargetWire struct {
@@ -66,14 +59,8 @@ func (view ViewAuthority) wire() machineViewWire {
 	}
 	for handle, reference := range view.references {
 		head := reference.head.canonical().(eventRefWire)
-		projected := viewReferenceWire{Handle: handle,
-			Head: referenceExpectationWire{Key: reference.key.String(), Head: &head}}
-		if reference.outcomes != (AgentViewTerminalOutcomes{}) {
-			projected.TerminalOutcomes = &viewTerminalOutcomesWire{
-				Completed: reference.outcomes.Completed, Declined: reference.outcomes.Declined,
-				Unresolved: reference.outcomes.Unresolved}
-		}
-		wire.References = append(wire.References, projected)
+		wire.References = append(wire.References, viewReferenceWire{Handle: handle,
+			Head: referenceExpectationWire{Key: reference.key.String(), Head: &head}})
 	}
 	for _, target := range view.targets {
 		wire.Targets = append(wire.Targets, viewTargetWire{

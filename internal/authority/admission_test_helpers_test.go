@@ -180,6 +180,18 @@ func referenceRequest(t *testing.T, view BoundView, operationValue string,
 	return request
 }
 
+func publishTestReference(t *testing.T, fixture *authorityFixture, key, content string) {
+	t.Helper()
+	digest := fixture.catalog(t, content)
+	request := referenceRequest(t, fixture.current(t), "operation:publish:"+key,
+		agency.ConsequencePublishReference, key, &digest)
+	result, err := fixture.store.Admit(fixture.ctx, fixture.proof, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+}
+
 type publicViewWire struct {
 	Current *struct {
 		Facts struct {
@@ -188,14 +200,9 @@ type publicViewWire struct {
 	} `json:"current"`
 	References []struct {
 		Facts struct {
-			Head             string `json:"head"`
-			Key              string `json:"key"`
-			State            string `json:"state"`
-			TerminalOutcomes *struct {
-				Completed  int64 `json:"completed"`
-				Declined   int64 `json:"declined"`
-				Unresolved int64 `json:"unresolved"`
-			} `json:"terminal_outcomes"`
+			Head  string `json:"head"`
+			Key   string `json:"key"`
+			State string `json:"state"`
 		} `json:"facts"`
 	} `json:"references"`
 }
@@ -295,7 +302,7 @@ func countRows(t *testing.T, store *Store, table string) int {
 	t.Helper()
 	allowed := map[string]bool{"events": true, "operations": true, "handlings": true,
 		"active_references": true, "reference_lineage": true, "claim_dispositions": true,
-		"reference_outcome_projection": true, "peer_outbox": true, "peer_inbox": true}
+		"peer_outbox": true, "peer_inbox": true}
 	if !allowed[table] {
 		t.Fatal(errors.New("test requested unsafe table"))
 	}

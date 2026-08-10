@@ -13,4 +13,4 @@ if test "${MNEMON_CURRENT_RPC_MODE:-projected}" = failed; then
   exit 1
 fi
 
-printf '%s\n' '{"schema":"mnemon.agent.view","version":7,"view":"view:rpc-current","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}'
+printf '%s\n' '{"schema":"mnemon.agent.view","version":8,"view":"view:rpc-current","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}'

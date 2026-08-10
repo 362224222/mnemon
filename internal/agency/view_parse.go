@@ -141,13 +141,7 @@ func parseViewReferences(wires []viewReferenceWire) ([]ReferenceExpectation, err
 		if err != nil {
 			return nil, err
 		}
-		outcomes := AgentViewTerminalOutcomes{}
-		if wire.TerminalOutcomes != nil {
-			outcomes = AgentViewTerminalOutcomes{Completed: wire.TerminalOutcomes.Completed,
-				Declined:   wire.TerminalOutcomes.Declined,
-				Unresolved: wire.TerminalOutcomes.Unresolved}
-		}
-		expectation, err := ExpectReferenceHeadWithOutcomes(handle, key, head, outcomes)
+		expectation, err := ExpectReferenceHead(handle, key, head)
 		if err != nil {
 			return nil, err
 		}

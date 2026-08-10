@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 
 const child = spawn("pi", [
   "--mode", "rpc", "--no-session", "--no-extensions",
-  "-e", "/attention-test/mnemond-current.ts",
-  "-e", "/attention-test/current-rpc-provider.ts",
+  "-e", "/current-test/mnemond-current.ts",
+  "-e", "/current-test/current-rpc-provider.ts",
   "--provider", "mnemon-current-oracle", "--model", "current-oracle",
   "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files",
   "--tools", "mnemond_current", "--no-approve",

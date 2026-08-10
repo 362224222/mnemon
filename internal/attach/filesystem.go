@@ -92,60 +92,6 @@ func convergeFile(plan installPlan, file projectedFile) (bool, error) {
 	return true, nil
 }
 
-func replaceKnownProjectedFile(stagingDirectory string, file projectedFile,
-	legacyDigest string,
-) (bool, error) {
-	current, _, err := readExactFile(file.path, projectedMode, maxProjectedFileBytes)
-	if errors.Is(err, os.ErrNotExist) {
-		if err := publishExclusive(stagingDirectory, file.path, file.content, projectedMode); err != nil {
-			return false, fmt.Errorf("%w: publish upgraded projected file: %v", ErrDrift, err)
-		}
-		return true, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("%w: inspect upgraded projected file: %v", ErrDrift, err)
-	}
-	if bytes.Equal(current, file.content) {
-		return false, cleanupStage(stagingDirectory, file.path, file.content, projectedMode)
-	}
-	if digest(current) != legacyDigest {
-		return false, fmt.Errorf("%w: known projected file changed during upgrade", ErrDrift)
-	}
-	return replaceExactFile(stagingDirectory, file.path, current, file.content,
-		projectedMode, maxProjectedFileBytes)
-}
-
-func replaceExactFile(stagingDirectory, target string, expected, replacement []byte,
-	mode os.FileMode, maximum int64,
-) (bool, error) {
-	stage, err := prepareStage(stagingDirectory, target, replacement, mode)
-	if err != nil {
-		return false, err
-	}
-	current, _, err := readExactFile(target, mode, maximum)
-	if err != nil {
-		return false, err
-	}
-	if bytes.Equal(current, replacement) {
-		return false, cleanupStage(stagingDirectory, target, replacement, mode)
-	}
-	if !bytes.Equal(current, expected) {
-		return false, fmt.Errorf("%w: owned file changed during replacement", ErrDrift)
-	}
-	if err := os.Rename(stage, target); err != nil {
-		return false, err
-	}
-	if err := syncDirectory(filepath.Dir(target)); err != nil {
-		return false, err
-	}
-	if filepath.Dir(target) != stagingDirectory {
-		if err := syncDirectory(stagingDirectory); err != nil {
-			return false, err
-		}
-	}
-	return true, nil
-}
-
 func verifyFiles(plan installPlan) error {
 	for _, file := range plan.files {
 		relative, err := filepath.Rel(plan.workspace, filepath.Dir(file.path))

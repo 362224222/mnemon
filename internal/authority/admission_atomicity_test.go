@@ -367,7 +367,6 @@ func snapshotP05Authority(t *testing.T, store *Store) p05Snapshot {
 		"claim_dispositions",
 		"active_references",
 		"reference_lineage",
-		"reference_outcome_projection",
 		"peer_outbox",
 		"peer_inbox",
 	}
@@ -467,10 +466,8 @@ func p05SnapshotQuery(table string) (string, bool) {
 		"claim_dispositions": `SELECT * FROM claim_dispositions ORDER BY disposition_key`,
 		"active_references":  `SELECT * FROM active_references ORDER BY reference_key`,
 		"reference_lineage":  `SELECT * FROM reference_lineage ORDER BY event_id`,
-		"reference_outcome_projection": `SELECT * FROM reference_outcome_projection
-			ORDER BY reference_event_id`,
-		"peer_outbox": `SELECT * FROM peer_outbox ORDER BY delivery_id`,
-		"peer_inbox":  `SELECT * FROM peer_inbox ORDER BY delivery_id`,
+		"peer_outbox":        `SELECT * FROM peer_outbox ORDER BY delivery_id`,
+		"peer_inbox":         `SELECT * FROM peer_inbox ORDER BY delivery_id`,
 	}
 	query, ok := queries[table]
 	return query, ok

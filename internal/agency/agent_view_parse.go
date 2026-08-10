@@ -206,13 +206,6 @@ func agentViewReferenceSpecsFromWire(wires []agentViewReferenceWire, authority V
 			return nil, invariant("Agent View Reference", "does not match a sealed Reference offer")
 		}
 		spec := AgentViewReferenceSpec{Head: head}
-		if wire.Facts.TerminalOutcomes != nil {
-			spec.TerminalOutcomes = AgentViewTerminalOutcomes{
-				Completed:  wire.Facts.TerminalOutcomes.Completed,
-				Declined:   wire.Facts.TerminalOutcomes.Declined,
-				Unresolved: wire.Facts.TerminalOutcomes.Unresolved,
-			}
-		}
 		switch wire.Facts.State {
 		case "active":
 			if wire.Facts.Artifact == nil {

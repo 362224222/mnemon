@@ -325,7 +325,7 @@ r7_live_assert_committed_effect() {
     r7_live_fail 'a fresh attachment could not obtain the post-Pi View'
   fi
   jq -e '
-    .schema == "mnemon.agent.view" and .version == 7 and
+    .schema == "mnemon.agent.view" and .version == 8 and
     .current.semantic.kind == "live.pi.probe" and
     .current.semantic.payload == "persist one Pi-originated responsibility" and
     (.current.facts.handle | type == "string" and length > 0)

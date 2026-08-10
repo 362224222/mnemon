@@ -1,18 +1,19 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const HOOK_CUE = "mnemond state is available; read .pi/skills/mnemond/SKILL.md and use its exact Pi tools and artifact commands.";
-const MAX_OUTPUT_BYTES = 4096;
+const MAX_BOUNDARY_OUTPUT_BYTES = 4096;
+const MAX_RECEIPT_OUTPUT_BYTES = (4 << 10) + 1;
 const ATTACH_TIMEOUT_MS = 5000;
 const SUBMIT_TIMEOUT_MS = 5000;
+const SUBMIT_SHUTDOWN_GRACE_MS = 100;
 const ATTACH_ATTEMPTS = 2;
-const MAX_TOOL_CALL_ATTEMPTS_PER_RUN = 16;
-const MAX_EFFECT_SETTLEMENT_ATTEMPTS = 2;
 const MAX_INTENT_BYTES = 12 * 1024;
-const EFFECT_SETTLEMENT_TOOL = "mnemond_submit";
-const ATTENTION_EXHAUSTED_REASON =
-  "Attention budget exhausted. This tool did not run. Only mnemond_submit may remain.";
+const MAX_DIAGNOSTIC_BYTES = 512;
+const SUBMIT_TOOL = "mnemond_submit";
+
+class SubmitInterruptedError extends Error {}
 
 const SubmitParameters = {
   type: "object",
@@ -35,7 +36,7 @@ function runBoundary(args: string[], boundary: string): boolean {
   try {
     execFileSync("mnemon", ["agency", ...args], {
       input: boundaryEnvelope(boundary),
-      maxBuffer: MAX_OUTPUT_BYTES,
+      maxBuffer: MAX_BOUNDARY_OUTPUT_BYTES,
       stdio: ["pipe", "ignore", "ignore"],
       timeout: ATTACH_TIMEOUT_MS,
     });
@@ -68,107 +69,145 @@ function intentInput(value: unknown): string | undefined {
   }
 }
 
+function hasExactKeys(value: object, expected: string[]): boolean {
+  const actual = Object.keys(value).sort();
+  return actual.length === expected.length &&
+    actual.every((key, index) => key === expected[index]);
+}
+
+function parseReceiptOutput(stdout: string): string | undefined {
+  if (Buffer.byteLength(stdout, "utf8") > MAX_RECEIPT_OUTPUT_BYTES ||
+      !stdout.endsWith("\n") || stdout.indexOf("\n") !== stdout.length - 1) {
+    return undefined;
+  }
+  const raw = stdout.slice(0, -1);
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const receipt = value as {
+    schema?: unknown;
+    version?: unknown;
+    outcome?: unknown;
+    replayed?: unknown;
+    diagnostic?: unknown;
+  };
+  if (receipt.schema !== "mnemon.agent.receipt" || receipt.version !== 1 ||
+      typeof receipt.replayed !== "boolean") return undefined;
+  if (receipt.outcome === "accepted") {
+    if (!hasExactKeys(receipt, ["outcome", "replayed", "schema", "version"])) return undefined;
+  } else if (receipt.outcome === "rejected") {
+    if (!hasExactKeys(receipt,
+      ["diagnostic", "outcome", "replayed", "schema", "version"]) ||
+      typeof receipt.diagnostic !== "string" || receipt.diagnostic.length === 0 ||
+      Buffer.byteLength(receipt.diagnostic, "utf8") > MAX_DIAGNOSTIC_BYTES) return undefined;
+  } else {
+    return undefined;
+  }
+  return raw;
+}
+
+function signalOwnedChild(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (child.exitCode === null && child.signalCode === null) child.kill(signal);
+}
+
 function submitIntent(encoded: string, signal: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = execFile("mnemon", ["agency", "agent", "submit", "--json"], {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let interrupted = false;
+    let listeningForAbort = false;
+    let child: ChildProcess;
+    const interrupt = () => {
+      if (interrupted) return;
+      interrupted = true;
+      signalOwnedChild(child, "SIGTERM");
+      killTimer = setTimeout(() => signalOwnedChild(child, "SIGKILL"),
+        SUBMIT_SHUTDOWN_GRACE_MS);
+      killTimer.unref?.();
+    };
+    const stdinError = () => interrupt();
+    const cleanup = () => {
+      if (timeout !== undefined) clearTimeout(timeout);
+      if (killTimer !== undefined) clearTimeout(killTimer);
+      if (listeningForAbort) signal.removeEventListener("abort", interrupt);
+      child.stdin?.off("error", stdinError);
+    };
+    child = execFile("mnemon", ["agency", "agent", "submit", "--json"], {
       encoding: "utf8",
-      maxBuffer: MAX_OUTPUT_BYTES,
+      maxBuffer: MAX_RECEIPT_OUTPUT_BYTES,
       shell: false,
-      signal,
-      timeout: SUBMIT_TIMEOUT_MS,
-    }, (error, result) => {
-      if (error) reject(error);
-      else resolve(result);
+    }, (error, stdout, stderr) => {
+      cleanup();
+      const receipt = !interrupted && error === null && stderr === "" ?
+        parseReceiptOutput(stdout) : undefined;
+      if (interrupted) reject(new SubmitInterruptedError("submit interrupted"));
+      else if (receipt === undefined) reject(new Error("submit unavailable"));
+      else resolve(receipt);
     });
+    timeout = setTimeout(interrupt, SUBMIT_TIMEOUT_MS);
+    timeout.unref?.();
+    if (signal.aborted) interrupt();
+    else {
+      signal.addEventListener("abort", interrupt, { once: true });
+      listeningForAbort = true;
+    }
     if (child.stdin === null) {
-      child.kill();
-      reject(new Error("submit stdin unavailable"));
+      interrupt();
       return;
     }
-    child.stdin.on("error", () => {
-    });
-    child.stdin.end(encoded);
+    child.stdin.once("error", stdinError);
+    try {
+      child.stdin.end(encoded);
+    } catch {
+      interrupt();
+    }
   });
+}
+
+function submitResult(text: string, status: "settled" | "failed" | "input_invalid") {
+  return {
+    content: [{ type: "text" as const, text }],
+    details: { schema: "mnemon.pi.effect", version: 1, status },
+  };
 }
 
 export default function (pi: ExtensionAPI) {
   let activeBoundary: string | undefined;
-  let governedRun = false;
-  let toolCallAttempts = 0;
-  let budgetExhausted = false;
-  let effectSettlementAttempts = 0;
-  let postBudgetTurns = 0;
-  let postSettlementFinalTurns = 0;
-  let abortIssued = false;
-  let ownsToolOverride = false;
-  let savedActiveTools: string[] | undefined;
 
-  function abortOnce(ctx: { abort(): void }): void {
-    if (abortIssued) return;
-    try {
-      ctx.abort();
-      abortIssued = true;
-    } catch {
-      // Tool calls remain blocked; a later turn may retry the Host abort.
-    }
-  }
-
-  function resetAttention(): boolean {
-    governedRun = false;
-    toolCallAttempts = 0;
-    budgetExhausted = false;
-    effectSettlementAttempts = 0;
-    postBudgetTurns = 0;
-    postSettlementFinalTurns = 0;
-    abortIssued = false;
-    if (!ownsToolOverride) {
-      savedActiveTools = undefined;
-      return true;
-    }
-    if (savedActiveTools === undefined) return false;
-    try {
-      pi.setActiveTools(savedActiveTools);
-      ownsToolOverride = false;
-      savedActiveTools = undefined;
-      return true;
-    } catch {
-      // Retain ownership and the exact snapshot so the next boundary can retry.
-      return false;
-    }
+  function releaseBoundary(): boolean {
+    const boundary = activeBoundary;
+    if (boundary === undefined) return true;
+    if (!endBoundary(boundary)) return false;
+    activeBoundary = undefined;
+    return true;
   }
 
   pi.registerTool({
-    name: EFFECT_SETTLEMENT_TOOL,
+    name: SUBMIT_TOOL,
     label: "Submit mnemond Intent",
     description:
-      "Submit one bounded Intent from the current View. The Receipt alone reports its Effect.",
+      "Submit one bounded Intent from the current View. The validated Receipt alone reports its Effect.",
     parameters: SubmitParameters as never,
 
     async execute(_toolCallId, params, signal) {
       const encoded = intentInput(params?.intent);
       if (encoded === undefined) {
-        return {
-          content: [{ type: "text" as const, text: "Invalid bounded Intent object." }],
-          details: { schema: "mnemon.pi.effect", version: 1, status: "input_invalid" },
-        };
+        return submitResult("Invalid bounded Intent object.", "input_invalid");
       }
       try {
-        const receiptText = await submitIntent(encoded, signal);
-        return {
-          content: [{ type: "text" as const, text: receiptText }],
-          details: { schema: "mnemon.pi.effect", version: 1, status: "settled" },
-        };
+        return submitResult(await submitIntent(encoded, signal), "settled");
       } catch {
-        return {
-          content: [{ type: "text" as const, text: "Submit failed; correct once or stop." }],
-          details: { schema: "mnemon.pi.effect", version: 1, status: "failed" },
-        };
+        return submitResult("Submit unavailable.", "failed");
       }
     },
   });
 
   pi.on("tool_result", async (event) => {
-    if (event.toolName !== EFFECT_SETTLEMENT_TOOL) return;
+    if (event.toolName !== SUBMIT_TOOL) return;
     const details = event.details as
       | { schema?: unknown; version?: unknown; status?: unknown }
       | undefined;
@@ -177,12 +216,10 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", async () => {
-    if (governedRun) return undefined;
-    if (!resetAttention()) return undefined;
+    if (!releaseBoundary()) return undefined;
     const boundary = randomBytes(32).toString("base64url");
     if (!attachBoundary(boundary)) return undefined;
     activeBoundary = boundary;
-    governedRun = true;
     return {
       message: {
         customType: "mnemond",
@@ -192,64 +229,11 @@ export default function (pi: ExtensionAPI) {
     };
   });
 
-  pi.on("tool_call", async (_event, ctx) => {
-    if (!governedRun) return undefined;
-    if (_event.toolName === EFFECT_SETTLEMENT_TOOL) {
-      if (effectSettlementAttempts >= MAX_EFFECT_SETTLEMENT_ATTEMPTS) {
-        return { block: true, reason: ATTENTION_EXHAUSTED_REASON };
-      }
-      effectSettlementAttempts += 1;
-      postBudgetTurns = 0;
-      postSettlementFinalTurns = 0;
-      if (budgetExhausted && effectSettlementAttempts === MAX_EFFECT_SETTLEMENT_ATTEMPTS) {
-        try {
-          pi.setActiveTools([]);
-        } catch {
-          // The tool_call gate still blocks every later attempt.
-        }
-      }
-      return undefined;
-    }
-    if (!budgetExhausted && toolCallAttempts < MAX_TOOL_CALL_ATTEMPTS_PER_RUN) {
-      toolCallAttempts += 1;
-      return undefined;
-    }
-    if (!budgetExhausted) {
-      budgetExhausted = true;
-      try {
-        savedActiveTools = [...pi.getActiveTools()];
-        ownsToolOverride = true;
-        const settlementAllowed = savedActiveTools.includes(EFFECT_SETTLEMENT_TOOL) &&
-          effectSettlementAttempts < MAX_EFFECT_SETTLEMENT_ATTEMPTS;
-        pi.setActiveTools(settlementAllowed ? [EFFECT_SETTLEMENT_TOOL] : []);
-      } catch {
-        abortOnce(ctx);
-      }
-    }
-    return { block: true, reason: ATTENTION_EXHAUSTED_REASON };
-  });
-
-  pi.on("turn_start", async (_event, ctx) => {
-    if (!governedRun || !budgetExhausted) return;
-    if (effectSettlementAttempts >= MAX_EFFECT_SETTLEMENT_ATTEMPTS) {
-      postSettlementFinalTurns += 1;
-      if (postSettlementFinalTurns > 1) abortOnce(ctx);
-      return;
-    }
-    postBudgetTurns += 1;
-    if (postBudgetTurns > MAX_EFFECT_SETTLEMENT_ATTEMPTS - effectSettlementAttempts) abortOnce(ctx);
-  });
-
-  // agent_end may be followed by an automatic retry or compaction. Only the
-  // fully settled callback may release this run's attention boundary.
   pi.on("agent_settled", async () => {
-    resetAttention();
+    releaseBoundary();
   });
 
   pi.on("session_shutdown", async () => {
-    resetAttention();
-    const boundary = activeBoundary;
-    activeBoundary = undefined;
-    if (boundary !== undefined) endBoundary(boundary);
+    releaseBoundary();
   });
 }

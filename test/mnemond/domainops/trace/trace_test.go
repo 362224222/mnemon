@@ -534,7 +534,7 @@ func createAuthorityFixture(t *testing.T) string {
 	db := openFixture(t, path)
 	schema := `
 PRAGMA application_id = 1296978487;
-PRAGMA user_version = 12;
+PRAGMA user_version = 13;
 CREATE TABLE events(event_id TEXT PRIMARY KEY,event_digest TEXT,origin_sequence INTEGER,
  source_principal_id TEXT,request_digest TEXT,causal_depth INTEGER,accepted_at TEXT,canonical_json BLOB);
 CREATE TABLE verified_artifacts(digest TEXT PRIMARY KEY,byte_size INTEGER,verified_at TEXT);

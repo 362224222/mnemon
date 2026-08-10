@@ -5,32 +5,44 @@ import (
 	"testing"
 )
 
-func TestPiEffectSettlementUsesOneNativeBoundedToolWithoutShellInference(t *testing.T) {
+func TestPiSubmitUsesOneBoundedProtocolToolWithoutRuntimeOrchestration(t *testing.T) {
 	projection, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	source := string(projection.PiExtension())
 	for _, required := range []string{
-		`const EFFECT_SETTLEMENT_TOOL = "mnemond_submit";`,
-		"const MAX_EFFECT_SETTLEMENT_ATTEMPTS = 2;",
-		`pi.registerTool({`, `name: EFFECT_SETTLEMENT_TOOL`,
+		`const SUBMIT_TOOL = "mnemond_submit";`,
+		`const SUBMIT_TIMEOUT_MS = 5000;`,
+		`const SUBMIT_SHUTDOWN_GRACE_MS = 100;`,
+		`const MAX_INTENT_BYTES = 12 * 1024;`,
+		`const MAX_RECEIPT_OUTPUT_BYTES = (4 << 10) + 1;`,
+		`pi.registerTool({`, `name: SUBMIT_TOOL`,
 		`execFile("mnemon", ["agency", "agent", "submit", "--json"]`,
-		`shell: false`, `child.stdin.end(encoded);`,
-		`_event.toolName === EFFECT_SETTLEMENT_TOOL`,
-		`effectSettlementAttempts >= MAX_EFFECT_SETTLEMENT_ATTEMPTS`,
+		`shell: false`, `setTimeout(interrupt, SUBMIT_TIMEOUT_MS)`,
+		`setTimeout(() => signalOwnedChild(child, "SIGKILL")`,
+		`signalOwnedChild(child, "SIGTERM")`,
+		`signal.removeEventListener("abort", interrupt)`,
+		`child.stdin.end(encoded);`,
+		`value = JSON.parse(raw)`,
+		`receipt.schema !== "mnemon.agent.receipt"`,
+		`receipt.outcome === "accepted"`, `receipt.outcome === "rejected"`,
+		`typeof receipt.replayed !== "boolean"`,
+		`Buffer.byteLength(receipt.diagnostic, "utf8") > MAX_DIAGNOSTIC_BYTES`,
 		`details?.schema !== "mnemon.pi.effect"`,
 	} {
 		if !strings.Contains(source, required) {
-			t.Fatalf("Pi Effect settlement lacks %q", required)
+			t.Fatalf("Pi Submit boundary lacks %q", required)
 		}
 	}
 	for _, forbidden := range []string{
 		`exec("`, `execSync(`, `spawn(`, `.includes("mnemon`,
-		`.includes("submit`, `.match(`,
+		`.includes("submit`, `.match(`, `pi.on("tool_call"`,
+		`pi.on("turn_start"`, `pi.setActiveTools(`, `pi.getActiveTools(`,
+		`ctx.abort(`,
 	} {
 		if strings.Contains(source, forbidden) {
-			t.Fatalf("Pi Effect settlement infers authority from command text %q", forbidden)
+			t.Fatalf("Pi Submit boundary owns unsafe Runtime behavior %q", forbidden)
 		}
 	}
 }

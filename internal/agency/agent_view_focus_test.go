@@ -75,32 +75,6 @@ func TestAgentViewProjectsRelatedEvidenceWithoutWritableSubjectAuthority(t *test
 	}
 }
 
-func TestAgentViewAlwaysProjectsExplicitZeroReferenceOutcomes(t *testing.T) {
-	principal := mustPrincipal(t, "agent:zero-outcomes")
-	attachment := mustAttachment(t, "attachment:zero-outcomes", principal, true)
-	head := mustHandle(t, "reference:zero-outcomes")
-	authority := mustView(t, MachineViewSpec{Attachment: attachment,
-		Consequences: []Consequence{ConsequenceSupersedeReference},
-		References: []ReferenceExpectation{
-			mustReference(t, head, "guide-zero", "event:guide-zero", "guide-zero"),
-		}})
-	view, err := NewAgentView(AgentViewSpec{Handle: mustHandle(t, "view:zero-outcomes"),
-		Authority: authority, References: []AgentViewReferenceSpec{{
-			Head: head, State: AgentViewReferenceStateRetracted,
-		}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var wire agentViewWire
-	if err := json.Unmarshal(view.CanonicalJSON(), &wire); err != nil {
-		t.Fatal(err)
-	}
-	if len(wire.References) != 1 || wire.References[0].Facts.TerminalOutcomes == nil ||
-		*wire.References[0].Facts.TerminalOutcomes != (agentViewTerminalOutcomesWire{}) {
-		t.Fatalf("zero terminal outcomes were not explicit: %#v", wire.References)
-	}
-}
-
 func TestAgentViewRejectsDivergentOutstandingProjection(t *testing.T) {
 	principal := mustPrincipal(t, "agent:focus-counts")
 	attachment := mustAttachment(t, "attachment:focus-counts", principal, true)

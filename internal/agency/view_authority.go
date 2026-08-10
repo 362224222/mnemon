@@ -1,6 +1,6 @@
 package agency
 
-const viewAuthorityVersion = 6
+const viewAuthorityVersion = 7
 
 // MachineViewSpec is the complete machine-owned authority behind one bounded
 // Agent View. Its typed offers prevent an opaque handle from being repurposed

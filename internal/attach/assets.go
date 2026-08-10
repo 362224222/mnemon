@@ -102,24 +102,26 @@ func validateNeutralProjection(guide []byte, cue string, extension, currentExten
 			return fmt.Errorf("attach: projection contains forbidden surface %q", forbidden)
 		}
 	}
-	if strings.Contains(base, "json.parse(") {
-		return errors.New("attach: only the bounded Current adapter may parse JSON")
-	}
 	source := string(extension)
 	if strings.Count(source, "content: HOOK_CUE") != 1 ||
-		strings.Count(source, "text: receiptText") != 1 ||
+		strings.Count(source, "return raw;") != 1 ||
+		strings.Count(source, "JSON.parse(raw)") != 1 ||
 		!strings.Contains(source, "const HOOK_CUE = "+strconv.Quote(cue)+";") ||
 		!strings.Contains(source, `pi.on("before_agent_start"`) ||
+		!strings.Contains(source, `pi.on("agent_settled"`) ||
+		!strings.Contains(source, `pi.on("session_shutdown"`) ||
 		!strings.Contains(source, `execFileSync("mnemon", ["agency", ...args]`) ||
 		!strings.Contains(source,
-			`execFile("mnemon", ["agency", "agent", "submit", "--json"]`) {
-		return errors.New("attach: Pi extension does not have one fixed command, cue, and bounded Receipt surface")
+			`execFile("mnemon", ["agency", "agent", "submit", "--json"]`) ||
+		!strings.Contains(source, `receipt.schema !== "mnemon.agent.receipt"`) {
+		return errors.New("attach: Pi extension does not have fixed lifecycle, command, cue, and Receipt boundaries")
 	}
 	for _, forbidden := range []string{
-		"process.env", "stdout", "stderr", "json.parse(", "content: raw",
+		"process.env", "content: raw",
 		"content: output", "content: result", "text: raw", "text: output",
 		"text: result", "event_id", "eventid", "payload",
-		"transcript", "credential", "console.", "--socket",
+		"transcript", "credential", "console.", "--socket", "setactivetools",
+		"getactivetools", `pi.on("tool_call"`, `pi.on("turn_start"`, "ctx.abort",
 	} {
 		if strings.Contains(strings.ToLower(source), forbidden) {
 			return fmt.Errorf("attach: Pi extension carries runtime data %q", forbidden)

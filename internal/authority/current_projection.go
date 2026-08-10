@@ -244,8 +244,7 @@ func projectReference(reference projectedReference, spec *agency.MachineViewSpec
 	if err != nil {
 		return err
 	}
-	expectation, err := agency.ExpectReferenceHeadWithOutcomes(headHandle, reference.key,
-		reference.head, reference.outcomes)
+	expectation, err := agency.ExpectReferenceHead(headHandle, reference.key, reference.head)
 	if err != nil {
 		return err
 	}
@@ -256,7 +255,7 @@ func projectReference(reference projectedReference, spec *agency.MachineViewSpec
 	spec.References = append(spec.References, expectation)
 	spec.Provenance = append(spec.Provenance, provenance)
 	publicReference := agency.AgentViewReferenceSpec{Head: headHandle,
-		State: agency.AgentViewReferenceStateRetracted, TerminalOutcomes: reference.outcomes}
+		State: agency.AgentViewReferenceStateRetracted}
 	if reference.state == "active" {
 		publicReference.State = agency.AgentViewReferenceStateActive
 		artifactHandle, err := deterministicHandle("reference-artifact", reference.head.ID().String(),
@@ -277,10 +276,8 @@ func projectReference(reference projectedReference, spec *agency.MachineViewSpec
 
 func loadReferencesTx(ctx context.Context, tx *sql.Tx) ([]projectedReference, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT r.reference_key, r.state, r.artifact_digest,
-		r.head_event_id, e.event_digest, COALESCE(o.completed_count, 0),
-		COALESCE(o.declined_count, 0), COALESCE(o.unresolved_count, 0)
+		r.head_event_id, e.event_digest
 		FROM active_references r JOIN events e ON e.event_id = r.head_event_id
-		LEFT JOIN reference_outcome_projection o ON o.reference_event_id = r.head_event_id
 		ORDER BY r.reference_key LIMIT ?`, maxProjectedReferences+1)
 	if err != nil {
 		return nil, fmt.Errorf("current View: load References: %w", err)
@@ -306,9 +303,7 @@ func loadReferencesTx(ctx context.Context, tx *sql.Tx) ([]projectedReference, er
 func scanProjectedReference(row rowScanner) (projectedReference, error) {
 	var keyValue, state, eventValue, digestValue string
 	var artifactValue sql.NullString
-	var completed, declined, unresolved int64
-	if err := row.Scan(&keyValue, &state, &artifactValue, &eventValue, &digestValue,
-		&completed, &declined, &unresolved); err != nil {
+	if err := row.Scan(&keyValue, &state, &artifactValue, &eventValue, &digestValue); err != nil {
 		return projectedReference{}, fmt.Errorf("current View: scan Reference: %w", err)
 	}
 	key, err := agency.NewReferenceKey(keyValue)
@@ -327,12 +322,7 @@ func scanProjectedReference(row rowScanner) (projectedReference, error) {
 	if err != nil {
 		return projectedReference{}, err
 	}
-	if completed < 0 || declined < 0 || unresolved < 0 {
-		return projectedReference{}, errors.New("current View: corrupt Reference outcome projection")
-	}
-	reference := projectedReference{key: key, head: head, state: state,
-		outcomes: agency.AgentViewTerminalOutcomes{Completed: completed, Declined: declined,
-			Unresolved: unresolved}}
+	reference := projectedReference{key: key, head: head, state: state}
 	if state == "retracted" && !artifactValue.Valid {
 		return reference, nil
 	}

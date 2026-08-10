@@ -38,7 +38,7 @@ function parseCurrentOutput(stdout: string): string | undefined {
   }
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const view = value as { schema?: unknown; version?: unknown; view?: unknown };
-  if (view.schema !== "mnemon.agent.view" || view.version !== 7 ||
+  if (view.schema !== "mnemon.agent.view" || view.version !== 8 ||
       typeof view.view !== "string" || view.view.length === 0) return undefined;
   return raw;
 }

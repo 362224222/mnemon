@@ -567,17 +567,13 @@ sanitize_turn() {
         all(.[]; valid_view_artifact));
     def valid_view_reference:
       exact_object(["facts"]; []) and
-      (.facts | exact_object(["head", "key", "state", "terminal_outcomes"];
+      (.facts | exact_object(["head", "key", "state"];
         ["artifact"])) and
       (.facts.head | bounded_string(192)) and (.facts.key | bounded_string(160)) and
       (.facts.state == "active" or .facts.state == "retracted") and
       (if .facts.state == "active" then
         (.facts | has("artifact")) and (.facts.artifact | valid_view_artifact)
-       else (.facts | has("artifact") | not) end) and
-      (.facts.terminal_outcomes |
-        exact_object(["completed", "declined", "unresolved"]; []) and
-        all([.completed, .declined, .unresolved][];
-          type == "number" and floor == . and . >= 0));
+       else (.facts | has("artifact") | not) end);
     def valid_view_intent:
       exact_object(["artifacts", "consequence", "subject"];
         ["reference", "successors"]) and
@@ -587,7 +583,7 @@ sanitize_turn() {
     def valid_agent_view:
       exact_object(["allowed_intents", "outstanding", "schema", "version", "view"];
         ["current", "provenance_handles", "references", "related", "targets"]) and
-      .schema == "mnemon.agent.view" and .version == 7 and
+      .schema == "mnemon.agent.view" and .version == 8 and
       (.view | bounded_string(192)) and
       (.outstanding |
         exact_object(["open_total", "related_projected", "related_total", "truncated"];
@@ -1251,7 +1247,7 @@ summarize_partial_turn() {
           ($observed_current_starts | length) else 0 end),
         view_objects:($current_view_objects | length),
         v7_view_objects:([$current_view_objects[] | select(
-          .schema == "mnemon.agent.view" and .version == 7)] | length),
+          .schema == "mnemon.agent.view" and .version == 8)] | length),
         unique_views:($current_view_objects | unique | length),
         one_invocation_each:all($observed_current_starts[];
           invocation_count("current") == 1)

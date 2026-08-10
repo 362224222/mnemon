@@ -5,7 +5,7 @@ set -euo pipefail
 runtime_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 runner_dir=$(cd "$runtime_dir/../../domainops" && pwd -P)
 repository_root=$(cd "$runtime_dir/../../../.." && pwd -P)
-attention_extension="$repository_root/internal/attach/assets/pi/mnemond.ts"
+lifecycle_extension="$repository_root/internal/attach/assets/pi/mnemond.ts"
 current_extension="$repository_root/internal/attach/assets/pi/mnemond-current.ts"
 current_provider="$runtime_dir/current-rpc-provider.ts"
 image="mnemon-pi-delegate-oracle:$$"
@@ -48,8 +48,8 @@ run_current_rpc() {
       --env 'PATH=/oracle-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
       --mount "type=bind,src=$scratch/bin,dst=/oracle-bin,readonly" \
       --mount "type=bind,src=$runtime_dir,dst=/delegate-test,readonly" \
-      --mount "type=bind,src=$current_extension,dst=/attention-test/mnemond-current.ts,readonly" \
-      --mount "type=bind,src=$current_provider,dst=/attention-test/current-rpc-provider.ts,readonly" \
+      --mount "type=bind,src=$current_extension,dst=/current-test/mnemond-current.ts,readonly" \
+      --mount "type=bind,src=$current_provider,dst=/current-test/current-rpc-provider.ts,readonly" \
       "$image" /delegate-test/current-rpc-smoke.mjs
 }
 
@@ -71,7 +71,7 @@ assert_current_rpc() {
       .result.content[0].type == "text" and
       (if $mode == "projected" then
         (.result.content[0].text | fromjson) |
-          .schema == "mnemon.agent.view" and .version == 7
+          .schema == "mnemon.agent.view" and .version == 8
        else .result.content[0].text == "Current unavailable." end))] | length) == 1 and
     any(.[]; .type == "agent_settled")
   ' >/dev/null
@@ -83,14 +83,14 @@ docker run --rm --entrypoint node \
   --mount "type=bind,src=$runtime_dir,dst=/delegate-test,readonly" \
   "$image" --experimental-strip-types /delegate-test/delegate.test.mjs
 docker run --rm --entrypoint node \
-  --env MNEMON_PI_EXTENSION=/attention-test/mnemond.ts \
+  --env MNEMON_PI_EXTENSION=/lifecycle-test/mnemond.ts \
   --mount "type=bind,src=$runtime_dir,dst=/delegate-test,readonly" \
-  --mount "type=bind,src=$attention_extension,dst=/attention-test/mnemond.ts,readonly" \
-  "$image" --experimental-strip-types /delegate-test/attention-budget.test.mjs
+  --mount "type=bind,src=$lifecycle_extension,dst=/lifecycle-test/mnemond.ts,readonly" \
+  "$image" --experimental-strip-types /delegate-test/lifecycle-boundary.test.mjs
 docker run --rm --entrypoint node \
-  --env MNEMON_PI_CURRENT_EXTENSION=/attention-test/mnemond-current.ts \
+  --env MNEMON_PI_CURRENT_EXTENSION=/current-test/mnemond-current.ts \
   --mount "type=bind,src=$runtime_dir,dst=/delegate-test,readonly" \
-  --mount "type=bind,src=$current_extension,dst=/attention-test/mnemond-current.ts,readonly" \
+  --mount "type=bind,src=$current_extension,dst=/current-test/mnemond-current.ts,readonly" \
   "$image" --experimental-strip-types /delegate-test/current-tool.test.mjs
 
 printf 'pi Runtime oracle: PASS\n'
