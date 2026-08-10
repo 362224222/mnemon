@@ -90,6 +90,9 @@ mnemon agency setup --runtime pi --project-root /work/b
 
 ## View → Intent → Receipt
 
+规范架构见 [mnemond 协议](mnemond/protocol.md)。协议刻意小于任何一个
+内置协作能力。
+
 普通使用中的核心循环是：
 
 ```text

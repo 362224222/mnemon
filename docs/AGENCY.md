@@ -96,6 +96,10 @@ imported as truth.
 
 ## View → Intent → Receipt
 
+The normative architecture is described in the
+[mnemond protocol](mnemond/protocol.md). The protocol is intentionally smaller
+than any built-in collaboration capability.
+
 The installed Pi integration follows one small loop:
 
 ```text
