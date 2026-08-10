@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
 )
@@ -14,6 +15,106 @@ type terminalObservationFixture struct {
 	request  agency.PeerDelivery
 	response agency.PeerDelivery
 	anchor   string
+}
+
+func TestDecidePeerEffectOwnsConsequenceTargetAndCardinality(t *testing.T) {
+	ordinary := verifiedPeerEffectFixture(t, agency.ConsequenceCreateHandlings, false, false)
+	effect, err := decidePeerEffect(ordinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if effect.consequence != agency.ConsequenceCreateHandlings || len(effect.targets) != 1 ||
+		effect.targets[0].Destination() != agency.TargetDestinationLocal ||
+		effect.targets[0].LocalPrincipal() != ordinary.LocalTarget() ||
+		effect.targets[0].Requested().Alias() != ordinary.Delivery().TargetAlias() {
+		t.Fatalf("ordinary decided peer effect = %#v", effect)
+	}
+
+	for _, test := range []struct {
+		origin agency.Consequence
+		want   agency.Consequence
+	}{
+		{agency.ConsequenceResolveCompleted, agency.ConsequenceObserveCompleted},
+		{agency.ConsequenceResolveDeclined, agency.ConsequenceObserveDeclined},
+		{agency.ConsequenceResolveUnresolved, agency.ConsequenceObserveUnresolved},
+	} {
+		t.Run(test.origin.String(), func(t *testing.T) {
+			verified := verifiedPeerEffectFixture(t, test.origin, true,
+				test.origin == agency.ConsequenceResolveCompleted)
+			effect, err := decidePeerEffect(verified)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if effect.consequence != test.want || len(effect.targets) != 0 {
+				t.Fatalf("terminal decided peer effect = %s/%d, want %s/0",
+					effect.consequence.String(), len(effect.targets), test.want.String())
+			}
+		})
+	}
+}
+
+func TestCompletedTerminalReplyWithoutArtifactFailsBeforeDomainWrite(t *testing.T) {
+	fixture := newTerminalObservationFixture(t)
+	base := fixture.response
+	correlation, _ := base.OriginCorrelation()
+	inReplyTo, _ := base.InReplyToDelivery()
+	malformed, err := agency.NewPeerDelivery(fixture.receiverRoute.RouteID, agency.PeerDeliverySpec{
+		OriginEvent: base.OriginEvent(), OriginSequence: base.OriginSequence(),
+		OriginAcceptedAt: base.OriginAcceptedAt(), OriginSource: base.OriginSource(),
+		OriginConsequence: agency.ConsequenceResolveCompleted, OriginTargetCount: 1,
+		OriginCausation: base.OriginCausation(), OriginCorrelation: correlation,
+		InReplyToDelivery: inReplyTo, TargetAlias: base.TargetAlias(), Kind: base.Kind(),
+		Payload: base.Payload(), CausalDepth: base.CausalDepth(), ExpiresAt: base.ExpiresAt(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := ed25519.Sign(fixture.receiverPrivate, malformed.SigningMessage())
+	staged, err := fixture.origin.store.StagePeerDelivery(fixture.origin.ctx,
+		fixture.originRoute.RemotePeerID, malformed.CanonicalJSON(), signature)
+	if err != nil || staged.State() != PeerAdmissionStateStaged {
+		t.Fatalf("stage malformed completed reply = %#v, %v", staged, err)
+	}
+	beforeEvents := countRows(t, fixture.origin.store, "events")
+	beforeHandlings := countRows(t, fixture.origin.store, "handlings")
+	beforeInbox := countRows(t, fixture.origin.store, "peer_inbox")
+	var beforeSequence uint64
+	if err := fixture.origin.store.db.QueryRow(`SELECT origin_sequence FROM authority_clock
+		WHERE singleton = 1`).Scan(&beforeSequence); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := fixture.origin.store.AdmitPeerDelivery(fixture.origin.ctx,
+		malformed.ID()); err == nil {
+		t.Fatal("completed reply without Artifact unexpectedly admitted")
+	}
+	if got := countRows(t, fixture.origin.store, "events"); got != beforeEvents {
+		t.Fatalf("failed completed reply Event rows = %d, want %d", got, beforeEvents)
+	}
+	if got := countRows(t, fixture.origin.store, "handlings"); got != beforeHandlings {
+		t.Fatalf("failed completed reply Handling rows = %d, want %d", got, beforeHandlings)
+	}
+	if got := countRows(t, fixture.origin.store, "peer_inbox"); got != beforeInbox {
+		t.Fatalf("failed completed reply inbox rows = %d, want %d", got, beforeInbox)
+	}
+	var state string
+	var localEvent, receiptDigest, receiptJSON, settledAt any
+	if err := fixture.origin.store.db.QueryRow(`SELECT state, local_event_id,
+		receipt_digest, receipt_json, settled_at
+		FROM peer_inbox WHERE delivery_id = ?`, malformed.ID().String()).
+		Scan(&state, &localEvent, &receiptDigest, &receiptJSON, &settledAt); err != nil {
+		t.Fatal(err)
+	}
+	var afterSequence uint64
+	if err := fixture.origin.store.db.QueryRow(`SELECT origin_sequence FROM authority_clock
+		WHERE singleton = 1`).Scan(&afterSequence); err != nil {
+		t.Fatal(err)
+	}
+	if state != "staged" || localEvent != nil || receiptDigest != nil || receiptJSON != nil ||
+		settledAt != nil || afterSequence != beforeSequence {
+		t.Fatalf("failed completed reply changed durable state: state=%s event=%v receipt=%v/%v settled=%v sequence=%d/%d",
+			state, localEvent, receiptDigest, receiptJSON, settledAt, afterSequence, beforeSequence)
+	}
 }
 
 func newTerminalObservationFixture(t *testing.T) terminalObservationFixture {
@@ -640,4 +741,50 @@ func assertHandlingOpenByID(t *testing.T, fixture *authorityFixture, id string) 
 	if state != "open" || outcome != nil {
 		t.Fatalf("origin anchor %s = state:%s outcome:%v", id, state, outcome)
 	}
+}
+
+func verifiedPeerEffectFixture(t *testing.T, origin agency.Consequence,
+	reply, withArtifact bool,
+) agency.VerifiedPeerDelivery {
+	t.Helper()
+	now := time.Date(2026, 8, 3, 4, 5, 6, 7, time.UTC)
+	route := mustRoute(t, "route:decided-peer-effect:"+origin.String())
+	spec := agency.PeerDeliverySpec{
+		OriginEvent:    mustEventRef(t, "event:decided-peer-effect:"+origin.String(), "origin"),
+		OriginSequence: 1, OriginAcceptedAt: now, OriginSource: mustPrincipal(t, "agent:origin"),
+		OriginConsequence: origin, OriginTargetCount: 2,
+		TargetAlias: mustHandle(t, "agent/target"), Kind: mustLabel(t, "work.request"),
+		Payload: mustPayload(t, "Bounded peer candidate."), CausalDepth: 1,
+		ExpiresAt: now.Add(time.Hour),
+	}
+	if reply {
+		spec.OriginTargetCount = 1
+		spec.OriginCorrelation = mustEventRef(t, "event:decided-request", "request")
+		spec.InReplyToDelivery = mustDeliveryIDValue(t, "decided-request")
+	}
+	if withArtifact {
+		spec.Artifacts = []agency.Digest{agency.Sum([]byte("verified completion"))}
+	}
+	delivery, err := agency.NewPeerDelivery(route, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := agency.ParsePeerDeliveryCanonicalJSON(delivery.CanonicalJSON(), route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifiedArtifacts := make([]agency.VerifiedPeerArtifact, 0, len(delivery.Artifacts()))
+	for _, digest := range delivery.Artifacts() {
+		artifact, err := agency.NewVerifiedPeerArtifact(digest, 1, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		verifiedArtifacts = append(verifiedArtifacts, artifact)
+	}
+	verified, err := agency.NewVerifiedPeerDelivery(parsed, mustPrincipal(t, "peer:source"),
+		mustPrincipal(t, "agent:local-target"), verifiedArtifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return verified
 }

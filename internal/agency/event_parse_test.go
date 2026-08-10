@@ -20,7 +20,7 @@ func TestParseEventCanonicalJSONRoundTripsLocalAndPeerEvents(t *testing.T) {
 	peer, err := NewPeerEvent(verified, EventStamp{
 		ID: mustEventID(t, "event:parse-peer"), AcceptedAt: testTime.Add(time.Second),
 		OriginSequence: 2, CausalDepth: delivery.CausalDepth(),
-	})
+	}, ConsequenceCreateHandlings, decidedLocalPeerTargets(t, verified, delivery))
 	if err != nil {
 		t.Fatal(err)
 	}

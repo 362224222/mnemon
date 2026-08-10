@@ -15,11 +15,12 @@ func TestNewPeerEventSealsInboundAuthorityAndCanonicalRebuild(t *testing.T) {
 	verified, delivery := peerEventFixture(t, "route:peer-event")
 	stamp := EventStamp{ID: mustEventID(t, "event:peer-local"),
 		AcceptedAt: testTime.Add(time.Minute), OriginSequence: 9, CausalDepth: delivery.CausalDepth()}
-	event, err := NewPeerEvent(verified, stamp)
+	targets := decidedLocalPeerTargets(t, verified, delivery)
+	event, err := NewPeerEvent(verified, stamp, ConsequenceCreateHandlings, targets)
 	if err != nil {
 		t.Fatalf("NewPeerEvent() error = %v", err)
 	}
-	rebuilt, err := NewPeerEvent(verified, stamp)
+	rebuilt, err := NewPeerEvent(verified, stamp, ConsequenceCreateHandlings, targets)
 	if err != nil {
 		t.Fatalf("canonical peer Event rebuild: %v", err)
 	}
@@ -127,6 +128,7 @@ func TestNewPeerEventRejectsIncompleteAuthorityAndDepthMismatch(t *testing.T) {
 	verified, delivery := peerEventFixture(t, "route:peer-event-invalid")
 	validStamp := EventStamp{ID: mustEventID(t, "event:peer-valid"), AcceptedAt: testTime,
 		OriginSequence: 1, CausalDepth: delivery.CausalDepth()}
+	targets := decidedLocalPeerTargets(t, verified, delivery)
 	for name, input := range map[string]struct {
 		verified VerifiedPeerDelivery
 		stamp    EventStamp
@@ -159,7 +161,53 @@ func TestNewPeerEventRejectsIncompleteAuthorityAndDepthMismatch(t *testing.T) {
 			OriginSequence: 1, CausalDepth: delivery.CausalDepth()}, category: ErrInvalid},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := NewPeerEvent(input.verified, input.stamp); !errors.Is(err, input.category) {
+			if _, err := NewPeerEvent(input.verified, input.stamp,
+				ConsequenceCreateHandlings, targets); !errors.Is(err, input.category) {
+				t.Fatalf("NewPeerEvent() error = %v, want %v", err, input.category)
+			}
+		})
+	}
+}
+
+func TestNewPeerEventRejectsStructurallyInvalidDecidedEffect(t *testing.T) {
+	verified, delivery := peerEventFixture(t, "route:peer-event-effect")
+	stamp := EventStamp{ID: mustEventID(t, "event:peer-effect"), AcceptedAt: testTime,
+		OriginSequence: 1, CausalDepth: delivery.CausalDepth()}
+	validTargets := decidedLocalPeerTargets(t, verified, delivery)
+	wrongRequested, err := AliasTarget(mustHandle(t, "remote/wrong"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongTarget, err := ResolveLocalTarget(wrongRequested, verified.LocalTarget())
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteTarget, err := ResolveRemoteTarget(wrongRequested, mustRoute(t, "route:wrong"),
+		mustHandle(t, "remote/target"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, input := range map[string]struct {
+		consequence Consequence
+		targets     []ResolvedTarget
+		category    error
+	}{
+		"invalid consequence": {targets: validTargets, category: ErrInvalid},
+		"create without target": {consequence: ConsequenceCreateHandlings,
+			category: ErrInvariant},
+		"observation without reply": {consequence: ConsequenceObserveDeclined,
+			category: ErrInvariant},
+		"wrong requested alias": {consequence: ConsequenceCreateHandlings,
+			targets: []ResolvedTarget{wrongTarget}, category: ErrInvariant},
+		"remote target": {consequence: ConsequenceCreateHandlings,
+			targets: []ResolvedTarget{remoteTarget}, category: ErrInvariant},
+		"too many targets": {consequence: ConsequenceCreateHandlings,
+			targets:  append(append([]ResolvedTarget(nil), validTargets...), validTargets[0]),
+			category: ErrLimit},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := NewPeerEvent(verified, stamp, input.consequence,
+				input.targets); !errors.Is(err, input.category) {
 				t.Fatalf("NewPeerEvent() error = %v, want %v", err, input.category)
 			}
 		})
@@ -193,7 +241,8 @@ func TestNewPeerEventKeepsOnlyDirectCauseFromMaximumRemoteChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	event, err := NewPeerEvent(verified, EventStamp{ID: mustEventID(t, "event:local-bound"),
-		AcceptedAt: testTime, OriginSequence: 1, CausalDepth: delivery.CausalDepth()})
+		AcceptedAt: testTime, OriginSequence: 1, CausalDepth: delivery.CausalDepth()},
+		ConsequenceCreateHandlings, decidedLocalPeerTargets(t, verified, delivery))
 	if err != nil {
 		t.Fatalf("promote maximum remote causation chain: %v", err)
 	}
@@ -208,8 +257,10 @@ func TestNewPeerEventKeepsOnlyDirectCauseFromMaximumRemoteChain(t *testing.T) {
 
 func TestNewPeerEventDefensiveCopies(t *testing.T) {
 	verified, delivery := peerEventFixture(t, "route:peer-event-copies")
+	decidedTargets := decidedLocalPeerTargets(t, verified, delivery)
 	event, err := NewPeerEvent(verified, EventStamp{ID: mustEventID(t, "event:peer-copies"),
-		AcceptedAt: testTime, OriginSequence: 1, CausalDepth: delivery.CausalDepth()})
+		AcceptedAt: testTime, OriginSequence: 1, CausalDepth: delivery.CausalDepth()},
+		ConsequenceCreateHandlings, decidedTargets)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,4 +302,19 @@ func peerEventFixture(t *testing.T, routeName string) (VerifiedPeerDelivery, Pee
 		t.Fatal(err)
 	}
 	return verified, delivery
+}
+
+func decidedLocalPeerTargets(t *testing.T, verified VerifiedPeerDelivery,
+	delivery PeerDelivery,
+) []ResolvedTarget {
+	t.Helper()
+	requested, err := AliasTarget(delivery.TargetAlias())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := ResolveLocalTarget(requested, verified.LocalTarget())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []ResolvedTarget{target}
 }

@@ -25,10 +25,9 @@ func TestVerifiedPeerDeliveryRequiresParsedEnvelopeAndCompleteArtifacts(t *testi
 	if err != nil {
 		t.Fatalf("NewVerifiedPeerDelivery() error = %v", err)
 	}
-	if verified.LocalSource() != source || verified.LocalTarget() != target ||
-		verified.Consequence() != ConsequenceCreateHandlings || verified.SuccessorCount() != 1 {
-		t.Fatalf("VerifiedPeerDelivery effect = source %v target %v consequence %v successors %d",
-			verified.LocalSource(), verified.LocalTarget(), verified.Consequence(), verified.SuccessorCount())
+	if verified.LocalSource() != source || verified.LocalTarget() != target {
+		t.Fatalf("VerifiedPeerDelivery authority = source %v target %v",
+			verified.LocalSource(), verified.LocalTarget())
 	}
 	if _, err := NewVerifiedPeerDelivery(ParsedPeerDelivery{}, source, target, metadata); err == nil {
 		t.Fatal("unparsed delivery unexpectedly crossed verification boundary")
@@ -45,6 +44,33 @@ func TestVerifiedPeerDeliveryRequiresParsedEnvelopeAndCompleteArtifacts(t *testi
 	}
 	if _, err := NewVerifiedPeerDelivery(parsed, source, target, append(metadata, extra)); !errors.Is(err, ErrInvariant) {
 		t.Fatalf("extra Artifact error = %v, want ErrInvariant", err)
+	}
+}
+
+func TestVerifiedPeerDeliveryRejectsCompletedReplyWithoutArtifact(t *testing.T) {
+	route := mustRoute(t, "route:completed-without-artifact")
+	delivery, err := NewPeerDelivery(route, PeerDeliverySpec{
+		OriginEvent:    mustEventRef(t, "event:completed-without-artifact", "origin"),
+		OriginSequence: 1, OriginAcceptedAt: testTime,
+		OriginSource:      mustPrincipal(t, "agent:origin"),
+		OriginConsequence: ConsequenceResolveCompleted, OriginTargetCount: 1,
+		OriginCorrelation: mustEventRef(t, "event:request", "request"),
+		InReplyToDelivery: mustDeliveryID(t, "delivery:request"),
+		TargetAlias:       mustHandle(t, "agent/requester"),
+		Kind:              mustLabel(t, "work.completed"),
+		Payload:           mustPayload(t, "Completion without evidence."),
+		CausalDepth:       1, ExpiresAt: testTime.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParsePeerDeliveryCanonicalJSON(delivery.CanonicalJSON(), route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewVerifiedPeerDelivery(parsed, mustPrincipal(t, "peer:source"),
+		mustPrincipal(t, "agent:target"), nil); !errors.Is(err, ErrInvariant) {
+		t.Fatalf("completed reply without Artifact error = %v, want ErrInvariant", err)
 	}
 }
 

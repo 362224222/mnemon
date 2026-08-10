@@ -28,11 +28,10 @@ func (s *Store) AdmitPeerDelivery(ctx context.Context,
 			return early, ErrArtifactUnavailable
 		}
 	}
-	successorCount := 1
-	if early.delivery.RequiresTerminalReplyMatch() {
-		successorCount = 0
-	}
-	handlingIDs, err := newHandlingIDs(successorCount)
+	// An inbound candidate can create at most one local Handling. The exact
+	// cardinality is selected later by the single decidedPeerEffect; terminal
+	// observations simply leave this preallocated ID unused.
+	handlingIDs, err := newHandlingIDs(1)
 	if err != nil {
 		return PeerAdmissionResult{}, err
 	}
@@ -246,11 +245,16 @@ func commitAcceptedPeerAdmissionTx(ctx context.Context, tx *sql.Tx,
 	now time.Time,
 ) (PeerAdmissionResult, error) {
 	delivery := prepared.result.delivery
-	if len(handlingIDs) != prepared.verified.SuccessorCount() {
-		return PeerAdmissionResult{}, errors.New("admit PeerDelivery: effect cardinality changed")
+	effect, err := decidePeerEffect(prepared.verified)
+	if err != nil {
+		return PeerAdmissionResult{}, err
 	}
-	event, err := commitDomainAdmissionTx(ctx, tx, peerDomainAdmission(prepared.verified),
-		eventID, handlingIDs, now)
+	if len(handlingIDs) != 1 || len(effect.targets) > len(handlingIDs) {
+		return PeerAdmissionResult{}, errors.New("admit PeerDelivery: Handling ID pool is invalid")
+	}
+	handlingIDs = handlingIDs[:len(effect.targets)]
+	event, err := commitDomainAdmissionTx(ctx, tx,
+		peerDomainAdmission(prepared.verified, effect), eventID, handlingIDs, now)
 	if err != nil {
 		return PeerAdmissionResult{}, err
 	}

@@ -36,9 +36,9 @@ func (artifact VerifiedPeerArtifact) VerifiedAt() time.Time { return artifact.ve
 
 // VerifiedPeerDelivery is the only peer-originated admission candidate. It can
 // be constructed only from a strictly parsed envelope, machine-resolved local
-// source and target Principals, and the complete verified Artifact set. Its
-// effect is structurally fixed to either one new local Handling or one
-// zero-target terminal-reply observation.
+// source and target Principals, and the complete verified Artifact set. It
+// carries no receiver-local consequence selection; that decision belongs
+// to the local authority that may later admit it.
 type VerifiedPeerDelivery struct {
 	delivery  PeerDelivery
 	source    AgentPrincipalID
@@ -56,6 +56,11 @@ func NewVerifiedPeerDelivery(parsed ParsedPeerDelivery, localSource, localTarget
 	verified, err := requireCompletePeerArtifacts(parsed.delivery.artifacts, artifacts)
 	if err != nil {
 		return VerifiedPeerDelivery{}, err
+	}
+	if parsed.delivery.RequiresTerminalReplyMatch() &&
+		parsed.delivery.originConsequence == ConsequenceResolveCompleted && len(verified) == 0 {
+		return VerifiedPeerDelivery{}, invariant("VerifiedPeerDelivery completed reply",
+			"requires a verified Artifact")
 	}
 	return VerifiedPeerDelivery{
 		delivery: parsed.delivery.clone(), source: localSource, target: localTarget, artifacts: verified,
@@ -96,29 +101,6 @@ func (verified VerifiedPeerDelivery) Artifacts() []VerifiedPeerArtifact {
 	return append([]VerifiedPeerArtifact(nil), verified.artifacts...)
 }
 
-// Consequence and SuccessorCount make the restricted peer effect explicit to
-// admission without exposing any field capable of selecting another effect.
-func (verified VerifiedPeerDelivery) Consequence() Consequence {
-	if verified.delivery.inReplyToDelivery.IsZero() {
-		return ConsequenceCreateHandlings
-	}
-	switch verified.delivery.originConsequence {
-	case ConsequenceResolveCompleted:
-		return ConsequenceObserveCompleted
-	case ConsequenceResolveDeclined:
-		return ConsequenceObserveDeclined
-	case ConsequenceResolveUnresolved:
-		return ConsequenceObserveUnresolved
-	default:
-		return ConsequenceInvalid
-	}
-}
-func (verified VerifiedPeerDelivery) SuccessorCount() int {
-	if verified.delivery.inReplyToDelivery.IsZero() {
-		return 1
-	}
-	return 0
-}
 func (verified VerifiedPeerDelivery) InReplyToDelivery() (DeliveryID, bool) {
 	return verified.delivery.InReplyToDelivery()
 }

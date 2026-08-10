@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestTerminalPeerReplyBecomesZeroHandlingObservation(t *testing.T) {
+func TestNewPeerEventSealsDecidedZeroHandlingObservation(t *testing.T) {
 	route := mustRoute(t, "route:terminal-observation")
 	inReplyTo := mustDeliveryID(t, "delivery:original-request")
 	delivery, err := NewPeerDelivery(route, PeerDeliverySpec{
@@ -36,11 +36,9 @@ func TestTerminalPeerReplyBecomesZeroHandlingObservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if verified.Consequence() != ConsequenceObserveUnresolved || verified.SuccessorCount() != 0 {
-		t.Fatalf("verified reply effect = %s/%d", verified.Consequence(), verified.SuccessorCount())
-	}
 	event, err := NewPeerEvent(verified, EventStamp{ID: mustEventID(t, "event:local-observation"),
-		AcceptedAt: testTime.Add(time.Minute), OriginSequence: 3, CausalDepth: 2})
+		AcceptedAt: testTime.Add(time.Minute), OriginSequence: 3, CausalDepth: 2},
+		ConsequenceObserveUnresolved, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

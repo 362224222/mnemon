@@ -6,11 +6,13 @@ import (
 
 // NewPeerEvent promotes one independently verified peer candidate into the
 // only local Event shape available to inbound federation. The caller supplies
-// only the local Event stamp; source, target, operation identity, effect,
-// semantics, evidence, and causal depth remain sealed by VerifiedPeerDelivery.
-// Admission policy, replay, expiry, and durable commit stay outside this value
-// constructor.
-func NewPeerEvent(verified VerifiedPeerDelivery, stamp EventStamp) (Event, error) {
+// the receiver-local consequence and targets already decided by authority;
+// this constructor checks that they are structurally compatible with the
+// verified candidate and then seals the immutable Event. Admission policy,
+// replay, expiry, and durable commit stay outside this value constructor.
+func NewPeerEvent(verified VerifiedPeerDelivery, stamp EventStamp,
+	consequence Consequence, targets []ResolvedTarget,
+) (Event, error) {
 	delivery, artifacts, err := peerEventInputs(verified)
 	if err != nil {
 		return Event{}, err
@@ -29,18 +31,8 @@ func NewPeerEvent(verified VerifiedPeerDelivery, stamp EventStamp) (Event, error
 	if err != nil {
 		return Event{}, err
 	}
-	consequence := verified.Consequence()
-	var targets []ResolvedTarget
-	if verified.SuccessorCount() == 1 {
-		requestedTarget, err := AliasTarget(delivery.TargetAlias())
-		if err != nil {
-			return Event{}, err
-		}
-		target, err := ResolveLocalTarget(requestedTarget, verified.target)
-		if err != nil {
-			return Event{}, err
-		}
-		targets = []ResolvedTarget{target}
+	if err := validateDecidedPeerEffect(delivery, verified.target, consequence, targets); err != nil {
+		return Event{}, err
 	}
 	correlation, _ := delivery.OriginCorrelation()
 	inReplyToDelivery, _ := verified.InReplyToDelivery()
@@ -55,7 +47,7 @@ func NewPeerEvent(verified VerifiedPeerDelivery, stamp EventStamp) (Event, error
 		kind:           delivery.Kind(),
 		payload:        delivery.Payload(),
 		consequence:    consequence,
-		targets:        targets,
+		targets:        append([]ResolvedTarget(nil), targets...),
 		artifacts:      artifacts,
 		// The local Event records only the immediate cross-node edge. The
 		// signed Delivery remains the authoritative container for the full
@@ -65,10 +57,38 @@ func NewPeerEvent(verified VerifiedPeerDelivery, stamp EventStamp) (Event, error
 		correlation:       correlation,
 		inReplyToDelivery: inReplyToDelivery,
 	}
+	if err := validateParsedEventShape(event); err != nil {
+		return Event{}, err
+	}
 	if err := sealEvent(&event); err != nil {
 		return Event{}, err
 	}
 	return event, nil
+}
+
+func validateDecidedPeerEffect(delivery PeerDelivery, localTarget AgentPrincipalID,
+	consequence Consequence, targets []ResolvedTarget,
+) error {
+	switch consequence {
+	case ConsequenceCreateHandlings, ConsequenceObserveCompleted,
+		ConsequenceObserveDeclined, ConsequenceObserveUnresolved:
+	default:
+		return invalid("peer Event consequence", "must be a closed inbound effect")
+	}
+	if len(targets) > 1 {
+		return limit("peer Event targets", len(targets), 1)
+	}
+	for _, target := range targets {
+		requested := target.Requested()
+		if target.Destination() != TargetDestinationLocal ||
+			target.LocalPrincipal() != localTarget || requested.IsSelf() ||
+			requested.Alias() != delivery.TargetAlias() ||
+			!target.RemoteRoute().IsZero() || !target.RemoteAlias().IsZero() {
+			return invariant("peer Event target",
+				"must be the exact receiver-resolved local target")
+		}
+	}
+	return nil
 }
 
 func peerEventInputs(verified VerifiedPeerDelivery) (PeerDelivery, []Digest, error) {
