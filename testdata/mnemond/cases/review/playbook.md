@@ -1,13 +1,14 @@
 # Review case
 
 This case is a bounded, one-to-one generator--critic exchange. `kind` values
-below are opaque case vocabulary. Only the listed R7 consequences have machine
+below are opaque case vocabulary. Only the listed consequences have machine
 meaning.
 
 ## Actors and fixture rule
 
-- `implementer` owns the initial responsibility and produces candidates.
-- `reviewer` checks the exact Artifact bytes received through peer delivery.
+- `implementer` owns one local tracking responsibility and produces candidates.
+- `reviewer` receives a separate local responsibility and checks the exact
+  Artifact bytes delivered to its node.
 - For this fixture, `total=42` is accepted. Any other total receives the exact
   contents of `artifacts/rework.txt`.
 - At most one revision is requested.
@@ -16,26 +17,29 @@ meaning.
 
 | Opaque kind | Closed consequence | Meaning in this case |
 |---|---|---|
-| `review.request` | `handling.create` | Send a candidate to `reviewer`; retain `self` as the local anchor. |
-| `review.rework` | `handling.advance` | Return the rework Artifact to `implementer`; the current Handling remains the local anchor. |
-| `review.revision` | `handling.advance` | Return the revised candidate to `reviewer`; the current Handling remains the local anchor. |
-| `review.accept` | `handling.advance` | Return the acceptance Artifact to `implementer`; the current Handling remains the local anchor. |
-| `review.done` | `handling.resolve.completed` | Close one local responsibility with the exact Artifact that proves its result. |
+| `review.request` | `handling.create` | Create one local tracking Handling and one remote review request. |
+| `review.rework` | `handling.resolve.declined` | Close the reviewer's first local Handling and return a correlated terminal result. |
+| `review.revision` | `handling.advance` | Keep the implementer's tracking Handling open while sending a revised candidate. |
+| `review.accept` | `handling.resolve.completed` | Close the reviewer's second local Handling and return verified acceptance evidence. |
+| `review.adopt` | `handling.resolve.completed` | Locally adopt the observed result and close the implementer's tracking Handling. |
 
-Every remote-directed root action includes both `self` and the remote target.
-Every remote reply uses `handling.advance`; its current open Handling is the
-required local responsibility anchor. After the peer-visible result is
-accepted, each actor explicitly resolves its remaining local Handlings. A
-transport acknowledgment, Runtime exit, or final text never resolves them.
+The nodes never share a Handling. A terminal response closes only the
+reviewer's local responsibility; after receiver-local re-admission it appears
+to the implementer as a zero-Handling observation. The implementer then freely
+chooses rework or adoption from a fresh View. Transport acknowledgment, Runtime
+exit, and remote completion never close the implementer's local Handling.
 
 ## Deterministic trace and oracle
 
-1. `implementer` sends `candidate-v1.txt`; `reviewer` returns `rework.txt`.
-2. `implementer` sends `candidate-v2.txt`; `reviewer` returns `acceptance.txt`.
-3. Both nodes explicitly drain their local responsibilities with
-   `review.done` and a verified Artifact.
+1. `implementer` sends `candidate-v1.txt` and retains its local tracking
+   Handling; `reviewer` replies `declined` with `rework.txt`.
+2. `implementer` observes that result, advances the same local Handling, and
+   sends `candidate-v2.txt`; `reviewer` replies `completed` with
+   `acceptance.txt`.
+3. `implementer` verifies and locally adopts the acceptance Artifact, then
+   explicitly completes its own tracking Handling.
 
-The case passes only when the reviewer reads both candidates from its local
-CAS, the response bytes exactly match the fixtures, v1 is not accepted, v2 is
-accepted once, every completed Handling cites a verified Artifact, and replay
-of any submitted operation creates no additional Event or Handling.
+The case passes only when each reviewer result is a correlated terminal reply,
+both returned Artifacts match exact local CAS bytes, the implementer remains
+responsible until local adoption, and both independent nodes end with zero open
+Handlings.

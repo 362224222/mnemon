@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 r7_run_case() {
-  local case_dir=$1 view initial_implementer receipt peer subject artifact
+  local case_dir=$1 view initial_implementer receipt peer subject artifact related reply_to
   local playbook_capture first_capture rework_capture revision_capture acceptance_capture
   local playbook_handle first_handle rework_handle revision_handle acceptance_handle intent
 
@@ -10,8 +10,8 @@ r7_run_case() {
     r7_fail "implementer did not begin with an empty View"
   initial_implementer=$view
 
-  # Observe an empty reviewer View before the request. Its next Hook must
-  # rotate that empty Current and reveal later-arriving work.
+  # Rotate the reviewer's empty Current before work arrives. A later boundary
+  # must recover the remotely created local responsibility.
   view=$(r7_fresh_current reviewer)
   test "$(printf '%s' "$view" | jq -r '.current // "none"')" = none || \
     r7_fail "reviewer did not begin with an empty View"
@@ -28,81 +28,81 @@ r7_run_case() {
   receipt=$(r7_submit implementer "$intent")
   r7_expect_accepted "$receipt" "initial review request"
 
+  # Delivery cannot settle the requester's local responsibility. It remains
+  # open while the reviewer independently owns and processes its own Handling.
   view=$(r7_next_current implementer)
-  subject=$(printf '%s' "$view" | jq -r .current.facts.handle)
-  intent=$(jq -cn --arg subject "$subject" \
-    '{kind:"review.wait",payload:"remote review remains independently pending",consequence:"handling.resolve.unresolved",subject_handling:$subject}')
-  receipt=$(r7_submit implementer "$intent")
-  r7_expect_accepted "$receipt" "initial local anchor disposition"
+  test "$(printf '%s' "$view" | jq -r '.current.facts.reply_observation_pending')" = true || \
+    r7_fail "implementer did not retain a pending local review responsibility"
 
   r7_restart_node reviewer
   view=$(r7_next_current reviewer)
   r7_assert_view_artifacts_match_files reviewer "$view" "$case_dir/playbook.md" \
     "$case_dir/artifacts/candidate-v1.txt"
   subject=$(printf '%s' "$view" | jq -r .current.facts.handle)
-  peer=$(r7_remote_alias "$view" implementer)
+  peer=$(printf '%s' "$view" | jq -r .current.facts.reply_target)
+  reply_to=$(printf '%s' "$view" | jq -r .current.facts.reply_to)
   rework_capture=$(r7_capture reviewer "$case_dir/artifacts/rework.txt")
   rework_handle=$(printf '%s' "$rework_capture" | jq -r .handle)
-  intent=$(jq -cn --arg subject "$subject" --arg peer "$peer" --arg artifact "$rework_handle" \
-    '{kind:"review.rework",payload:"the first candidate needs one bounded revision",consequence:"handling.advance",subject_handling:$subject,successors:[{alias:$peer}],artifacts:[{kind:"candidate",handle:$artifact}]}')
+  intent=$(jq -cn --arg subject "$subject" --arg peer "$peer" --arg reply_to "$reply_to" \
+    --arg artifact "$rework_handle" \
+    '{kind:"review.rework",payload:"the first candidate needs one bounded revision",consequence:"handling.resolve.declined",subject_handling:$subject,successors:[{alias:$peer}],artifacts:[{kind:"candidate",handle:$artifact}],correlation_handle:$reply_to}')
   receipt=$(r7_submit reviewer "$intent")
-  r7_expect_accepted "$receipt" "rework response"
+  r7_expect_accepted "$receipt" "declined review reply"
 
-  view=$(r7_next_current reviewer)
-  artifact=$(printf '%s' "$view" | jq -r '.current.facts.artifacts[0].handle')
-  subject=$(printf '%s' "$view" | jq -r .current.facts.handle)
-  intent=$(jq -cn --arg subject "$subject" --arg artifact "$artifact" \
-    '{kind:"review.done",payload:"rework was durably sent",consequence:"handling.resolve.completed",subject_handling:$subject,artifacts:[{kind:"view_handle",handle:$artifact}]}')
-  receipt=$(r7_submit reviewer "$intent")
-  r7_expect_accepted "$receipt" "reviewer rework completion"
-
-  view=$(r7_next_current implementer)
-  r7_assert_view_artifacts_match_files implementer "$view" "$case_dir/artifacts/rework.txt"
+  view=$(r7_next_terminal_reply implementer declined)
+  test "$(printf '%s' "$view" | jq -r '.current.facts.reply_observation_pending')" = false || \
+    r7_fail "declined terminal reply did not settle the pending observation"
+  r7_assert_terminal_reply_artifacts_match_files implementer "$view" declined \
+    "$case_dir/artifacts/rework.txt"
   subject=$(printf '%s' "$view" | jq -r .current.facts.handle)
   peer=$(r7_remote_alias "$view" reviewer)
+  reply_to=$(printf '%s' "$view" | jq -r .current.facts.reply_to)
+  related=$(printf '%s' "$view" | jq -r \
+    '.related[] | select(.facts.relation == "terminal_reply" and .facts.outcome == "declined") | .facts.event')
   playbook_capture=$(r7_capture implementer "$case_dir/playbook.md")
   revision_capture=$(r7_capture implementer "$case_dir/artifacts/candidate-v2.txt")
   playbook_handle=$(printf '%s' "$playbook_capture" | jq -r .handle)
   revision_handle=$(printf '%s' "$revision_capture" | jq -r .handle)
-  intent=$(jq -cn --arg subject "$subject" --arg peer "$peer" --arg playbook "$playbook_handle" --arg candidate "$revision_handle" \
-    '{kind:"review.revision",payload:"review the revised candidate",consequence:"handling.advance",subject_handling:$subject,successors:[{alias:$peer}],artifacts:[{kind:"candidate",handle:$playbook},{kind:"candidate",handle:$candidate}]}')
+  intent=$(jq -cn --arg subject "$subject" --arg peer "$peer" --arg reply_to "$reply_to" \
+    --arg related "$related" --arg playbook "$playbook_handle" --arg candidate "$revision_handle" \
+    '{kind:"review.revision",payload:"review the revised candidate",consequence:"handling.advance",subject_handling:$subject,successors:[{alias:$peer}],artifacts:[{kind:"candidate",handle:$playbook},{kind:"candidate",handle:$candidate}],causation_handles:[$related],correlation_handle:$reply_to}')
   receipt=$(r7_submit implementer "$intent")
   r7_expect_accepted "$receipt" "revised candidate"
-
-  view=$(r7_next_current implementer)
-  artifact=$(printf '%s' "$view" | jq -r '.current.facts.artifacts[0].handle')
-  subject=$(printf '%s' "$view" | jq -r .current.facts.handle)
-  intent=$(jq -cn --arg subject "$subject" --arg artifact "$artifact" \
-    '{kind:"review.done",payload:"revision was durably sent",consequence:"handling.resolve.completed",subject_handling:$subject,artifacts:[{kind:"view_handle",handle:$artifact}]}')
-  receipt=$(r7_submit implementer "$intent")
-  r7_expect_accepted "$receipt" "implementer revision completion"
 
   view=$(r7_next_current reviewer)
   r7_assert_view_artifacts_match_files reviewer "$view" "$case_dir/playbook.md" \
     "$case_dir/artifacts/candidate-v2.txt"
   subject=$(printf '%s' "$view" | jq -r .current.facts.handle)
-  peer=$(r7_remote_alias "$view" implementer)
+  peer=$(printf '%s' "$view" | jq -r .current.facts.reply_target)
+  reply_to=$(printf '%s' "$view" | jq -r .current.facts.reply_to)
   acceptance_capture=$(r7_capture reviewer "$case_dir/artifacts/acceptance.txt")
   acceptance_handle=$(printf '%s' "$acceptance_capture" | jq -r .handle)
-  intent=$(jq -cn --arg subject "$subject" --arg peer "$peer" --arg artifact "$acceptance_handle" \
-    '{kind:"review.accept",payload:"the revised candidate is accepted",consequence:"handling.advance",subject_handling:$subject,successors:[{alias:$peer}],artifacts:[{kind:"candidate",handle:$artifact}]}')
+  intent=$(jq -cn --arg subject "$subject" --arg peer "$peer" --arg reply_to "$reply_to" \
+    --arg artifact "$acceptance_handle" \
+    '{kind:"review.accept",payload:"the revised candidate is accepted",consequence:"handling.resolve.completed",subject_handling:$subject,successors:[{alias:$peer}],artifacts:[{kind:"candidate",handle:$artifact}],correlation_handle:$reply_to}')
   receipt=$(r7_submit reviewer "$intent")
-  r7_expect_accepted "$receipt" "review acceptance"
+  r7_expect_accepted "$receipt" "completed review reply"
 
-  view=$(r7_next_current reviewer)
-  artifact=$(printf '%s' "$view" | jq -r '.current.facts.artifacts[0].handle')
+  view=$(r7_next_terminal_reply implementer completed)
+  test "$(printf '%s' "$view" | jq -r '.current.facts.reply_observation_pending')" = false || \
+    r7_fail "completed terminal reply did not settle the pending observation"
+  r7_assert_terminal_reply_artifacts_match_files implementer "$view" completed \
+    "$case_dir/artifacts/acceptance.txt"
   subject=$(printf '%s' "$view" | jq -r .current.facts.handle)
-  intent=$(jq -cn --arg subject "$subject" --arg artifact "$artifact" \
-    '{kind:"review.done",payload:"acceptance was durably sent",consequence:"handling.resolve.completed",subject_handling:$subject,artifacts:[{kind:"view_handle",handle:$artifact}]}')
-  receipt=$(r7_submit reviewer "$intent")
-  r7_expect_accepted "$receipt" "reviewer acceptance completion"
-
-  view=$(r7_next_current implementer)
-  r7_assert_view_artifacts_match_files implementer "$view" "$case_dir/artifacts/acceptance.txt"
-  subject=$(printf '%s' "$view" | jq -r .current.facts.handle)
-  artifact=$(printf '%s' "$view" | jq -r '.current.facts.artifacts[0].handle')
-  intent=$(jq -cn --arg subject "$subject" --arg artifact "$artifact" \
-    '{kind:"review.done",payload:"accepted review result was verified",consequence:"handling.resolve.completed",subject_handling:$subject,artifacts:[{kind:"view_handle",handle:$artifact}]}')
+  related=$(printf '%s' "$view" | jq -r \
+    '.related[] | select(.facts.relation == "terminal_reply" and .facts.outcome == "completed") | .facts.event')
+  artifact=$(printf '%s' "$view" | jq -r \
+    '.related[] | select(.facts.relation == "terminal_reply" and .facts.outcome == "completed") | .facts.artifacts[0].handle')
+  intent=$(jq -cn --arg subject "$subject" --arg related "$related" --arg artifact "$artifact" \
+    '{kind:"review.adopt",payload:"the accepted remote review result was locally verified",consequence:"handling.resolve.completed",subject_handling:$subject,artifacts:[{kind:"view_handle",handle:$artifact}],causation_handles:[$related]}')
   receipt=$(r7_submit implementer "$intent")
-  r7_expect_accepted "$receipt" "implementer final completion"
+  r7_expect_accepted "$receipt" "local adoption of review result"
+
+  for peer in implementer reviewer; do
+    view=$(r7_fresh_current "$peer")
+    test "$(printf '%s' "$view" | jq -r '.current // "none"')" = none || \
+      r7_fail "$peer retained an unexpected open Handling"
+    test "$(printf '%s' "$view" | jq -r '.outstanding.open_total')" = 0 || \
+      r7_fail "$peer did not drain all local responsibilities"
+  done
 }

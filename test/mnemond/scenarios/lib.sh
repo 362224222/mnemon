@@ -168,6 +168,27 @@ r7_next_current() {
   r7_fail "node $node did not expose a current responsibility"
 }
 
+r7_next_terminal_reply() {
+  local node=$1 outcome=$2 attempts=${3:-40} view index
+  case "$outcome" in
+    completed|declined|unresolved) ;;
+    *) r7_fail "invalid terminal reply outcome: $outcome" ;;
+  esac
+  index=1
+  while test "$index" -le "$attempts"; do
+    view=$(r7_fresh_current "$node")
+    if printf '%s' "$view" | jq -e --arg outcome "$outcome" \
+      '.current != null and any(.related[]?;
+        .facts.relation == "terminal_reply" and .facts.outcome == $outcome)' >/dev/null; then
+      printf '%s\n' "$view"
+      return 0
+    fi
+    sleep 0.2
+    index=$((index + 1))
+  done
+  r7_fail "node $node did not expose terminal reply outcome $outcome"
+}
+
 r7_capture() {
   local node=$1 path=$2
   test -f "$path" || r7_fail "Artifact fixture is missing: $path"
@@ -202,16 +223,16 @@ r7_restart_node() {
   docker restart "$(r7_container "$1")" >/dev/null
 }
 
-r7_assert_view_artifacts_match_files() {
-  local node=$1 view=$2
-  shift 2
+r7_assert_artifacts_match_files() {
+  local node=$1 view=$2 handles_filter=$3
+  shift 3
   local temporary handle index expected actual matched
   temporary=$(mktemp -d)
   index=0
   while IFS= read -r handle; do
     r7_read_artifact "$node" "$handle" >"$temporary/actual-$index"
     index=$((index + 1))
-  done < <(printf '%s' "$view" | jq -r '.current.facts.artifacts[].handle')
+  done < <(printf '%s' "$view" | jq -r "$handles_filter")
   test "$index" = "$#" || {
     rm -f "$temporary"/actual-*
     rmdir "$temporary"
@@ -235,4 +256,19 @@ r7_assert_view_artifacts_match_files() {
   done
   rm -f "$temporary"/actual-*.matched
   rmdir "$temporary"
+}
+
+r7_assert_view_artifacts_match_files() {
+  local node=$1 view=$2
+  shift 2
+  r7_assert_artifacts_match_files "$node" "$view" \
+    '.current.facts.artifacts[].handle' "$@"
+}
+
+r7_assert_terminal_reply_artifacts_match_files() {
+  local node=$1 view=$2 outcome=$3
+  shift 3
+  r7_assert_artifacts_match_files "$node" "$view" \
+    ".related[] | select(.facts.relation == \"terminal_reply\" and .facts.outcome == \"$outcome\") | .facts.artifacts[].handle" \
+    "$@"
 }
