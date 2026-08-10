@@ -13,6 +13,10 @@ const acceptedReceipt =
   '{"schema":"mnemon.agent.receipt","version":1,"outcome":"accepted","replayed":false}';
 const rejectedReceipt =
   '{"schema":"mnemon.agent.receipt","version":1,"outcome":"rejected","replayed":false,"diagnostic":"stale View"}';
+const invalidArgumentControl =
+  '{"code":"invalid_argument","message":"Intent consequence is invalid","operation_id":null,"replayed":false,"retryable":false,"schema_version":1,"status":"error"}';
+const unavailableControl =
+  '{"code":"mnemond_unavailable","message":"Mnemon Agency local control is unavailable","operation_id":null,"replayed":false,"retryable":true,"schema_version":1,"status":"error"}';
 
 async function withFakeMnemond(fn) {
   const directory = await mkdtemp(path.join(tmpdir(), "mnemon-pi-boundary-"));
@@ -24,6 +28,7 @@ async function withFakeMnemond(fn) {
     "PATH", "MNEMON_HOOK_LOG", "MNEMON_HOOK_FAIL_ATTACH", "MNEMON_HOOK_FAIL_END",
     "MNEMON_SUBMIT_FAIL", "MNEMON_SUBMIT_HANG", "MNEMON_SUBMIT_INPUT",
     "MNEMON_SUBMIT_OUTPUT", "MNEMON_SUBMIT_PID", "MNEMON_SUBMIT_STDERR",
+    "MNEMON_SUBMIT_EXIT",
   ]) old.set(name, process.env[name]);
   await writeFile(executable, `#!/bin/sh
 input=$(cat)
@@ -41,6 +46,7 @@ case "$*" in
     fi
     test -z "\${MNEMON_SUBMIT_STDERR:-}" || printf '%s' "$MNEMON_SUBMIT_STDERR" >&2
     printf '%s' "$MNEMON_SUBMIT_OUTPUT"
+    test -z "\${MNEMON_SUBMIT_EXIT:-}" || exit "$MNEMON_SUBMIT_EXIT"
     test "\${MNEMON_SUBMIT_FAIL:-0}" != 1
     ;;
   *) exit 2 ;;
@@ -54,6 +60,7 @@ esac
   for (const name of [
     "MNEMON_HOOK_FAIL_ATTACH", "MNEMON_HOOK_FAIL_END", "MNEMON_SUBMIT_FAIL",
     "MNEMON_SUBMIT_HANG", "MNEMON_SUBMIT_PID", "MNEMON_SUBMIT_STDERR",
+    "MNEMON_SUBMIT_EXIT",
   ]) delete process.env[name];
   try {
     await fn({ directory, log, submitInput });
@@ -254,6 +261,53 @@ test("Submit fails closed on input, framing, envelope, process, and tool-result 
     assert.deepEqual(await runtime.handlers.get("tool_result")({
       toolName: "mnemond_submit", details: { schema: "wrong", version: 1, status: "settled" },
     }), { isError: true });
+  });
+});
+
+test("Submit projects only exact input control errors for bounded correction", async () => {
+  await withFakeMnemond(async () => {
+    const runtime = fakePi();
+    const submit = runtime.tool("mnemond_submit");
+    const signal = new AbortController().signal;
+
+    process.env.MNEMON_SUBMIT_OUTPUT = `${invalidArgumentControl}\n`;
+    process.env.MNEMON_SUBMIT_EXIT = "2";
+    let result = await submit.execute("invalid-intent", {
+      intent: { kind: "opaque.signal" },
+    }, signal);
+    assert.deepEqual(result, {
+      content: [{ type: "text", text: invalidArgumentControl }],
+      details: { schema: "mnemon.pi.effect", version: 1, status: "input_invalid" },
+    });
+
+    process.env.MNEMON_SUBMIT_OUTPUT = `${unavailableControl}\n`;
+    process.env.MNEMON_SUBMIT_EXIT = "5";
+    result = await submit.execute("unavailable", {
+      intent: { kind: "opaque.signal" },
+    }, signal);
+    assert.deepEqual(result, {
+      content: [{ type: "text", text: "Submit unavailable." }],
+      details: { schema: "mnemon.pi.effect", version: 1, status: "failed" },
+    });
+
+    for (const [output, exitStatus] of [
+      [`${invalidArgumentControl.slice(0, -1)},"extra":true}\n`, "2"],
+      [`${invalidArgumentControl.replace('"retryable":false', '"retryable":true')}\n`, "2"],
+      [`${invalidArgumentControl.replace("Intent consequence is invalid", "x".repeat(513))}\n`, "2"],
+      [`${invalidArgumentControl}\n`, "3"],
+      [`${invalidArgumentControl}\n`, ""],
+      [`${invalidArgumentControl}\n${invalidArgumentControl}\n`, "2"],
+    ]) {
+      process.env.MNEMON_SUBMIT_OUTPUT = output;
+      process.env.MNEMON_SUBMIT_EXIT = exitStatus;
+      result = await submit.execute("untrusted-control", {
+        intent: { kind: "opaque.signal" },
+      }, signal);
+      assert.deepEqual(result, {
+        content: [{ type: "text", text: "Submit unavailable." }],
+        details: { schema: "mnemon.pi.effect", version: 1, status: "failed" },
+      });
+    }
   });
 });
 

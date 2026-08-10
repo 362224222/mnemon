@@ -104,7 +104,7 @@ func validateNeutralProjection(guide []byte, cue string, extension, currentExten
 	}
 	source := string(extension)
 	if strings.Count(source, "content: HOOK_CUE") != 1 ||
-		strings.Count(source, "return raw;") != 1 ||
+		strings.Count(source, "function parseOutput(") != 1 ||
 		strings.Count(source, "JSON.parse(raw)") != 1 ||
 		!strings.Contains(source, "const HOOK_CUE = "+strconv.Quote(cue)+";") ||
 		!strings.Contains(source, `pi.on("before_agent_start"`) ||
@@ -117,7 +117,7 @@ func validateNeutralProjection(guide []byte, cue string, extension, currentExten
 		return errors.New("attach: Pi extension does not have fixed lifecycle, command, cue, and Receipt boundaries")
 	}
 	for _, forbidden := range []string{
-		"process.env", "content: raw",
+		"process.env",
 		"content: output", "content: result", "text: raw", "text: output",
 		"text: result", "event_id", "eventid", "payload",
 		"transcript", "credential", "console.", "--socket", "setactivetools",

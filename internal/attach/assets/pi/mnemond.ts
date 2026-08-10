@@ -13,14 +13,12 @@ const MAX_INTENT_BYTES = 12 * 1024;
 const MAX_DIAGNOSTIC_BYTES = 512;
 const SUBMIT_TOOL = "mnemond_submit";
 
-class SubmitInterruptedError extends Error {}
-
 const SubmitParameters = {
   type: "object",
   properties: {
     intent: {
       type: "object",
-      description: "One Intent object copied from the current mnemond View",
+      description: "One Intent from the current View",
       additionalProperties: true,
     },
   },
@@ -28,7 +26,7 @@ const SubmitParameters = {
   additionalProperties: false,
 } as const;
 
-function boundaryEnvelope(boundary: string): string {
+function boundaryEnvelope(boundary: string) {
   return JSON.stringify({ boundary, schema: "mnemon.hook.boundary", version: 1 });
 }
 
@@ -53,9 +51,7 @@ function attachBoundary(boundary: string): boolean {
   return false;
 }
 
-function endBoundary(boundary: string): boolean {
-  return runBoundary(["hook", "end", "--json"], boundary);
-}
+function endBoundary(boundary: string) { return runBoundary(["hook", "end", "--json"], boundary); }
 
 function intentInput(value: unknown): string | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value) ||
@@ -69,52 +65,49 @@ function intentInput(value: unknown): string | undefined {
   }
 }
 
-function hasExactKeys(value: object, expected: string[]): boolean {
-  const actual = Object.keys(value).sort();
-  return actual.length === expected.length &&
-    actual.every((key, index) => key === expected[index]);
-}
+const INPUT_CODE = /^(invalid_argument|content_required|content_too_large|artifact_invalid|artifact_too_large)$/;
 
-function parseReceiptOutput(stdout: string): string | undefined {
+function parseOutput(stdout: string, exitStatus: unknown): {
+  content: string;
+  status: "settled" | "input_invalid";
+} | undefined {
   if (Buffer.byteLength(stdout, "utf8") > MAX_RECEIPT_OUTPUT_BYTES ||
-      !stdout.endsWith("\n") || stdout.indexOf("\n") !== stdout.length - 1) {
-    return undefined;
-  }
+      !stdout.endsWith("\n") || stdout.indexOf("\n") !== stdout.length - 1) return undefined;
   const raw = stdout.slice(0, -1);
   let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
+  try { value = JSON.parse(raw); } catch { return undefined; }
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const receipt = value as {
-    schema?: unknown;
-    version?: unknown;
-    outcome?: unknown;
-    replayed?: unknown;
-    diagnostic?: unknown;
-  };
-  if (receipt.schema !== "mnemon.agent.receipt" || receipt.version !== 1 ||
-      typeof receipt.replayed !== "boolean") return undefined;
-  if (receipt.outcome === "accepted") {
-    if (!hasExactKeys(receipt, ["outcome", "replayed", "schema", "version"])) return undefined;
-  } else if (receipt.outcome === "rejected") {
-    if (!hasExactKeys(receipt,
-      ["diagnostic", "outcome", "replayed", "schema", "version"]) ||
+  const object = value as Record<string, unknown>;
+  const keys = Object.keys(object).length;
+  if (exitStatus === undefined) {
+    const receipt = object;
+    if (receipt.schema !== "mnemon.agent.receipt" || receipt.version !== 1 ||
+        typeof receipt.replayed !== "boolean") return undefined;
+    if (receipt.outcome === "accepted") {
+      if (keys !== 4) return undefined;
+    } else if (receipt.outcome !== "rejected" || keys !== 5 ||
       typeof receipt.diagnostic !== "string" || receipt.diagnostic.length === 0 ||
       Buffer.byteLength(receipt.diagnostic, "utf8") > MAX_DIAGNOSTIC_BYTES) return undefined;
-  } else {
-    return undefined;
+    return { content: raw, status: "settled" };
   }
-  return raw;
+  if (exitStatus !== 2 || keys !== 7 || typeof object.code !== "string" ||
+    !INPUT_CODE.test(object.code) ||
+    typeof object.message !== "string" || object.message.length === 0 ||
+    object.message.trim() !== object.message ||
+    Buffer.byteLength(object.message, "utf8") > MAX_DIAGNOSTIC_BYTES ||
+    object.operation_id !== null || object.replayed !== false || object.retryable !== false ||
+    object.schema_version !== 1 || object.status !== "error") return undefined;
+  return { content: raw, status: "input_invalid" };
 }
 
 function signalOwnedChild(child: ChildProcess, signal: NodeJS.Signals): void {
   if (child.exitCode === null && child.signalCode === null) child.kill(signal);
 }
 
-function submitIntent(encoded: string, signal: AbortSignal): Promise<string> {
+function submitIntent(encoded: string, signal: AbortSignal): Promise<{
+  text: string;
+  status: "settled" | "failed" | "input_invalid";
+}> {
   return new Promise((resolve, reject) => {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
@@ -142,11 +135,13 @@ function submitIntent(encoded: string, signal: AbortSignal): Promise<string> {
       shell: false,
     }, (error, stdout, stderr) => {
       cleanup();
-      const receipt = !interrupted && error === null && stderr === "" ?
-        parseReceiptOutput(stdout) : undefined;
-      if (interrupted) reject(new SubmitInterruptedError("submit interrupted"));
-      else if (receipt === undefined) reject(new Error("submit unavailable"));
-      else resolve(receipt);
+      if (interrupted) reject(new Error("submit interrupted"));
+      else if (stderr !== "") reject(new Error("submit unavailable"));
+      else {
+        const parsed = parseOutput(stdout, error?.code);
+        if (parsed === undefined) reject(new Error("submit unavailable"));
+        else resolve({ text: parsed.content, status: parsed.status });
+      }
     });
     timeout = setTimeout(interrupt, SUBMIT_TIMEOUT_MS);
     timeout.unref?.();
@@ -189,8 +184,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: SUBMIT_TOOL,
     label: "Submit mnemond Intent",
-    description:
-      "Submit one bounded Intent from the current View. The validated Receipt alone reports its Effect.",
+    description: "Submit one bounded Intent; only its validated Receipt reports the Effect.",
     parameters: SubmitParameters as never,
 
     async execute(_toolCallId, params, signal) {
@@ -199,7 +193,8 @@ export default function (pi: ExtensionAPI) {
         return submitResult("Invalid bounded Intent object.", "input_invalid");
       }
       try {
-        return submitResult(await submitIntent(encoded, signal), "settled");
+        const result = await submitIntent(encoded, signal);
+        return submitResult(result.text, result.status);
       } catch {
         return submitResult("Submit unavailable.", "failed");
       }

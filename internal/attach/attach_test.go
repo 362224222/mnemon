@@ -43,7 +43,8 @@ func TestLoadHasOneFixedCueOneBoundedReceiptAndNoAuthorityOrSecretSurface(t *tes
 	}
 	if strings.Count(source, "content: HOOK_CUE") != 1 ||
 		strings.Count(source, "function submitResult(") != 1 ||
-		strings.Count(source, "return raw;") != 1 || !strings.Contains(source, cue) {
+		strings.Count(source, "function parseOutput(") != 1 ||
+		strings.Count(source, "JSON.parse(raw)") != 1 || !strings.Contains(source, cue) {
 		t.Fatal("extension does not expose exactly one fixed cue and one bounded Receipt surface")
 	}
 	for _, forbidden := range []string{`pi.on("turn_end"`, `pi.on("agent_end"`} {
@@ -82,7 +83,9 @@ func assertGuideTerminalSurface(t *testing.T, guide string) {
 		"mnemon agency artifact read \"$HANDLE\"",
 		"exactly one nonempty",
 		"no Markdown",
-		"read a new View before deciding again",
+		"Each `successors` element is only",
+		`"successors":[{"self":true}]`,
+		"next eligible Hook boundary and read a new View",
 	} {
 		if !strings.Contains(normalized, required) {
 			t.Errorf("guide lacks complete, bounded terminal surface %q", required)
@@ -96,9 +99,11 @@ func assertGuideTerminalSurface(t *testing.T, guide string) {
 		"A Reference action does not implicitly advance or close `current`",
 		"If no offered consequence expresses the intended effect, submit no Intent",
 		"mnemond fails closed",
-		"A `rejected` Receipt means no Event or effect was created",
-		"A `replayed` Receipt reports the same operation outcome and never a second effect",
-		"Peer delivery is only candidate input until the receiving authority admits it locally",
+		"ends this governed Host opportunity: stop",
+		"`input_invalid` is a control diagnostic, not a Receipt",
+		"A `rejected` Receipt records an admission rejection",
+		"never creates a second effect",
+		"Peer delivery remains candidate input until receiver admission",
 	} {
 		if !strings.Contains(normalized, required) {
 			t.Errorf("guide lacks protocol rule %q", required)

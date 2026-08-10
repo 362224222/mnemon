@@ -26,9 +26,12 @@ func TestPiSubmitUsesOneBoundedProtocolToolWithoutRuntimeOrchestration(t *testin
 		`child.stdin.end(encoded);`,
 		`value = JSON.parse(raw)`,
 		`receipt.schema !== "mnemon.agent.receipt"`,
-		`receipt.outcome === "accepted"`, `receipt.outcome === "rejected"`,
+		`receipt.outcome === "accepted"`, `receipt.outcome !== "rejected"`,
 		`typeof receipt.replayed !== "boolean"`,
 		`Buffer.byteLength(receipt.diagnostic, "utf8") > MAX_DIAGNOSTIC_BYTES`,
+		`const INPUT_CODE = /^(invalid_argument|content_required|content_too_large|artifact_invalid|artifact_too_large)$/;`,
+		`exitStatus !== 2 || keys !== 7`, `value = JSON.parse(raw)`,
+		`parseOutput(stdout, error?.code)`, `status: "input_invalid"`,
 		`details?.schema !== "mnemon.pi.effect"`,
 	} {
 		if !strings.Contains(source, required) {

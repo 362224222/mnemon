@@ -230,17 +230,17 @@ r7_live_pi_process() {
     PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0 \
     "$R7_LIVE_PI_BIN" --mode json --print --no-session --approve --no-context-files \
       --no-prompt-templates --no-themes --provider deepseek --model "$R7_LIVE_PI_MODEL" \
-      --thinking off --tools mnemond_current,mnemond_submit "$prompt"
+      --thinking off --tools read,mnemond_current,mnemond_submit "$prompt"
 }
 
 r7_live_run_pi() {
   local events=$R7_LIVE_ROOT/pi-events.jsonl errors=$R7_LIVE_ROOT/pi.err status
   local prompt
-  # This gate is deliberately a deterministic live protocol smoke. It proves
-  # the Hook/View/Intent/Receipt path against a real provider; it is not used as
-  # evidence that a model can derive an arbitrary collaboration from a business
-  # prompt. Natural scenario evidence is evaluated separately.
-  prompt='Perform exactly one R7 protocol smoke action. The installed runtime hook establishes context. Use mnemond_current exactly once. Then use mnemond_submit exactly once with one root Intent: kind `live.pi.probe`, payload `persist one Pi-originated responsibility`, consequence `handling.create`, and successor `self`. Read the Receipt and stop. Do not claim that the responsibility is completed.'
+  # This gate is a bounded live protocol smoke, not a scripted tool transcript.
+  # The Hook points Pi at the installed guide; Pi must discover the exact Intent
+  # shape there and may correct a rejected attempt within the fixed turn bound.
+  # Natural multi-Agent scenario evidence is evaluated separately.
+  prompt='Use the installed mnemond protocol to persist one local responsibility. Its kind is `live.pi.probe` and its payload is `persist one Pi-originated responsibility`. Keep the responsibility local to this Agent, read the Receipt, and stop. Do not claim that the responsibility is completed.'
 
   r7_live_start_key_writer
   if r7_live_with_deadline "$R7_LIVE_TIMEOUT_SECONDS" r7_live_pi_process "$prompt" \
@@ -279,31 +279,54 @@ r7_live_assert_pi_trace() {
   ' "$events" >/dev/null || r7_live_fail 'Pi did not expose the exact installed mnemond cue'
 
   jq -s -e '
-    ([.[] | select(.type == "tool_execution_start" and
-      .toolName == "mnemond_current" and .args == {})] | length) == 1
-  ' "$events" >/dev/null || r7_live_fail 'Pi did not obtain exactly one native R7 View'
+    ([.[] | select(.type == "tool_execution_start" and .toolName == "read" and
+      (.args | type == "object") and (.args.path | type == "string") and
+      (.args.path == ".pi/skills/mnemond/SKILL.md" or
+       (.args.path | endswith("/.pi/skills/mnemond/SKILL.md"))))] | length) as $reads |
+    $reads >= 1
+  ' "$events" >/dev/null || r7_live_fail 'Pi did not read the installed bounded mnemond guide'
   jq -s -e '
     ([.[] | select(.type == "tool_execution_start" and
-      .toolName == "mnemond_submit" and
+      .toolName == "mnemond_current" and .args == {})] | length) as $currents |
+    $currents >= 1
+  ' "$events" >/dev/null || r7_live_fail 'Pi did not obtain a native View'
+  jq -s -e '
+    [.[] | select(.type == "tool_execution_start" and
+      .toolName == "mnemond_submit")] as $submits |
+    ($submits | length) >= 1 and all($submits[];
       (.args | type == "object" and (keys | sort) == ["intent"]) and
-      (.args.intent | type == "object"))] | length) == 1
-  ' "$events" >/dev/null || r7_live_fail 'Pi did not submit exactly one native Intent'
+      (.args.intent | type == "object"))
+  ' "$events" >/dev/null || r7_live_fail 'Pi did not submit a native Intent'
   jq -s -e '
-    ([.[] | select(.type == "tool_execution_start" and
-      .toolName == "mnemond_submit") |
-      .toolCallId] | unique) as $submits |
-    ([.[] | select(.type == "tool_execution_end" and
-      .toolName == "mnemond_submit" and
-      (.toolCallId as $id | $submits | index($id) != null) and .isError == false and
-      .result.details == {schema:"mnemon.pi.effect",version:1,status:"settled"} and
-      any((.result | .. | strings);
-        contains("\"schema\":\"mnemon.agent.receipt\"") and
-        contains("\"outcome\":\"accepted\"")))] | length) == 1
-  ' "$events" >/dev/null || r7_live_fail 'Pi did not observe exactly one accepted R7 Receipt'
+    def parsed_receipt:
+      (.result.content // null) as $content |
+      if ($content | type) == "array" and ($content | length) == 1 and
+        $content[0].type == "text" and ($content[0].text | type) == "string"
+      then (try ($content[0].text | fromjson) catch null)
+      else null end;
+    [to_entries[] |
+      select(.value.type == "tool_execution_end" and
+        .value.toolName == "mnemond_submit" and .value.isError == false and
+        .value.result.details == {schema:"mnemon.pi.effect",version:1,status:"settled"}) |
+      .key as $index | (.value | parsed_receipt) as $receipt |
+      select(($receipt | type) == "object" and
+        ($receipt | keys | sort) == ["outcome","replayed","schema","version"] and
+        $receipt.schema == "mnemon.agent.receipt" and $receipt.version == 1 and
+        $receipt.outcome == "accepted" and $receipt.replayed == false) |
+      {index:$index,receipt:$receipt}
+    ] as $accepted |
+    ($accepted | length) == 1 and
+    all(.[($accepted[0].index + 1):][]; .type != "tool_execution_start")
+  ' "$events" >/dev/null ||
+    r7_live_fail 'Pi did not settle exactly one accepted Receipt and stop protocol actions'
   jq -s -e '
     all(.[] | select(.type == "tool_execution_start");
-      .toolName == "mnemond_current" or .toolName == "mnemond_submit")
-  ' "$events" >/dev/null || r7_live_fail 'Pi used a tool outside the two native protocol surfaces'
+      .toolName == "read" or .toolName == "mnemond_current" or
+      .toolName == "mnemond_submit")
+  ' "$events" >/dev/null || r7_live_fail 'Pi used a tool outside the guide and native protocol surfaces'
+  jq -s -e '
+    ([.[] | select(.type == "tool_execution_start")] | length) <= 16
+  ' "$events" >/dev/null || r7_live_fail 'Pi exceeded the bounded live attention budget'
   jq -s -e 'any(.[]; .type == "agent_end")' "$events" >/dev/null ||
     r7_live_fail 'Pi did not finish its bounded Agent turn'
 }

@@ -264,6 +264,12 @@ func intentInputControlError(err error) *controlError {
 		case "noncanonical_field":
 			return newControlError(codeInvalidArgument,
 				"Intent input contains a non-canonical field")
+		case "successor_noncanonical_field":
+			return newControlError(codeInvalidArgument,
+				"Intent successors may contain only self:true or one View-offered alias; keep kind and payload on the Intent")
+		case "artifact_noncanonical_field":
+			return newControlError(codeInvalidArgument,
+				"Intent Artifacts may contain only kind and handle")
 		case "closed_consequence":
 			return newControlError(codeInvalidArgument,
 				"Intent consequence must be copied exactly from the current View allowed_intents")
