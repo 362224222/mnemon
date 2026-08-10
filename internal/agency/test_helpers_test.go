@@ -46,13 +46,14 @@ func mustBoundRoot(t *testing.T, operation string) BoundIntent {
 	if err != nil {
 		t.Fatalf("ResolveLocalTarget() error = %v", err)
 	}
-	request, err := BindIntent(BoundIntentSpec{
+	view := mustView(t, MachineViewSpec{Attachment: attachment,
+		Consequences: []Consequence{ConsequenceCreateHandlings}, Targets: []ResolvedTarget{target}})
+	request, err := NewBoundIntent(BoundIntentSpec{
 		Intent: mustRootIntent(t, []TargetRef{SelfTarget()}), OperationKey: mustOperation(t, operation),
-		View: mustView(t, MachineViewSpec{Attachment: attachment,
-			Consequences: []Consequence{ConsequenceCreateHandlings}, Targets: []ResolvedTarget{target}}),
+		Attachment: attachment, ViewDigest: view.Digest(), Targets: []ResolvedTarget{target},
 	})
 	if err != nil {
-		t.Fatalf("BindIntent() error = %v", err)
+		t.Fatalf("NewBoundIntent() error = %v", err)
 	}
 	return request
 }

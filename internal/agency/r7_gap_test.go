@@ -7,162 +7,16 @@ import (
 	"testing"
 )
 
-func TestR7GapP01UnofferedHandlesFailClosed(t *testing.T) {
-	principal := mustPrincipal(t, "agent:gap-p01")
-	attachment := mustAttachment(t, "attachment:gap-p01", principal, true)
-	self, err := ResolveLocalTarget(SelfTarget(), principal)
-	if err != nil {
-		t.Fatalf("ResolveLocalTarget() error = %v", err)
-	}
-
-	tests := []struct {
-		name string
-		spec func(*testing.T) BoundIntentSpec
-	}{
-		{
-			name: "target",
-			spec: func(t *testing.T) BoundIntentSpec {
-				intent := mustRootIntent(t, []TargetRef{mustAliasTarget(t, "target:not-offered")})
-				return BoundIntentSpec{Intent: intent, OperationKey: mustOperation(t, "op:gap-target"),
-					View: mustView(t, MachineViewSpec{Attachment: attachment,
-						Consequences: []Consequence{ConsequenceCreateHandlings},
-						Targets:      []ResolvedTarget{self}})}
-			},
-		},
-		{
-			name: "subject",
-			spec: func(t *testing.T) BoundIntentSpec {
-				intent, err := NewAgentIntent(IntentSpec{Kind: mustLabel(t, "future.subject.action"),
-					Consequence:     ConsequenceAdvanceHandling,
-					SubjectHandling: mustHandle(t, "subject:not-offered")})
-				if err != nil {
-					t.Fatalf("NewAgentIntent() error = %v", err)
-				}
-				return BoundIntentSpec{Intent: intent, OperationKey: mustOperation(t, "op:gap-subject"),
-					View: mustView(t, MachineViewSpec{Attachment: attachment,
-						Consequences: []Consequence{ConsequenceAdvanceHandling}})}
-			},
-		},
-		{
-			name: "reference",
-			spec: func(t *testing.T) BoundIntentSpec {
-				operation := mustOperation(t, "op:gap-reference")
-				artifact := mustCandidate(t, "candidate:gap-reference")
-				intent, err := NewAgentIntent(IntentSpec{Kind: mustLabel(t, "future.reference.action"),
-					Consequence:   ConsequenceSupersedeReference,
-					ReferenceHead: mustHandle(t, "reference:not-offered"),
-					Artifacts:     []ArtifactInput{artifact}})
-				if err != nil {
-					t.Fatalf("NewAgentIntent() error = %v", err)
-				}
-				return BoundIntentSpec{Intent: intent, OperationKey: operation,
-					View: mustView(t, MachineViewSpec{Attachment: attachment,
-						Consequences: []Consequence{ConsequenceSupersedeReference}}),
-					Candidates: []CapturedCandidate{mustCaptured(t, operation, artifact, "replacement")}}
-			},
-		},
-		{
-			name: "artifact",
-			spec: func(t *testing.T) BoundIntentSpec {
-				intent := mustRootIntent(t, []TargetRef{SelfTarget()},
-					mustViewArtifact(t, "artifact:not-offered"))
-				return BoundIntentSpec{Intent: intent, OperationKey: mustOperation(t, "op:gap-artifact"),
-					View: mustView(t, MachineViewSpec{Attachment: attachment,
-						Consequences: []Consequence{ConsequenceCreateHandlings},
-						Targets:      []ResolvedTarget{self}})}
-			},
-		},
-		{
-			name: "causation",
-			spec: func(t *testing.T) BoundIntentSpec {
-				intent, err := NewAgentIntent(IntentSpec{Kind: mustLabel(t, "future.causal.action"),
-					Consequence: ConsequenceCreateHandlings, Successors: []TargetRef{SelfTarget()},
-					CausationHandles: []OpaqueHandle{mustHandle(t, "cause:not-offered")}})
-				if err != nil {
-					t.Fatalf("NewAgentIntent() error = %v", err)
-				}
-				return BoundIntentSpec{Intent: intent, OperationKey: mustOperation(t, "op:gap-causation"),
-					View: mustView(t, MachineViewSpec{Attachment: attachment,
-						Consequences: []Consequence{ConsequenceCreateHandlings},
-						Targets:      []ResolvedTarget{self}})}
-			},
-		},
-		{
-			name: "correlation",
-			spec: func(t *testing.T) BoundIntentSpec {
-				intent, err := NewAgentIntent(IntentSpec{Kind: mustLabel(t, "future.correlated.action"),
-					Consequence: ConsequenceCreateHandlings, Successors: []TargetRef{SelfTarget()},
-					CorrelationHandle: mustHandle(t, "correlation:not-offered")})
-				if err != nil {
-					t.Fatalf("NewAgentIntent() error = %v", err)
-				}
-				return BoundIntentSpec{Intent: intent, OperationKey: mustOperation(t, "op:gap-correlation"),
-					View: mustView(t, MachineViewSpec{Attachment: attachment,
-						Consequences: []Consequence{ConsequenceCreateHandlings},
-						Targets:      []ResolvedTarget{self}})}
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if _, err := BindIntent(test.spec(t)); !errors.Is(err, ErrInvariant) {
-				t.Fatalf("BindIntent() error = %v, want ErrInvariant", err)
-			}
-		})
-	}
-}
-
 func TestR7GapP02OpenLabelsAndClosedShapes(t *testing.T) {
-	principal := mustPrincipal(t, "agent:gap-p02")
-	attachment := mustAttachment(t, "attachment:gap-p02", principal, true)
-	self, err := ResolveLocalTarget(SelfTarget(), principal)
+	kind := mustLabel(t, "future.unregistered.capability.v937")
+	intent, err := NewAgentIntent(IntentSpec{Kind: kind,
+		Consequence: ConsequenceCreateHandlings, Successors: []TargetRef{SelfTarget()}})
 	if err != nil {
-		t.Fatalf("ResolveLocalTarget() error = %v", err)
+		t.Fatalf("NewAgentIntent(unregistered kind) error = %v", err)
 	}
-
-	t.Run("unregistered-kind", func(t *testing.T) {
-		kind := mustLabel(t, "future.unregistered.capability.v937")
-		intent, err := NewAgentIntent(IntentSpec{Kind: kind,
-			Consequence: ConsequenceCreateHandlings, Successors: []TargetRef{SelfTarget()}})
-		if err != nil {
-			t.Fatalf("NewAgentIntent() error = %v", err)
-		}
-		request, err := BindIntent(BoundIntentSpec{Intent: intent,
-			OperationKey: mustOperation(t, "op:gap-open-kind"),
-			View: mustView(t, MachineViewSpec{Attachment: attachment,
-				Consequences: []Consequence{ConsequenceCreateHandlings},
-				Targets:      []ResolvedTarget{self}})})
-		if err != nil {
-			t.Fatalf("BindIntent() error = %v", err)
-		}
-		if request.Intent().Kind() != kind {
-			t.Fatalf("bound kind = %q, want %q", request.Intent().Kind().String(), kind.String())
-		}
-	})
-
-	t.Run("unregistered-first-publish-key", func(t *testing.T) {
-		operation := mustOperation(t, "op:gap-open-key")
-		key := mustReferenceKey(t, "future-unregistered-reference-v937")
-		artifact := mustCandidate(t, "candidate:gap-open-key")
-		intent, err := NewAgentIntent(IntentSpec{Kind: mustLabel(t, "future.reference.publish"),
-			Consequence: ConsequencePublishReference, ReferenceKey: key,
-			Artifacts: []ArtifactInput{artifact}})
-		if err != nil {
-			t.Fatalf("NewAgentIntent() error = %v", err)
-		}
-		request, err := BindIntent(BoundIntentSpec{Intent: intent, OperationKey: operation,
-			View: mustView(t, MachineViewSpec{Attachment: attachment,
-				Consequences: []Consequence{ConsequencePublishReference}}),
-			Candidates: []CapturedCandidate{mustCaptured(t, operation, artifact, "new reference")}})
-		if err != nil {
-			t.Fatalf("BindIntent() error = %v", err)
-		}
-		expected, exists := request.ExpectedReference()
-		if !exists || !expected.IsAbsent() || expected.Key() != key {
-			t.Fatalf("first-publish expectation = %#v, %v", expected, exists)
-		}
-	})
+	if intent.Kind() != kind {
+		t.Fatalf("Intent kind = %q, want %q", intent.Kind().String(), kind.String())
+	}
 
 	artifact := mustCandidate(t, "candidate:gap-illegal-shape")
 	invalid := []struct {

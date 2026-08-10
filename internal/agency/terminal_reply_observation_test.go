@@ -8,70 +8,6 @@ import (
 	"time"
 )
 
-func TestExactTerminalReplyBindsDeliveryAndObservationReadSet(t *testing.T) {
-	principal := mustPrincipal(t, "agent:replying")
-	attachment := mustAttachment(t, "attachment:replying", principal, false)
-	subjectHandle := mustHandle(t, "subject:replying")
-	subject, err := NewSubjectBinding(subjectHandle, mustHandlingID(t, "handling:replying"),
-		mustEventRef(t, "event:reply-head", "head"), 4, 7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	replyHandle := mustHandle(t, "event:request")
-	targetRef := mustAliasTarget(t, "target:requester")
-	target, _ := ResolveRemoteTarget(targetRef, mustRoute(t, "route:requester"),
-		mustHandle(t, "peer:requester"))
-	replyDelivery := mustDeliveryID(t, "delivery:remote-request")
-	view := mustView(t, MachineViewSpec{
-		Attachment: attachment, Consequences: []Consequence{ConsequenceResolveDeclined},
-		Subjects: []SubjectBinding{subject}, Targets: []ResolvedTarget{target},
-		ReplyTo: replyHandle, ReplyTarget: targetRef, ReplyDelivery: replyDelivery,
-		Provenance: []ProvenanceOffer{mustProvenance(t, replyHandle,
-			"event:remote-request", "request")},
-	})
-	intent, err := NewAgentIntent(IntentSpec{
-		Kind: mustLabel(t, "review.response"), Payload: mustPayload(t, "Declined with reasons."),
-		Consequence: ConsequenceResolveDeclined, SubjectHandling: subjectHandle,
-		Successors: []TargetRef{targetRef}, CorrelationHandle: replyHandle,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bound, err := BindIntent(BoundIntentSpec{Intent: intent,
-		OperationKey: mustOperation(t, "operation:terminal-reply"), View: view})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, ok := bound.InReplyToDelivery(); !ok || got != replyDelivery {
-		t.Fatalf("BoundIntent in-reply-to = %v/%t, want %v/true", got, ok, replyDelivery)
-	}
-	var boundWire boundIntentWire
-	if err := json.Unmarshal(bound.CanonicalJSON(), &boundWire); err != nil {
-		t.Fatal(err)
-	}
-	if boundWire.SchemaVersion != 3 || boundWire.Request.SchemaVersion != 3 ||
-		boundWire.Request.InReplyToDelivery != replyDelivery.String() ||
-		boundWire.Request.Subject == nil || boundWire.Request.Subject.ObservationRevision != 7 {
-		t.Fatalf("bound terminal reply lost exact machine authority: %#v", boundWire)
-	}
-	event, err := NewEvent(bound, EventStamp{ID: mustEventID(t, "event:terminal-reply"),
-		AcceptedAt: testTime, OriginSequence: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, ok := event.InReplyToDelivery(); !ok || got != replyDelivery {
-		t.Fatalf("Event in-reply-to = %v/%t, want %v/true", got, ok, replyDelivery)
-	}
-	var eventWire eventWire
-	if err := json.Unmarshal(event.CanonicalJSON(), &eventWire); err != nil {
-		t.Fatal(err)
-	}
-	if eventWire.SchemaVersion != 3 || eventWire.Machine.InReplyToDelivery != replyDelivery.String() ||
-		eventWire.Machine.Subject == nil || eventWire.Machine.Subject.ObservationRevision != 7 {
-		t.Fatalf("Event terminal reply lost exact machine authority: %#v", eventWire)
-	}
-}
-
 func TestTerminalPeerReplyBecomesZeroHandlingObservation(t *testing.T) {
 	route := mustRoute(t, "route:terminal-observation")
 	inReplyTo := mustDeliveryID(t, "delivery:original-request")
@@ -164,7 +100,7 @@ func TestAgentViewProjectsTerminalReplyWithoutOpenHandlingCountCoupling(t *testi
 		t.Fatal(err)
 	}
 	if bytes.Contains(view.CanonicalJSON(), []byte(`"related_open"`)) {
-		t.Fatalf("v7 View retained related_open: %s", view.CanonicalJSON())
+		t.Fatalf("v8 View retained related_open: %s", view.CanonicalJSON())
 	}
 	var wire agentViewWire
 	if err := json.Unmarshal(view.CanonicalJSON(), &wire); err != nil {

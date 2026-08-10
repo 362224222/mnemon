@@ -52,9 +52,7 @@ func (view BoundView) ResolveOfferedArtifact(handle agency.OpaqueHandle) (agency
 func (view BoundView) Bind(intent agency.AgentIntent, operation agency.OperationKey,
 	candidates []agency.CapturedCandidate,
 ) (agency.BoundIntent, error) {
-	return agency.BindIntent(agency.BoundIntentSpec{
-		Intent: intent, OperationKey: operation, View: view.authority, Candidates: candidates,
-	})
+	return bindIntent(view.authority, intent, operation, candidates)
 }
 
 type projectedClaim struct {

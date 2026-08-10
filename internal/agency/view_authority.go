@@ -296,7 +296,46 @@ func (view ViewAuthority) ResolveOfferedArtifact(handle OpaqueHandle) (Digest, e
 	return offer.digest, nil
 }
 
-func (view ViewAuthority) offers(consequence Consequence) bool {
+// Allows reports whether this exact sealed View offered a closed consequence.
+// It exposes no authority beyond the immutable offer itself.
+func (view ViewAuthority) Allows(consequence Consequence) bool {
 	_, exists := view.consequences[consequence]
 	return exists
+}
+
+// ResolveSubject returns the exact Handling authority behind one View-scoped
+// handle. Resolution policy remains with the authority package.
+func (view ViewAuthority) ResolveSubject(handle OpaqueHandle) (SubjectBinding, bool) {
+	value, ok := view.subjects[handle.String()]
+	return value, ok && !handle.IsZero()
+}
+
+// ResolveReference returns the exact local Reference head behind one
+// View-scoped handle.
+func (view ViewAuthority) ResolveReference(handle OpaqueHandle) (ReferenceExpectation, bool) {
+	value, ok := view.references[handle.String()]
+	return value, ok && !handle.IsZero()
+}
+
+// ResolveTarget returns the exact local or remote destination offered for one
+// Agent-visible target.
+func (view ViewAuthority) ResolveTarget(target TargetRef) (ResolvedTarget, bool) {
+	value, ok := view.targets[target.canonicalKey()]
+	return value, ok && !target.IsZero()
+}
+
+// ResolveProvenance returns the exact accepted Event behind one View-scoped
+// causation or correlation handle.
+func (view ViewAuthority) ResolveProvenance(handle OpaqueHandle) (EventRef, bool) {
+	value, ok := view.provenance[handle.String()]
+	return value, ok && !handle.IsZero()
+}
+
+// ReplyContext returns the complete machine-offered remote reply binding. A
+// partial binding is unrepresentable because NewViewAuthority rejects it.
+func (view ViewAuthority) ReplyContext() (OpaqueHandle, TargetRef, DeliveryID, bool) {
+	if view.replyTo.IsZero() {
+		return OpaqueHandle{}, TargetRef{}, DeliveryID{}, false
+	}
+	return view.replyTo, view.replyTarget, view.replyDelivery, true
 }

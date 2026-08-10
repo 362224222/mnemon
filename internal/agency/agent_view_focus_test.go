@@ -52,27 +52,6 @@ func TestAgentViewProjectsRelatedEvidenceWithoutWritableSubjectAuthority(t *test
 	if _, err := ParseAgentViewCanonicalJSON(view.CanonicalJSON(), authority); err != nil {
 		t.Fatalf("ParseAgentViewCanonicalJSON() error = %v", err)
 	}
-	cite, err := NewAgentIntent(IntentSpec{Kind: mustLabel(t, "work.progress"),
-		Consequence: ConsequenceAdvanceHandling, SubjectHandling: current,
-		CausationHandles: []OpaqueHandle{related}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bound, err := BindIntent(BoundIntentSpec{Intent: cite,
-		OperationKey: mustOperation(t, "operation:focus-cite"), View: authority})
-	if err != nil || len(bound.Causation()) != 1 || bound.Causation()[0].IsZero() {
-		t.Fatalf("related provenance citation = %#v, %v", bound.Causation(), err)
-	}
-
-	intent, err := NewAgentIntent(IntentSpec{Kind: mustLabel(t, "review.illegal-progress"),
-		Consequence: ConsequenceAdvanceHandling, SubjectHandling: related})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := BindIntent(BoundIntentSpec{Intent: intent,
-		OperationKey: mustOperation(t, "operation:focus-illegal"), View: authority}); !errors.Is(err, ErrInvariant) {
-		t.Fatalf("related Event as subject error = %v, want ErrInvariant", err)
-	}
 }
 
 func TestAgentViewRejectsDivergentOutstandingProjection(t *testing.T) {

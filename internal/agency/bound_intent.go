@@ -1,13 +1,23 @@
 package agency
 
-// BoundIntentSpec contains only the Agent candidate, stable replay key, sealed
-// View, and immutable Artifact captures for that operation. All other
-// authority is resolved from the View inside BindIntent.
+import "sort"
+
+// BoundIntentSpec contains only already-resolved machine authority.
+// NewBoundIntent validates its structural closure and canonicalizes it; it
+// deliberately does not decide whether a View offered any value. That policy
+// belongs to the authority package.
 type BoundIntentSpec struct {
-	Intent       AgentIntent
-	OperationKey OperationKey
-	View         ViewAuthority
-	Candidates   []CapturedCandidate
+	Intent            AgentIntent
+	OperationKey      OperationKey
+	Attachment        Attachment
+	ViewDigest        Digest
+	Subject           *SubjectBinding
+	ExpectedReference *ReferenceExpectation
+	Targets           []ResolvedTarget
+	Artifacts         []ResolvedArtifact
+	Causation         []EventRef
+	Correlation       EventRef
+	InReplyToDelivery DeliveryID
 }
 
 // BoundIntent is the canonical local request. Unlike AgentIntent, it contains
@@ -30,61 +40,40 @@ type BoundIntent struct {
 	digest            Digest
 }
 
-func BindIntent(spec BoundIntentSpec) (BoundIntent, error) {
+// NewBoundIntent seals already-resolved authority into one canonical request.
+// It prevents malformed values from being represented but performs no handle
+// lookup and makes no admission decision.
+func NewBoundIntent(spec BoundIntentSpec) (BoundIntent, error) {
 	if len(spec.Intent.canonical) == 0 || spec.OperationKey.IsZero() ||
-		len(spec.View.canonical) == 0 || spec.View.digest.IsZero() || spec.View.attachment.id.IsZero() {
-		return BoundIntent{}, invalid("BoundIntent", "Intent, operation, and sealed View are required")
+		spec.Attachment.id.IsZero() || spec.ViewDigest.IsZero() {
+		return BoundIntent{}, invalid("BoundIntent", "Intent, operation, Attachment, and View digest are required")
 	}
-	if !spec.View.offers(spec.Intent.consequence) {
-		return BoundIntent{}, invariant("Intent binding", "consequence was not offered by the View")
-	}
-	if spec.Intent.consequence == ConsequenceCreateHandlings && !spec.View.attachment.mayInitiate {
-		return BoundIntent{}, invariant("BoundIntent", "Attachment may not initiate root responsibility")
-	}
-
-	subject, expectedReference, err := resolveSubjectAndReference(spec.Intent, spec.View)
-	if err != nil {
+	if err := validateResolvedBoundIntent(spec); err != nil {
 		return BoundIntent{}, err
 	}
-	targets, err := resolveTargets(spec.Intent.successors, spec.View.targets)
-	if err != nil {
-		return BoundIntent{}, err
+	artifacts := make([]Digest, len(spec.Artifacts))
+	for index, resolved := range spec.Artifacts {
+		artifacts[index] = resolved.digest
 	}
-	resolvedArtifacts, artifacts, err := resolveArtifacts(spec.OperationKey, spec.Intent.artifacts,
-		spec.View.artifacts, spec.Candidates)
-	if err != nil {
-		return BoundIntent{}, err
+	sortDigests(artifacts)
+	for index := 1; index < len(artifacts); index++ {
+		if artifacts[index] == artifacts[index-1] {
+			return BoundIntent{}, invalid("BoundIntent Artifacts", "contains a duplicate digest")
+		}
 	}
-	if spec.Intent.consequence == ConsequenceResolveCompleted && len(artifacts) == 0 {
-		return BoundIntent{}, invariant("completed consequence", "requires a verified Artifact")
+	result := BoundIntent{intent: spec.Intent, operationKey: spec.OperationKey,
+		attachment: spec.Attachment, viewDigest: spec.ViewDigest,
+		targets:           append([]ResolvedTarget(nil), spec.Targets...),
+		resolvedArtifacts: append([]ResolvedArtifact(nil), spec.Artifacts...),
+		artifacts:         artifacts, causation: append([]EventRef(nil), spec.Causation...),
+		correlation: spec.Correlation, inReplyToDelivery: spec.InReplyToDelivery}
+	if spec.Subject != nil {
+		copyValue := *spec.Subject
+		result.subject = &copyValue
 	}
-	causation, correlation, err := resolveProvenance(spec.Intent, spec.View.provenance)
-	if err != nil {
-		return BoundIntent{}, err
-	}
-	if err := requireLocalResponsibilityAnchor(spec.Intent.consequence, targets,
-		spec.View, spec.Intent.correlationHandle, correlation); err != nil {
-		return BoundIntent{}, err
-	}
-	var inReplyToDelivery DeliveryID
-	if isTerminalConsequence(spec.Intent.consequence) &&
-		exactCorrelatedReply(targets, spec.View, spec.Intent.correlationHandle, correlation) {
-		inReplyToDelivery = spec.View.replyDelivery
-	}
-
-	result := BoundIntent{
-		intent:            spec.Intent,
-		operationKey:      spec.OperationKey,
-		attachment:        spec.View.attachment,
-		viewDigest:        spec.View.digest,
-		subject:           subject,
-		expectedReference: expectedReference,
-		targets:           targets,
-		resolvedArtifacts: resolvedArtifacts,
-		artifacts:         artifacts,
-		causation:         causation,
-		correlation:       correlation,
-		inReplyToDelivery: inReplyToDelivery,
+	if spec.ExpectedReference != nil {
+		copyValue := *spec.ExpectedReference
+		result.expectedReference = &copyValue
 	}
 	_, digest, err := canonicalJSON(result.requestWire())
 	if err != nil {
@@ -99,51 +88,71 @@ func BindIntent(spec BoundIntentSpec) (BoundIntent, error) {
 	return result, nil
 }
 
-func resolveSubjectAndReference(intent AgentIntent, view ViewAuthority) (
-	*SubjectBinding, *ReferenceExpectation, error,
-) {
-	if intent.consequence.subjectBound() {
-		subject, offered := view.subjects[intent.subjectHandling.String()]
-		if !offered {
-			return nil, nil, invariant("BoundIntent subject", "handle was not offered as a subject by the View")
+func validateResolvedBoundIntent(spec BoundIntentSpec) error {
+	consequence := spec.Intent.consequence
+	if consequence.subjectBound() != (spec.Subject != nil) {
+		return invariant("BoundIntent subject", "must match the closed consequence")
+	}
+	if consequence.referenceBound() != (spec.ExpectedReference != nil) {
+		return invariant("BoundIntent Reference", "must match the closed consequence")
+	}
+	if spec.Subject != nil && (spec.Subject.handle != spec.Intent.subjectHandling ||
+		spec.Subject.handlingID.IsZero() || spec.Subject.head.IsZero() || spec.Subject.fence == 0) {
+		return invariant("BoundIntent subject", "does not bind the Intent handle")
+	}
+	if err := validateResolvedReference(spec.Intent, spec.ExpectedReference); err != nil {
+		return err
+	}
+	if len(spec.Targets) != len(spec.Intent.successors) {
+		return invariant("BoundIntent targets", "must resolve every requested successor exactly once")
+	}
+	for index, target := range spec.Targets {
+		if target.requested != spec.Intent.successors[index] {
+			return invariant("BoundIntent targets", "do not preserve requested successor order")
 		}
-		copyValue := subject
-		return &copyValue, nil, nil
 	}
-	if !intent.consequence.referenceBound() {
-		return nil, nil, nil
+	if len(spec.Artifacts) != len(spec.Intent.artifacts) {
+		return invariant("BoundIntent Artifacts", "must resolve every Artifact input exactly once")
 	}
-	if intent.consequence == ConsequencePublishReference {
-		expected, err := ExpectAbsentReference(intent.referenceKey)
-		if err != nil {
-			return nil, nil, err
+	for index, resolved := range spec.Artifacts {
+		if resolved.input != spec.Intent.artifacts[index] || resolved.digest.IsZero() {
+			return invariant("BoundIntent Artifacts", "do not bind the requested inputs")
 		}
-		return nil, &expected, nil
 	}
-	expected, offered := view.references[intent.referenceHead.String()]
-	if !offered {
-		return nil, nil, invariant("BoundIntent Reference", "head was not offered by the View")
+	if consequence == ConsequenceResolveCompleted && len(spec.Artifacts) == 0 {
+		return invariant("completed consequence", "requires a verified Artifact")
 	}
-	copyValue := expected
-	return nil, &copyValue, nil
+	if len(spec.Causation) != len(spec.Intent.causationHandles) {
+		return invariant("BoundIntent causation", "must resolve every provenance handle exactly once")
+	}
+	if spec.Correlation.IsZero() != spec.Intent.correlationHandle.IsZero() {
+		return invariant("BoundIntent correlation", "must match the Intent correlation handle")
+	}
+	if !spec.InReplyToDelivery.IsZero() && !isTerminalConsequence(consequence) {
+		return invariant("BoundIntent reply", "is allowed only for a terminal consequence")
+	}
+	return nil
 }
 
-func resolveTargets(requested []TargetRef, offers map[string]ResolvedTarget) ([]ResolvedTarget, error) {
-	targets := make([]ResolvedTarget, 0, len(requested))
-	seenDestinations := make(map[resolvedTargetDestination]struct{}, len(requested))
-	for _, target := range requested {
-		resolved, offered := offers[target.canonicalKey()]
-		if !offered {
-			return nil, invariant("BoundIntent targets", "successor was not offered by the View")
-		}
-		destination := resolved.destinationKey()
-		if _, duplicate := seenDestinations[destination]; duplicate {
-			return nil, invariant("BoundIntent targets", "contains a duplicate resolved destination")
-		}
-		seenDestinations[destination] = struct{}{}
-		targets = append(targets, resolved)
+func validateResolvedReference(intent AgentIntent, expected *ReferenceExpectation) error {
+	if expected == nil {
+		return nil
 	}
-	return targets, nil
+	switch intent.consequence {
+	case ConsequencePublishReference:
+		if !expected.absent || expected.key != intent.referenceKey || !expected.head.IsZero() {
+			return invariant("BoundIntent Reference", "does not bind first publication")
+		}
+	case ConsequenceSupersedeReference, ConsequenceRetractReference:
+		if expected.absent || expected.handle != intent.referenceHead || expected.key.IsZero() || expected.head.IsZero() {
+			return invariant("BoundIntent Reference", "does not bind the offered exact head")
+		}
+	}
+	return nil
+}
+
+func sortDigests(values []Digest) {
+	sort.Slice(values, func(i, j int) bool { return values[i].String() < values[j].String() })
 }
 
 type resolvedTargetDestination struct {
@@ -160,68 +169,10 @@ func (target ResolvedTarget) destinationKey() resolvedTargetDestination {
 	}
 }
 
-func requireLocalResponsibilityAnchor(consequence Consequence, targets []ResolvedTarget,
-	view ViewAuthority, correlationHandle OpaqueHandle, correlation EventRef,
-) error {
-	remote, local := false, false
-	for _, target := range targets {
-		remote = remote || target.destination == TargetDestinationRemote
-		local = local || target.destination == TargetDestinationLocal
-	}
-	if !remote || consequence == ConsequenceAdvanceHandling {
-		return nil
-	}
-	if isTerminalConsequence(consequence) &&
-		exactCorrelatedReply(targets, view, correlationHandle, correlation) {
-		return nil
-	}
-	if (consequence == ConsequenceCreateHandlings ||
-		consequence == ConsequenceResolveCompleted ||
-		consequence == ConsequenceResolveDeclined ||
-		consequence == ConsequenceResolveUnresolved) && !local {
-		return invariant("remote responsibility", "request must leave one causal local Handling open")
-	}
-	return nil
-}
-
 func isTerminalConsequence(consequence Consequence) bool {
 	return consequence == ConsequenceResolveCompleted ||
 		consequence == ConsequenceResolveDeclined ||
 		consequence == ConsequenceResolveUnresolved
-}
-
-func exactCorrelatedReply(targets []ResolvedTarget, view ViewAuthority,
-	correlationHandle OpaqueHandle, correlation EventRef,
-) bool {
-	if len(targets) != 1 || view.replyTo.IsZero() || view.replyTarget.IsZero() ||
-		view.replyDelivery.IsZero() ||
-		correlationHandle != view.replyTo || correlation.IsZero() ||
-		targets[0].destination != TargetDestinationRemote ||
-		targets[0].requested != view.replyTarget {
-		return false
-	}
-	expected, offered := view.provenance[view.replyTo.String()]
-	return offered && expected == correlation
-}
-
-func resolveProvenance(intent AgentIntent, offers map[string]EventRef) ([]EventRef, EventRef, error) {
-	causation := make([]EventRef, 0, len(intent.causationHandles))
-	for _, handle := range intent.causationHandles {
-		event, offered := offers[handle.String()]
-		if !offered {
-			return nil, EventRef{}, invariant("BoundIntent causation", "handle was not offered as provenance by the View")
-		}
-		causation = append(causation, event)
-	}
-	var correlation EventRef
-	if !intent.correlationHandle.IsZero() {
-		var offered bool
-		correlation, offered = offers[intent.correlationHandle.String()]
-		if !offered {
-			return nil, EventRef{}, invariant("BoundIntent correlation", "handle was not offered as provenance by the View")
-		}
-	}
-	return causation, correlation, nil
 }
 
 func (intent BoundIntent) Intent() AgentIntent        { return intent.intent }

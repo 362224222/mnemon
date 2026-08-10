@@ -1,7 +1,5 @@
 package agency
 
-import "sort"
-
 // CapturedCandidate is the immutable result of capturing one candidate input
 // for this operation. The caller may construct it only after content-addressed
 // capture and hash verification; durable admission verifies availability again.
@@ -46,59 +44,13 @@ type ResolvedArtifact struct {
 	digest Digest
 }
 
+func NewResolvedArtifact(input ArtifactInput, digest Digest) (ResolvedArtifact, error) {
+	if (input.kind != ArtifactInputCandidate && input.kind != ArtifactInputViewHandle) ||
+		input.handle.IsZero() || digest.IsZero() {
+		return ResolvedArtifact{}, invalid("resolved Artifact", "input and verified digest are required")
+	}
+	return ResolvedArtifact{input: input, digest: digest}, nil
+}
+
 func (artifact ResolvedArtifact) Input() ArtifactInput { return artifact.input }
 func (artifact ResolvedArtifact) Digest() Digest       { return artifact.digest }
-
-func resolveArtifacts(operation OperationKey, inputs []ArtifactInput, view map[string]ViewArtifactOffer,
-	candidates []CapturedCandidate,
-) ([]ResolvedArtifact, []Digest, error) {
-	captured := make(map[string]CapturedCandidate, len(candidates))
-	for _, candidate := range candidates {
-		if candidate.operation != operation || candidate.input.kind != ArtifactInputCandidate ||
-			candidate.input.handle.IsZero() || candidate.digest.IsZero() {
-			return nil, nil, invalid("BoundIntent candidates", "contains an invalid capture")
-		}
-		key := candidate.input.handle.String()
-		if _, exists := captured[key]; exists {
-			return nil, nil, invalid("BoundIntent candidates", "contains a duplicate handle")
-		}
-		captured[key] = candidate
-	}
-	resolved := make([]ResolvedArtifact, 0, len(inputs))
-	usedCandidates := 0
-	for _, input := range inputs {
-		var digest Digest
-		switch input.kind {
-		case ArtifactInputCandidate:
-			candidate, exists := captured[input.handle.String()]
-			if !exists || candidate.input != input {
-				return nil, nil, invariant("BoundIntent candidates", "candidate was not captured for this operation")
-			}
-			digest = candidate.digest
-			usedCandidates++
-		case ArtifactInputViewHandle:
-			offer, exists := view[input.handle.String()]
-			if !exists {
-				return nil, nil, invariant("BoundIntent View Artifact", "handle was not offered by the View")
-			}
-			digest = offer.digest
-		default:
-			return nil, nil, invalid("BoundIntent Artifacts", "contains an invalid input kind")
-		}
-		resolved = append(resolved, ResolvedArtifact{input: input, digest: digest})
-	}
-	if usedCandidates != len(captured) {
-		return nil, nil, invariant("BoundIntent candidates", "contains an unused candidate capture")
-	}
-	digests := make([]Digest, len(resolved))
-	for index, artifact := range resolved {
-		digests[index] = artifact.digest
-	}
-	sort.Slice(digests, func(i, j int) bool { return digests[i].String() < digests[j].String() })
-	for index := 1; index < len(digests); index++ {
-		if digests[index] == digests[index-1] {
-			return nil, nil, invalid("BoundIntent Artifacts", "contains a duplicate digest")
-		}
-	}
-	return resolved, digests, nil
-}

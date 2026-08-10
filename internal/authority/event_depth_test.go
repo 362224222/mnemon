@@ -52,8 +52,8 @@ func TestLocalCausalDepthInheritsEveryAcceptedInputWithoutAddingHop(t *testing.T
 			Subjects:     []agency.SubjectBinding{subject}})
 		intent := mustIntent(t, agency.IntentSpec{Kind: mustLabel(t, "depth.subject"),
 			Consequence: agency.ConsequenceAdvanceHandling, SubjectHandling: handle})
-		request, err := agency.BindIntent(agency.BoundIntentSpec{Intent: intent,
-			OperationKey: mustOperation(t, "operation:depth-subject"), View: view})
+		request, err := bindIntent(view, intent,
+			mustOperation(t, "operation:depth-subject"), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,8 +72,8 @@ func TestLocalCausalDepthInheritsEveryAcceptedInputWithoutAddingHop(t *testing.T
 			References:   []agency.ReferenceExpectation{expected}})
 		intent := mustIntent(t, agency.IntentSpec{Kind: mustLabel(t, "depth.reference"),
 			Consequence: agency.ConsequenceRetractReference, ReferenceHead: handle})
-		request, err := agency.BindIntent(agency.BoundIntentSpec{Intent: intent,
-			OperationKey: mustOperation(t, "operation:depth-reference"), View: view})
+		request, err := bindIntent(view, intent,
+			mustOperation(t, "operation:depth-reference"), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -105,8 +105,8 @@ func TestLocalCausalDepthInheritsEveryAcceptedInputWithoutAddingHop(t *testing.T
 				spec.CausationHandles = []agency.OpaqueHandle{handle}
 			}
 			intent := mustIntent(t, spec)
-			request, err := agency.BindIntent(agency.BoundIntentSpec{Intent: intent,
-				OperationKey: mustOperation(t, "operation:depth-"+test.name), View: view})
+			request, err := bindIntent(view, intent,
+				mustOperation(t, "operation:depth-"+test.name), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -129,8 +129,8 @@ func insertSyntheticDepthEvent(t *testing.T, fixture *authorityFixture,
 	intent := mustIntent(t, agency.IntentSpec{Kind: mustLabel(t, "depth.synthetic"),
 		Consequence: agency.ConsequenceCreateHandlings,
 		Successors:  []agency.TargetRef{agency.SelfTarget()}})
-	request, err := agency.BindIntent(agency.BoundIntentSpec{Intent: intent,
-		OperationKey: mustOperation(t, "operation:depth-synthetic"), View: view})
+	request, err := bindIntent(view, intent,
+		mustOperation(t, "operation:depth-synthetic"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
