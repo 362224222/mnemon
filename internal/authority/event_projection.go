@@ -3,12 +3,9 @@ package authority
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
-	"time"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
 )
@@ -35,34 +32,6 @@ func loadEventArtifactsTx(ctx context.Context, tx *sql.Tx,
 		result = append(result, digest)
 	}
 	return result, rows.Err()
-}
-
-type storedEventProjection struct {
-	SchemaVersion int `json:"schema_version"`
-	Machine       struct {
-		ID                string `json:"event_id"`
-		AcceptedAt        string `json:"accepted_at"`
-		OriginSequence    uint64 `json:"origin_sequence"`
-		CausalDepth       uint16 `json:"causal_depth"`
-		Source            string `json:"source_principal"`
-		RequestDigest     string `json:"request_digest"`
-		Consequence       string `json:"consequence"`
-		InReplyToDelivery string `json:"in_reply_to_delivery_id,omitempty"`
-	} `json:"machine"`
-	Semantic struct {
-		Kind    string `json:"kind"`
-		Payload string `json:"payload"`
-	} `json:"semantic"`
-	Evidence struct {
-		Artifacts   []string                   `json:"artifacts"`
-		Causation   []storedEventRefProjection `json:"causation"`
-		Correlation *storedEventRefProjection  `json:"correlation"`
-	} `json:"evidence"`
-}
-
-type storedEventRefProjection struct {
-	ID     string `json:"id"`
-	Digest string `json:"digest"`
 }
 
 type storedEventDetails struct {
@@ -130,154 +99,39 @@ func inspectStoredEvent(idValue, digestValue string, originSequence uint64, caus
 func inspectStoredEventDetails(idValue, digestValue string, originSequence uint64, causalDepth uint16,
 	sourceValue, requestValue, acceptedValue string, canonical []byte,
 ) (storedEventDetails, []agency.Digest, error) {
-	eventID, err := agency.NewEventID(idValue)
-	if err != nil {
-		return storedEventDetails{}, nil, errors.New("current View: corrupt Event ID")
-	}
 	digest, err := agency.ParseDigest(digestValue)
 	if err != nil || agency.Sum(canonical) != digest {
 		return storedEventDetails{}, nil, errors.New("current View: corrupt Event bytes")
 	}
-	var wire storedEventProjection
-	if err := json.Unmarshal(canonical, &wire); err != nil || wire.SchemaVersion != 3 {
-		return storedEventDetails{}, nil, errors.New("current View: invalid Event projection")
+	event, err := agency.ParseEventCanonicalJSON(canonical)
+	if err != nil {
+		return storedEventDetails{}, nil, fmt.Errorf("current View: invalid Event projection: %w", err)
 	}
-	if err := validateStoredEventAuthority(wire, idValue, originSequence, causalDepth, sourceValue,
+	if event.Digest() != digest {
+		return storedEventDetails{}, nil, errors.New("current View: corrupt Event bytes")
+	}
+	if err := validateStoredEventAuthority(event, idValue, originSequence, causalDepth, sourceValue,
 		requestValue, acceptedValue); err != nil {
 		return storedEventDetails{}, nil, err
 	}
-	kind, err := agency.NewSemanticLabel(wire.Semantic.Kind)
-	if err != nil {
-		return storedEventDetails{}, nil, errors.New("current View: invalid Event semantic kind")
-	}
-	payload, err := agency.NewSemanticPayload(wire.Semantic.Payload)
-	if err != nil {
-		return storedEventDetails{}, nil, errors.New("current View: invalid Event semantic payload")
-	}
-	artifacts, err := parseStoredEventArtifacts(wire.Evidence.Artifacts)
-	if err != nil {
-		return storedEventDetails{}, nil, err
-	}
-	eventRef, err := agency.NewEventRef(eventID, digest)
-	if err != nil {
-		return storedEventDetails{}, nil, err
-	}
-	causation, correlation, err := parseStoredEventRelations(wire.Evidence.Causation,
-		wire.Evidence.Correlation)
-	if err != nil {
-		return storedEventDetails{}, nil, err
-	}
-	consequence, err := parseStoredEventConsequence(wire.Machine.Consequence)
-	if err != nil {
-		return storedEventDetails{}, nil, err
-	}
-	var inReplyTo agency.DeliveryID
-	if wire.Machine.InReplyToDelivery != "" {
-		inReplyTo, err = agency.ParseDeliveryID(wire.Machine.InReplyToDelivery)
-		if err != nil {
-			return storedEventDetails{}, nil, errors.New("current View: invalid Event reply Delivery")
-		}
-	}
-	return storedEventDetails{ref: eventRef, kind: kind, payload: payload,
-		causation: causation, correlation: correlation, consequence: consequence,
-		inReplyTo: inReplyTo}, artifacts, nil
+	correlation, _ := event.Correlation()
+	inReplyTo, _ := event.InReplyToDelivery()
+	return storedEventDetails{ref: event.Ref(), kind: event.Kind(), payload: event.Payload(),
+		causation: event.Causation(), correlation: correlation, consequence: event.Consequence(),
+		inReplyTo: inReplyTo}, event.Artifacts(), nil
 }
 
-func parseStoredEventConsequence(value string) (agency.Consequence, error) {
-	for consequence := agency.ConsequenceCreateHandlings; consequence <= agency.ConsequenceObserveUnresolved; consequence++ {
-		if consequence.String() == value {
-			return consequence, nil
-		}
-	}
-	return agency.ConsequenceInvalid, errors.New("current View: invalid Event consequence")
-}
-
-func parseStoredEventRelations(causationWires []storedEventRefProjection,
-	correlationWire *storedEventRefProjection,
-) ([]agency.EventRef, agency.EventRef, error) {
-	if len(causationWires) > agency.MaxCausationHandles {
-		return nil, agency.EventRef{}, errors.New("current View: excessive Event causation")
-	}
-	causation := make([]agency.EventRef, 0, len(causationWires))
-	seen := make(map[string]struct{}, len(causationWires))
-	for _, wire := range causationWires {
-		ref, err := parseStoredEventRef(wire)
-		if err != nil {
-			return nil, agency.EventRef{}, err
-		}
-		key := ref.ID().String() + "\x00" + ref.Digest().String()
-		if _, duplicate := seen[key]; duplicate {
-			return nil, agency.EventRef{}, errors.New("current View: duplicate Event causation")
-		}
-		seen[key] = struct{}{}
-		causation = append(causation, ref)
-	}
-	var correlation agency.EventRef
-	if correlationWire != nil {
-		var err error
-		correlation, err = parseStoredEventRef(*correlationWire)
-		if err != nil {
-			return nil, agency.EventRef{}, err
-		}
-	}
-	return causation, correlation, nil
-}
-
-func parseStoredEventRef(wire storedEventRefProjection) (agency.EventRef, error) {
-	id, err := agency.NewEventID(wire.ID)
-	if err != nil {
-		return agency.EventRef{}, errors.New("current View: invalid Event relation ID")
-	}
-	digest, err := agency.ParseDigest(wire.Digest)
-	if err != nil {
-		return agency.EventRef{}, errors.New("current View: invalid Event relation digest")
-	}
-	ref, err := agency.NewEventRef(id, digest)
-	if err != nil {
-		return agency.EventRef{}, errors.New("current View: invalid Event relation")
-	}
-	return ref, nil
-}
-
-func validateStoredEventAuthority(wire storedEventProjection, idValue string,
+func validateStoredEventAuthority(event agency.Event, idValue string,
 	originSequence uint64, causalDepth uint16, sourceValue, requestValue, acceptedValue string,
 ) error {
-	if wire.Machine.ID != idValue || wire.Machine.OriginSequence != originSequence ||
-		wire.Machine.CausalDepth != causalDepth || wire.Machine.Source != sourceValue ||
-		wire.Machine.RequestDigest != requestValue {
+	if event.ID().String() != idValue || event.OriginSequence() != originSequence ||
+		event.CausalDepth() != causalDepth || event.Source().String() != sourceValue ||
+		event.RequestDigest().String() != requestValue {
 		return errors.New("current View: Event authority columns diverge from canonical bytes")
 	}
-	acceptedAt, acceptedErr := parseTime(acceptedValue)
-	wireAcceptedAt, wireAcceptedErr := time.Parse(time.RFC3339Nano, wire.Machine.AcceptedAt)
-	if acceptedErr != nil || wireAcceptedErr != nil || !acceptedAt.Equal(wireAcceptedAt) {
+	acceptedAt, err := parseTime(acceptedValue)
+	if err != nil || !acceptedAt.Equal(event.AcceptedAt()) {
 		return errors.New("current View: Event accepted time diverges from canonical bytes")
 	}
-	if _, err := agency.NewAgentPrincipalID(sourceValue); err != nil {
-		return errors.New("current View: corrupt Event source Principal")
-	}
-	if _, err := agency.ParseDigest(requestValue); err != nil || originSequence == 0 ||
-		causalDepth > agency.MaxPeerCausalDepth {
-		return errors.New("current View: corrupt Event machine authority")
-	}
 	return nil
-}
-
-func parseStoredEventArtifacts(values []string) ([]agency.Digest, error) {
-	artifacts := make([]agency.Digest, len(values))
-	for index, value := range values {
-		var err error
-		artifacts[index], err = agency.ParseDigest(value)
-		if err != nil {
-			return nil, errors.New("current View: invalid Event Artifact digest")
-		}
-	}
-	slices.SortFunc(artifacts, func(left, right agency.Digest) int {
-		return strings.Compare(left.String(), right.String())
-	})
-	for index := 1; index < len(artifacts); index++ {
-		if artifacts[index] == artifacts[index-1] {
-			return nil, errors.New("current View: duplicate Event Artifact digest")
-		}
-	}
-	return artifacts, nil
 }

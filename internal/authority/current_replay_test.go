@@ -363,6 +363,31 @@ func TestCurrentRejectsEventAuthorityColumnDivergence(t *testing.T) {
 	}
 }
 
+func TestStoredEventInspectionRejectsUnknownCanonicalField(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:event-strict-parser")
+	root := rootRequest(t, fixture.current(t), "operation:event-strict-parser", "durable work")
+	if _, err := fixture.store.Admit(fixture.ctx, fixture.proof, root); err != nil {
+		t.Fatal(err)
+	}
+	var idValue, sourceValue, requestValue, acceptedValue string
+	var originSequence uint64
+	var causalDepth uint16
+	var canonical []byte
+	if err := fixture.store.db.QueryRow(`SELECT event_id, origin_sequence, causal_depth,
+		source_principal_id, request_digest, accepted_at, canonical_json FROM events LIMIT 1`).
+		Scan(&idValue, &originSequence, &causalDepth, &sourceValue, &requestValue,
+			&acceptedValue, &canonical); err != nil {
+		t.Fatal(err)
+	}
+	withUnknown := bytes.Replace(canonical, []byte(`"machine":{`),
+		[]byte(`"machine":{"unknown":true,`), 1)
+	_, _, err := inspectStoredEventDetails(idValue, agency.Sum(withUnknown).String(),
+		originSequence, causalDepth, sourceValue, requestValue, acceptedValue, withUnknown)
+	if err == nil || !strings.Contains(err.Error(), "invalid Event projection") {
+		t.Fatalf("Event projection with unknown machine field = %v", err)
+	}
+}
+
 func TestCurrentRejectsEventArtifactPinDivergence(t *testing.T) {
 	fixture := newAuthorityFixture(t, "principal:event-pin-corruption")
 	root := rootRequest(t, fixture.current(t), "operation:event-pin-root", "durable work")

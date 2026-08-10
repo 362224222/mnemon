@@ -65,11 +65,9 @@ func NewPeerEvent(verified VerifiedPeerDelivery, stamp EventStamp) (Event, error
 		correlation:       correlation,
 		inReplyToDelivery: inReplyToDelivery,
 	}
-	canonical, digest, err := canonicalJSON(event.wire())
-	if err != nil {
+	if err := sealEvent(&event); err != nil {
 		return Event{}, err
 	}
-	event.canonical, event.digest = canonical, digest
 	return event, nil
 }
 

@@ -2,6 +2,11 @@ package agency
 
 import "time"
 
+const (
+	eventSchemaVersion     = 3
+	MaxEventCanonicalBytes = 32 << 10
+)
+
 type EventStamp struct {
 	ID             EventID
 	AcceptedAt     time.Time
@@ -68,12 +73,22 @@ func NewEvent(request BoundIntent, stamp EventStamp) (Event, error) {
 		copyValue := *request.expectedReference
 		event.expectedRef = &copyValue
 	}
-	canonical, digest, err := canonicalJSON(event.wire())
-	if err != nil {
+	if err := sealEvent(&event); err != nil {
 		return Event{}, err
 	}
-	event.canonical, event.digest = canonical, digest
 	return event, nil
+}
+
+func sealEvent(event *Event) error {
+	canonical, digest, err := canonicalJSON(event.wire())
+	if err != nil {
+		return err
+	}
+	if len(canonical) > MaxEventCanonicalBytes {
+		return limit("Event canonical bytes", len(canonical), MaxEventCanonicalBytes)
+	}
+	event.canonical, event.digest = canonical, digest
+	return nil
 }
 
 func (event Event) ID() EventID                { return event.id }
@@ -146,7 +161,7 @@ type eventEvidenceWire struct {
 
 func (event Event) wire() eventWire {
 	wire := eventWire{
-		SchemaVersion: 3,
+		SchemaVersion: eventSchemaVersion,
 		Machine: eventMachineWire{
 			ID: event.id.String(), AcceptedAt: event.acceptedAt.Format(time.RFC3339Nano),
 			OriginSequence: event.originSequence, CausalDepth: event.causalDepth,
