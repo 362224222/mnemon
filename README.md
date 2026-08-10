@@ -243,17 +243,18 @@ mnemon setup --eject
 
 ## How it works
 
-Once set up, memory operates through a lightweight integration layer: `SKILL.md` teaches
-commands, `GUIDELINE.md` teaches judgment, hooks remind the agent at lifecycle
-boundaries, and the `mnemon` binary executes deterministic memory operations.
-Supported setup commands automate this, but the integration is installable from
-markdown alone.
+Once set up, Memory operates through lightweight runtime projections: a
+runtime-specific `SKILL.md` teaches commands, a shared `guide.md` (by default
+`~/.mnemon/prompt/guide.md`) carries judgment guidance, and native hooks or
+extensions surface reminders at supported lifecycle boundaries. The `mnemon`
+binary executes deterministic memory operations, while `mnemon setup` installs
+the closest native mapping for each supported runtime.
 
 ```text
 Session starts
     |
     v
-  Prime   -> make skill, guideline, and active store visible
+  Prime   -> make skill, guide, and active store visible
     |
     v
 User prompt arrives
@@ -275,11 +276,11 @@ Before context compaction
 ```
 
 The four hook phases are reminders, not a hard workflow. **Prime** makes the
-skill, guideline, and active store visible. **Remind** prompts a recall
+skill, guide, and active store visible. **Remind** prompts a recall
 decision. **Nudge** prompts a writeback decision. **Compact** preserves only
 critical continuity before context compression.
 
-You don't run mnemon commands yourself. The agent does when the guideline says
+You don't run mnemon commands yourself. The agent does when the guide says
 memory is useful.
 
 ## Features
@@ -287,7 +288,7 @@ memory is useful.
 - **Zero user-side operation** — install once; supported runtimes can use hooks, minimal runtimes can use persistent rules
 - **LLM-supervised** — the host LLM decides what to remember, update, and forget; no embedded LLM, no API keys
 - **Multi-framework support** — Claude Code, Codex, Cursor, TRAE/TRAE Work, Qoder/QoderWork, CodeBuddy, WorkBuddy, Kimi Code, OpenCode, and Hermes Agent (hooks/plugins), OpenClaw (plugins), Pi (extensions), Nanobot (skills), and more
-- **Markdown-installable integration** — `SKILL.md`, `INSTALL.md`, `GUIDELINE.md`, and four lifecycle reminders
+- **Runtime-native integration** — runtime-specific `SKILL.md`, shared `guide.md`, and supported hooks or extensions
 - **Four-graph architecture** — temporal, entity, causal, and semantic edges, not just vector similarity
 - **Intent-native protocol** — three primitives (`remember`, `link`, `recall`) map to the LLM's cognitive vocabulary, not database syntax; structured JSON output with signal transparency
 - **Intent-aware recall** — graph traversal + optional vector search (RRF fusion), enabled by default for all queries
@@ -410,7 +411,7 @@ See [Development and Deployment](docs/DEPLOYMENT.md) for Docker, Compose, Ollama
 - [Agency](docs/AGENCY.md) — one-time Pi setup, operating model, completion semantics, and optional peers
 - [Go Engineering Standard](docs/development/go-engineering-standard.md) — maintainability, concurrency, persistence, testing, and review thresholds
 - [Design & Architecture](docs/DESIGN.md) — current engine architecture, algorithms, integration design
-- [Usage & Reference](docs/USAGE.md) — CLI commands, embedding support, architecture overview
+- [Memory Usage & Reference](docs/USAGE.md) — root Memory commands, import, receipts, and embedding support
 - [Memory Import Guide](docs/IMPORT.md) — schema and LLM prompt for importing historical chats
 - [Architecture Diagrams](docs/diagrams/) — system architecture, pipelines, lifecycle management
 

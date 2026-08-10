@@ -213,13 +213,16 @@ mnemon setup --eject
 
 ## 工作原理
 
-设置完成后，记忆通过轻量 integration layer 运作：`SKILL.md` 教命令，`GUIDELINE.md` 教判断，hook 在生命周期边界提醒，`mnemon` binary 执行确定性记忆操作。已支持的 setup 命令可以自动化这些步骤，这套集成本身仅靠 Markdown 也可安装。
+设置完成后，Memory 通过轻量的 runtime 投影运作：各 runtime 的 `SKILL.md`
+教授命令，共享的 `guide.md`（默认位于 `~/.mnemon/prompt/guide.md`）提供判断
+指引，原生 hook 或 extension 在支持的生命周期边界给出提醒。`mnemon` binary 执行确定性记忆操作，
+`mnemon setup` 则为每个受支持的 runtime 安装最接近其原生机制的映射。
 
 ```text
 会话启动
     |
     v
-  Prime   -> 让 skill、guideline 和当前 store 可见
+  Prime   -> 让 skill、guide 和当前 store 可见
     |
     v
 用户 prompt 到达
@@ -240,16 +243,18 @@ Agent 工作，并且只在有用时调用 Mnemon
   Compact -> 只保存关键连续性
 ```
 
-四个 hook phase 是提醒，不是硬 workflow。**Prime** 让 skill、guideline 和当前 store 可见。**Remind** 触发 recall 判断。**Nudge** 触发 writeback 判断。**Compact** 在上下文压缩前只保留关键连续性。
+四个 hook phase 是提醒，不是硬 workflow。**Prime** 让 skill、guide 和当前
+store 可见。**Remind** 触发 recall 判断。**Nudge** 触发 writeback 判断。
+**Compact** 在上下文压缩前只保留关键连续性。
 
-你不需要自己运行 mnemon 命令。Agent 会在 guideline 判断 memory 有用时执行。
+你不需要自己运行 mnemon 命令。Agent 会在 guide 判断 memory 有用时执行。
 
 ## 特性
 
 - **零用户操作** — 安装一次；支持 hook 的 runtime 可用 hook，minimal runtime 可用持久规则
 - **LLM 监督式** — 宿主 LLM 主动决定记什么、更新什么、遗忘什么；无内嵌 LLM，无 API 密钥
 - **多框架支持** — Claude Code、Codex、Cursor、TRAE/TRAE Work、Qoder/QoderWork、CodeBuddy、WorkBuddy、Kimi Code、OpenCode 和 Hermes Agent（hooks/plugins）、OpenClaw（plugins）、Pi（extensions）、Nanobot（skills）等
-- **Markdown 可安装集成** — `SKILL.md`、`INSTALL.md`、`GUIDELINE.md` 和四个生命周期提醒
+- **Runtime 原生集成** — 各 runtime 的 `SKILL.md`、共享 `guide.md`，以及受支持的 hook 或 extension
 - **四图架构** — 时序、实体、因果、语义四种边，不仅仅是向量相似度
 - **意图原生协议** — 三个原语（`remember`、`link`、`recall`）映射到 LLM 的认知词汇而非数据库语法；结构化 JSON 输出，带信号透明度
 - **意图感知召回** — 图遍历 + 可选向量搜索（RRF 融合），所有查询默认启用
@@ -358,7 +363,7 @@ make help           # 显示所有目标
 - [Agency 指南](AGENCY.md) — Pi 设置、普通使用、View → Intent → Receipt 与可选 peer 协作
 - [Go 工程规范](../development/go-engineering-standard.md) — 可维护性、并发、持久化、测试与质量 ratchet
 - [设计与架构](DESIGN.md) — 当前 engine architecture、核心概念、算法、集成设计
-- [用法与参考](USAGE.md) — CLI 命令、嵌入向量支持、架构概览
+- [Memory 用法与参考](USAGE.md) — 根级 Memory 命令、导入、回执与嵌入向量支持
 - [记忆导入指南](IMPORT.md) — 导入历史聊天的 schema 与 LLM 提取提示词
 - [架构图](../diagrams/) — 系统架构、记忆/召回流程、四图模型、生命周期管理
 

@@ -19,6 +19,10 @@ Agent 提议的后果。它不替 Agent 规划任务、调度工具或同步远�
 模型拥有开放的语义选择；本地 authority 拥有身份、可用 handle、边界、
 路由、fence、持久化以及后果是否被接受。
 
+这个循环是逻辑循环，不表示一个模型 turn 中可以连续执行多个动作。accepted
+Receipt 会结束当前受治理的 Host opportunity；下一次合格边界再读取新 View。
+有界输入诊断属于控制结果，不是 Receipt。
+
 ## 核心对象
 
 | 对象 | 含义 | 所有者 |
@@ -26,9 +30,9 @@ Agent 提议的后果。它不替 Agent 规划任务、调度工具或同步远�
 | **View** | 本地世界和当前可用后果的有界投影 | 本地 authority 派生 |
 | **Intent** | Agent 从一个精确 View 中选择的有界语义提议 | Agent |
 | **Event** | 本地 admission 接受 Intent 或认证后的远端 candidate 后产生的不可变语义行动 | 本地 authority |
-| **Receipt** | 一个精确 operation 被接受或拒绝的持久证明；精确重放只返回同一结果 | 本地 authority |
+| **Receipt** | 一个精确 operation 的持久 accepted/rejected 结果；重放返回既有结果而不产生第二次后果 | 本地 authority |
 | **Handling** | 某个 Principal 仍需考虑的本地持久责任 | 仅本地 authority |
-| **Reference** | 可进入未来 View 的本地持久材料；只有 CAS head，没有 owner、claim 或完成状态 | 仅本地 authority |
+| **Reference** | 带 CAS head、没有 owner、claim 或完成状态的本地持久谱系；active head 指向 Artifact，retracted head 作为 tombstone 保留 | 仅本地 authority |
 | **Artifact** | 通过 digest 寻址和验证的不可变内容；Event 只携带引用 | Artifact store 与本地 authority catalog |
 
 `Handling`、`Reference` 和 `Artifact` 可以被投影进 View，但 View 不是
@@ -128,4 +132,3 @@ Memory、teamwork、review、negotiation 和 self-evolution 都是建立在此�
 它们不能让 Core 决定什么知识有价值、哪个 Agent 应赢得争论、Runtime 应该
 怎样规划，或模型必须采用哪种协作模式。任何新增 canonical consequence 的
 能力都必须作为 authority 修改接受评审，而不能作为普通数据加载。
-

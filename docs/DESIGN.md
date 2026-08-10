@@ -25,7 +25,9 @@ The current engine's LLM-Supervised pattern, Hook-native / LLM-led / Protocol-co
 
 ### [3. Core Concepts & Architecture](design/03-concepts.md)
 
-The Insight/Edge data model, database schema (SQLite WAL), system architecture (CLI layer → engine → storage), code structure, and store isolation via named stores.
+The Insight/Edge data model, database schema (SQLite WAL), single-executable
+Memory/Agency boundary, current package structure, and Memory isolation through
+named stores.
 
 ### [4. Graph Model & Structural Theory](design/04-graph-model.md)
 
@@ -41,7 +43,9 @@ Effective Importance (EI) decay formula, immunity rules, auto-pruning, GC comman
 
 ### [7. LLM CLI Integration](design/07-integration.md)
 
-Markdown-installable runtime integration: `SKILL.md`, `INSTALL.md`, `GUIDELINE.md`, the four hook phases (Prime, Remind, Nudge, Compact), agent-led memory decisions, optional setup automation, and lightweight markdown self-evolution.
+Runtime-native integration through runtime-specific `SKILL.md`, a shared
+`guide.md`, supported hooks or extensions, agent-led memory decisions, setup
+automation, and lightweight reviewed markdown evolution.
 
 ### [Mnemon Agency](AGENCY.md)
 

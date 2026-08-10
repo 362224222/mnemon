@@ -1,22 +1,24 @@
-# Mnemon — Usage & Reference
+# Mnemon Memory — Usage & Reference
 
-> You don't run mnemon commands yourself — the agent does, driven by hooks and guided by the skill file. This document is a reference for understanding what the agent can do, for debugging, and for advanced manual operation.
+> You don't run Memory commands yourself — the agent does, driven by hooks and guided by the skill file. This document covers the root Memory CLI for understanding what the agent can do, debugging, and advanced manual operation. For durable Agent work and peer collaboration, see the [Agency guide](AGENCY.md).
 
 ---
 
-## Global Flags
+## Memory Root Flags
 
-These flags are available on every command:
+These root flags configure Memory commands:
 
 | Flag | Default | Description |
 |---|---|---|
 | `--store <name>` | (auto) | Named memory store (overrides `MNEMON_STORE` and active file) |
 | `--data-dir <path>` | `~/.mnemon` | Base data directory |
+| `--embed-model <name>` | `nomic-embed-text` | Ollama embedding model (overrides `MNEMON_EMBED_MODEL`) |
+| `--readonly` | `false` | Open the Memory database read-only, without creating WAL files |
 | `--version` | | Print version and exit |
 
 ---
 
-## Setup
+## Memory Setup
 
 Deploy mnemon into LLM CLI environments. This is the first command to run after installation.
 
@@ -60,7 +62,7 @@ mnemon setup --eject --target claude-code
 
 ---
 
-## CLI Commands
+## Memory CLI Commands
 
 ### Core
 
@@ -187,11 +189,12 @@ mnemon receipt             # JSON receipt with hashed recent operations
 mnemon receipt --limit 50  # include more operations in the receipt
 ```
 
-`mnemon receipt` is for sharing or archiving memory-boundary evidence without
-publishing raw memories, recall queries, paths, or operation details. It emits
-operation names, timestamps, and SHA-256 hashes for identifiers/details so a
-team can prove that `remember`, `recall`, `forget`, or GC activity happened
-without exposing the underlying content.
+`mnemon receipt` is a privacy-reduced audit export for sharing or archiving
+Memory-boundary observations without publishing raw memories, recall queries,
+paths, or operation details. It emits operation names, timestamps, and SHA-256
+hashes for identifiers/details so a team can correlate observed `remember`,
+`recall`, `forget`, or GC activity without exposing the underlying content. It
+is not signed third-party-verifiable proof.
 
 Example shape:
 

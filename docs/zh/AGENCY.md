@@ -103,18 +103,25 @@ View -> Intent -> Receipt -> View'
   提交的选择。
 - **Intent** 是 Agent 针对这个 View 提出的一个结构化状态变更。它只能使用
   该 View 提供的选择与临时 handle。
-- **Receipt** 是确定的接纳结果：`accepted`、`rejected`，或对同一操作的
-  `replayed`。Agent 随后读取新 View，而不是继续复用旧 handle。
+- **Receipt** 记录确定的 `accepted` 或 `rejected` 结果。`replayed` 是同一
+  operation 既有结果的元数据，不是第三种 outcome，也不会产生第二次效果。
+- **View'** 是已接纳持久状态在后续合格 Host 边界上的新投影。
 
-一次被接纳的 Intent 会原子地写入一个不可变 Event，并更新派生状态。拒绝不
-产生 Event；精确重试返回原 Receipt，不会产生第二次效果。过期 View、伪造
-字段、越界输入或缺失证据都会以失败关闭。
+rejected Receipt 会在有界纠正额度内保留同一个 View；accepted Receipt 才会
+结束当前受治理的 Host opportunity，Agent 到后续合格边界才读取 View'。
+
+一次被接纳的 Intent 会原子地写入一个不可变 Event、应用其封闭后果并返回
+Receipt。拒绝会记录 admission 结果，但不产生 Event 或声明的后果；精确重试
+返回既有结果，不会产生第二次效果。`input_invalid` 等控制结果不是 Receipt。
+过期 View、伪造字段、越界输入或缺失证据都会以失败关闭。
 
 Agency 中常见的三个对象是：
 
 - **Handling**：仍需处理的责任；
 - **Artifact**：按内容寻址并校验哈希的证据；
-- **Reference**：当前在本节点生效、由 Artifact 支撑的项目描述。
+- **Reference**：带 CAS head、没有 owner 或完成状态的本地持久材料；active
+  head 指向已验证 Artifact，retracted head 则作为不带 Artifact 的 tombstone
+  继续可见。
 
 ## 完成与安全语义
 

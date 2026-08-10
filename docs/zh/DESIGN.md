@@ -24,7 +24,8 @@ Mnemon 存在的原因 — LLM agent 的失忆问题、传统方案的结构性�
 
 ### [3. 核心概念与架构](design/03-concepts.md)
 
-Insight/Edge 数据模型、数据库 Schema（SQLite WAL）、系统架构（CLI 层 → 引擎 → 存储）、代码结构，以及通过命名 Store 实现的数据隔离。
+Insight/Edge 数据模型、数据库 Schema（SQLite WAL）、单可执行文件中的
+Memory/Agency 边界、当前 package 结构，以及通过命名 Store 实现的 Memory 隔离。
 
 ### [4. 图模型与结构理论](design/04-graph-model.md)
 
@@ -40,7 +41,9 @@ MAGMA 四图模型（temporal、entity、causal、semantic），LLM 注意力与
 
 ### [7. LLM CLI 集成](design/07-integration.md)
 
-Markdown 可安装的 runtime 集成：`SKILL.md`、`INSTALL.md`、`GUIDELINE.md`、四个 hook phase（Prime、Remind、Nudge、Compact）、agent 主导的记忆判断、可选 setup 自动化，以及轻量 Markdown 自进化。
+Runtime 原生集成：各 runtime 的 `SKILL.md`、共享 `guide.md`、受支持的 hook
+或 extension、agent 主导的记忆判断、setup 自动化，以及经过 review 的轻量
+Markdown 演化。
 
 ### [Mnemon Agency](AGENCY.md)
 

@@ -110,9 +110,25 @@ View -> Intent -> Receipt -> View'
   references, peer targets, and allowed changes.
 - **Intent** is the agent's proposed structural change, formed only from the
   current View and any artifacts captured in that turn.
-- **Receipt** records whether Agency accepted or rejected the proposal. An exact
-  retry may return a replayed receipt without applying the effect twice.
-- **View'** is a later View derived from admitted durable state.
+- **Receipt** records whether Agency accepted or rejected the proposal.
+  `replayed` is metadata on that prior outcome, not a third outcome, and never
+  applies the effect twice.
+- **View'** is a later View derived from admitted durable state and is obtained
+  at a later eligible Host boundary.
+
+A rejected Receipt keeps the same View available for a bounded corrected
+Intent. An accepted Receipt closes that governed Host opportunity; the agent
+does not read View' until a later eligible boundary.
+
+An accepted Intent atomically creates one immutable **Event**, applies its
+closed effect, and returns its Receipt. The resulting durable state is
+projected through three small objects:
+
+- **Handling** — responsibility that a Principal still needs to consider;
+- **Artifact** — immutable content addressed and verified by digest;
+- **Reference** — locally accepted persistent material with a CAS head but no
+  owner or completion state. An active head points to a verified Artifact; a
+  retracted head remains visible as a tombstone without one.
 
 Users normally do not write Intent JSON or invoke the hidden agent-facing
 commands. Opaque handles and allowed changes belong to one View; the agent must
@@ -125,8 +141,10 @@ peer exchange, and hash-verified artifacts. Remote text and artifacts are still
 untrusted content. Do not place provider credentials or other secrets in Agency
 payloads or artifacts.
 
-An accepted or replayed receipt is evidence of the recorded Agency effect; a
-rejected receipt changes no authority. Peer delivery also does not transfer
+An accepted Receipt, including a replay of an accepted operation, is evidence
+of the recorded Agency effect. A rejected Receipt records the admission
+decision but creates no Event or declared effect. A control result such as
+`input_invalid` is not a Receipt. Peer delivery also does not transfer
 authority: the receiving node decides what it admits.
 
 Completion is intentionally strict. Only an accepted

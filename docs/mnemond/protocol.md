@@ -22,6 +22,11 @@ The model owns the open semantic choice. The local authority owns identity,
 offered handles, limits, routing, fences, persistence, and whether an effect
 was accepted.
 
+The loop is logical, not multiple actions in one model turn. An accepted
+Receipt ends the current governed Host opportunity; a later eligible boundary
+obtains the next View. A bounded input diagnostic is a control result, not a
+Receipt.
+
 ## Core objects
 
 | Object | Meaning | Owner |
@@ -29,9 +34,9 @@ was accepted.
 | **View** | Bounded projection of the local world and the effects currently available to the Agent | Derived by local authority |
 | **Intent** | Bounded semantic proposal selected from one exact View | Agent |
 | **Event** | Immutable communicative act created only after local admission accepts an Intent or authenticated remote candidate | Local authority |
-| **Receipt** | Durable proof that one exact operation was accepted or rejected; exact replay has the same effect and result | Local authority |
+| **Receipt** | Durable accepted/rejected result for one exact operation; replay returns that prior outcome without a second effect | Local authority |
 | **Handling** | Durable local responsibility that a Principal still needs to consider | Local authority only |
-| **Reference** | Locally accepted, persistent material available to future Views; it has a CAS head and no owner, claim, or completion state | Local authority only |
+| **Reference** | Locally accepted persistent lineage with a CAS head and no owner, claim, or completion state; an active head points to an Artifact, while a retracted head remains as a tombstone | Local authority only |
 | **Artifact** | Immutable content addressed and verified by digest; Events carry references, not the content bytes | Artifact store plus local authority catalog |
 
 `Handling`, `Reference`, and `Artifact` may appear in a View, but a View is not
@@ -141,4 +146,3 @@ They must not make Core decide what knowledge is valuable, which Agent should
 win a debate, how a Runtime should plan, or which collaboration pattern the
 model must follow. A capability that requires a new canonical consequence must
 be reviewed as an authority change, not loaded as data.
-

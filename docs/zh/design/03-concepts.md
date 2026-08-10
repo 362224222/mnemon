@@ -95,91 +95,60 @@ oplog (
 
 ## 3.4 系统架构
 
-Mnemon 的架构分为五层：
+Mnemon 只发布一个可执行文件，但组合了两条刻意隔离的产品路径。Memory 继续
+使用根级命令；Agency 只位于 `mnemon agency ...`。共享可执行文件不会合并
+两者的状态或 authority。
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Integration Layer    Hook / Skill / Guide                   │
-├─────────────────────────────────────────────────────────────┤
-│  CLI Layer            remember, recall, diff, link, gc ...  │
-├─────────────────────────────────────────────────────────────┤
-│  Core Engine          search/ (recall, intent, keyword)     │
-│                       graph/  (temporal, entity, causal,    │
-│                                semantic)                    │
-│                       embed/  (ollama, vector)              │
-├─────────────────────────────────────────────────────────────┤
-│  Storage Layer        store/  (db, node, edge, oplog)       │
-├─────────────────────────────────────────────────────────────┤
-│  External (Optional)  Ollama (localhost:11434)               │
-└─────────────────────────────────────────────────────────────┘
+                         mnemon
+                            |
+              +-------------+-------------+
+              |                           |
+        根级 Memory 命令           mnemon agency ...
+              |                           |
+  model / graph / search / store    View / Intent / admission
+  embed / import / setup assets     Artifact / peer / attachment
+              |                           |
+       命名 Memory store            项目 .mnemon/agency
 ```
 
+Memory 路径拥有知识存储与检索；Agency 路径为已有 Agent Runtime 提供持久责任
+与受准入后果。其规范对象和 package 边界见
+[mnemond 协议](../mnemond/protocol.md)。
 
 **项目代码结构：**
 
 ```
 mnemon/
-├── cmd/                       # CLI 命令（Cobra）
-│   ├── root.go                # 根命令，全局 flags，记忆体解析
-│   ├── store.go               # 记忆体管理（list、create、set、remove）
-│   ├── remember.go            # 存储 insight + 自动建边
-│   ├── recall.go              # 检索（智能图增强，默认）
-│   ├── diff.go                # 独立去重/冲突检查
-│   ├── link.go                # 手动创建边
-│   ├── related.go             # 从 insight 出发 BFS 遍历
-│   ├── search.go              # 关键词搜索
-│   ├── embed.go               # 管理 embedding
-│   ├── forget.go              # 软删除 insight
-│   ├── gc.go                  # 垃圾回收
-│   ├── setup.go               # 部署集成（钩子、技能、引导）
-│   ├── viz.go                 # 知识图谱可视化
-│   ├── status.go              # 统计信息
-│   └── log.go                 # 操作日志
+├── main.go                    # 进程入口
+├── cmd/
+│   ├── root.go                # 组合单一产品命令
+│   ├── memory/                # 根级 Memory 命令与 Memory flags
+│   └── agency/                # `mnemon agency` 用户命令
 ├── internal/
-│   ├── model/                 # 数据结构
-│   │   ├── node.go            # Insight 定义
-│   │   └── edge.go            # Edge 定义
-│   ├── graph/                 # MAGMA 四图实现
-│   │   ├── engine.go          # 自动建边编排器
-│   │   ├── temporal.go        # 时序边
-│   │   ├── entity.go          # 实体边
-│   │   ├── causal.go          # 因果边
-│   │   └── semantic.go        # 语义边
-│   ├── search/                # 检索算法
-│   │   ├── recall.go          # 意图感知多信号检索
-│   │   ├── diff.go            # 内置去重检查
-│   │   ├── intent.go          # 意图检测
-│   │   └── keyword.go         # Token 级关键词评分
-│   ├── store/                 # SQLite 持久化
-│   │   ├── db.go              # 数据库初始化、事务、记忆体管理
-│   │   ├── node.go            # Insight CRUD、生命周期
-│   │   ├── edge.go            # Edge CRUD
-│   │   └── oplog.go           # 操作日志
-│   ├── embed/                 # 嵌入向量支持
-│   │   ├── ollama.go          # Ollama HTTP 客户端
-│   │   └── vector.go          # 向量序列化、余弦相似度
-│   └── setup/                 # LLM CLI 集成部署
-│       ├── claude.go          # Claude Code 部署逻辑
-│       ├── openclaw.go        # OpenClaw 部署逻辑
-│       ├── detect.go          # 环境检测
-│       ├── prompt.go          # 提示文件部署（guide.md）
-│       ├── settings.go        # 钩子注册到 settings.json
-│       ├── markdown.go        # Markdown 注入/移除
-│       └── assets/            # 嵌入模板（从源文件同步）
-│           ├── claude/        # Claude Code 资产
-│           │   ├── SKILL.md, guide.md
-│           │   ├── prime.sh, user_prompt.sh
-│           │   ├── stop.sh, compact.sh
-│           └── openclaw/      # OpenClaw 资产
-│               └── SKILL.md
-├── scripts/
-│   └── e2e_test.sh            # 端到端测试套件
-├── main.go                    # 入口
-├── CLAUDE.md                  # 项目级开发指南
-└── Makefile                   # 构建、安装、测试
+│   ├── model/                 # Memory Insight 与 Edge 值
+│   ├── graph/                 # 四图建边与遍历
+│   ├── search/                # Recall、Intent 检测与去重
+│   ├── embed/                 # 可选 Ollama embedding
+│   ├── importdraft/           # Memory 草稿校验与导入
+│   ├── store/                 # Memory SQLite 持久化
+│   ├── setup/                 # Memory runtime 集成与内嵌资产
+│   ├── agency/                # 不可变 Agency 协议值与投影
+│   ├── authority/             # View 封装、Intent 准入、唯一持久事实写入
+│   ├── artifact/              # 内容寻址的不可变证据
+│   ├── peerlink/              # 可替换的认证 peer transport
+│   ├── daemon/                # 本地 authority 进程组合与生命周期
+│   ├── agencyclient/          # Runtime 面向的 terminal 与 replay journal
+│   └── attach/                # Agency Hook、guide 与工具投影
+├── test/mnemond/              # Agency 边界与场景测试
+├── testdata/mnemond/          # 仅含数据的 Agency fixture
+└── scripts/e2e_test.sh        # Memory CLI 端到端测试
 ```
 
-## 3.5 数据目录布局
+## 3.5 Memory 数据目录布局
+
+下面的用户级目录只属于 Memory。Agency 的独立项目状态位于
+`<project>/.mnemon/agency/`。
 
 ```
 ~/.mnemon/
@@ -198,7 +167,7 @@ mnemon/
 
 **隔离边界**：每个记忆体包含独立的 `mnemon.db` — 洞察、边、操作日志完全隔离。Prompt 文件（`guide.md`、`skill.md`）共享 — 行为规则是通用的，记忆数据是私有的。
 
-## 3.6 记忆体隔离
+## 3.6 Memory 记忆体隔离
 
 Mnemon 支持命名记忆体（store），为不同 agent、项目或场景提供轻量数据隔离。
 
