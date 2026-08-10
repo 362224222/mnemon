@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
+	"github.com/mnemon-dev/mnemon/internal/artifact"
 	"github.com/mnemon-dev/mnemon/internal/authority"
-	"github.com/mnemon-dev/mnemon/internal/cas"
 )
 
 const (
@@ -125,9 +125,9 @@ func enrollPeerLocked(ctx context.Context, stateDirectory string,
 	if err != nil {
 		return PeerEnrollment{}, err
 	}
-	objects, err := cas.OpenExisting(filepath.Join(stateDirectory, "objects", "sha256"))
+	objects, err := artifact.OpenExisting(filepath.Join(stateDirectory, "objects", "sha256"))
 	if err != nil {
-		return PeerEnrollment{}, fmt.Errorf("%w: open CAS: %v", ErrPeerSetup, err)
+		return PeerEnrollment{}, fmt.Errorf("%w: open Artifact store: %v", ErrPeerSetup, err)
 	}
 	store, err := authority.OpenExistingWithArtifactVerifier(ctx,
 		filepath.Join(stateDirectory, authorityFileName), objects)

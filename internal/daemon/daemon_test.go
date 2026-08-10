@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
+	"github.com/mnemon-dev/mnemon/internal/artifact"
 	"github.com/mnemon-dev/mnemon/internal/authority"
-	"github.com/mnemon-dev/mnemon/internal/cas"
 )
 
 func TestDaemonServesCompleteLocalLoopOverOwnerUnix(t *testing.T) {
@@ -389,7 +389,7 @@ func provisionDaemonState(t *testing.T) (string, agency.AgentPrincipalID) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := cas.Open(objectsRoot); err != nil {
+	if _, err := artifact.Open(objectsRoot); err != nil {
 		t.Fatal(err)
 	}
 	principal, err := agency.NewAgentPrincipalID("principal:daemon-test")

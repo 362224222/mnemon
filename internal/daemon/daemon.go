@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
+	"github.com/mnemon-dev/mnemon/internal/artifact"
 	"github.com/mnemon-dev/mnemon/internal/authority"
-	"github.com/mnemon-dev/mnemon/internal/cas"
 )
 
 const (
@@ -50,8 +50,8 @@ type Runtime struct {
 	requests        requestTracker
 }
 
-// Open strictly adopts already-provisioned R7 state. It creates no database,
-// Principal, CAS root, socket directory, peer route, or setup state.
+// Open strictly adopts already-provisioned state. It creates no database,
+// Principal, Artifact root, socket directory, peer route, or setup state.
 func Open(ctx context.Context, stateDirectory string,
 	principal agency.AgentPrincipalID,
 ) (_ *Runtime, err error) {
@@ -82,11 +82,11 @@ func openRuntime(ctx context.Context, stateDirectory string,
 	}
 	objectsRoot := filepath.Join(stateDirectory, "objects", "sha256")
 	if err := requireOwnerDirectory(objectsRoot); err != nil {
-		return nil, fmt.Errorf("daemon open CAS: %w", err)
+		return nil, fmt.Errorf("daemon open Artifact store: %w", err)
 	}
-	objects, err := cas.OpenExisting(objectsRoot)
+	objects, err := artifact.OpenExisting(objectsRoot)
 	if err != nil {
-		return nil, fmt.Errorf("daemon open CAS: %w", err)
+		return nil, fmt.Errorf("daemon open Artifact store: %w", err)
 	}
 	now := time.Now
 	store, err := authority.OpenExistingWithArtifactVerifierAndClock(ctx,

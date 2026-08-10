@@ -22,7 +22,7 @@ DETERMINISTIC_PKGS := \
 	./internal/agencyclient \
 	./internal/attach \
 	./internal/authority \
-	./internal/cas \
+	./internal/artifact \
 	./internal/embed \
 	./internal/graph \
 	./internal/importdraft \

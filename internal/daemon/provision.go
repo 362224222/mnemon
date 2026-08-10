@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
+	"github.com/mnemon-dev/mnemon/internal/artifact"
 	"github.com/mnemon-dev/mnemon/internal/authority"
-	"github.com/mnemon-dev/mnemon/internal/cas"
 )
 
 var ErrProvision = errors.New("daemon: provision R7 node")
@@ -109,7 +109,7 @@ func provisionLocked(ctx context.Context, stateDirectory string,
 	}
 	objects, err := openProvisionCAS(stateDirectory, authorityPresent)
 	if err != nil {
-		return ProvisionResult{}, fmt.Errorf("%w: open CAS: %w", ErrProvision, err)
+		return ProvisionResult{}, fmt.Errorf("%w: open Artifact store: %w", ErrProvision, err)
 	}
 	if err := verifyOwnerDirectoryIdentity(stateDirectory, stateIdentity); err != nil {
 		return ProvisionResult{}, fmt.Errorf("%w: %w", ErrProvision, err)
@@ -147,19 +147,19 @@ func provisionLocked(ctx context.Context, stateDirectory string,
 		principal: principal, replayed: identityReplayed && principalReplayed}, nil
 }
 
-func openProvisionCAS(stateDirectory string, authorityPresent bool) (*cas.Store, error) {
+func openProvisionCAS(stateDirectory string, authorityPresent bool) (*artifact.Store, error) {
 	objectsParent := filepath.Join(stateDirectory, "objects")
 	objectsRoot := filepath.Join(objectsParent, "sha256")
 	if authorityPresent {
 		if err := requireOwnerDirectory(objectsParent); err != nil {
 			return nil, err
 		}
-		return cas.OpenExisting(objectsRoot)
+		return artifact.OpenExisting(objectsRoot)
 	}
 	if err := ensureOwnedDirectory(objectsParent, true); err != nil {
 		return nil, fmt.Errorf("prepare CAS parent: %w", err)
 	}
-	return cas.Open(objectsRoot)
+	return artifact.Open(objectsRoot)
 }
 
 func requireProvisionedLayout(stateDirectory string) error {

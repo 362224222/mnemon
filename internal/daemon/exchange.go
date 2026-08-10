@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
+	"github.com/mnemon-dev/mnemon/internal/artifact"
 	"github.com/mnemon-dev/mnemon/internal/authority"
-	"github.com/mnemon-dev/mnemon/internal/cas"
 	"github.com/mnemon-dev/mnemon/internal/peerlink"
 )
 
@@ -49,7 +49,7 @@ var errRemoteArtifactUnavailable = errors.New("daemon exchange: remote Artifact 
 
 type exchangeRuntime struct {
 	store         exchangeAuthority
-	objects       *cas.Store
+	objects       *artifact.Store
 	now           func() time.Time
 	identity      peerlink.Identity
 	peers         []peerlink.Peer
@@ -61,7 +61,7 @@ type exchangeRuntime struct {
 }
 
 func newExchangeRuntime(ctx context.Context, stateDirectory string, store *authority.Store,
-	objects *cas.Store, now func() time.Time, options ExchangeOptions,
+	objects *artifact.Store, now func() time.Time, options ExchangeOptions,
 ) (*exchangeRuntime, error) {
 	if ctx == nil || store == nil || objects == nil || now == nil || options.ListenAddress == "" {
 		return nil, errors.New("daemon exchange: complete owner configuration is required")
@@ -83,7 +83,7 @@ func newExchangeRuntime(ctx context.Context, stateDirectory string, store *autho
 		return nil, err
 	}
 	identity := peerlink.Identity{ID: loaded.projection.PeerID(), PrivateKey: loaded.privateKey}
-	client, err := peerlink.NewClient(peerlink.ClientOptions{Identity: identity, CAS: objects})
+	client, err := peerlink.NewClient(peerlink.ClientOptions{Identity: identity, Artifacts: objects})
 	if err != nil {
 		return nil, fmt.Errorf("daemon exchange: create peer client: %w", err)
 	}
@@ -148,7 +148,7 @@ func (exchange *exchangeRuntime) start(parent context.Context) (*exchangeSession
 	}
 	lifetime, cancel := context.WithCancel(parent)
 	server, err := peerlink.Listen(lifetime, exchange.listenAddress, peerlink.ServerOptions{
-		Identity: exchange.identity, Peers: exchange.peers, CAS: exchange.objects,
+		Identity: exchange.identity, Peers: exchange.peers, Artifacts: exchange.objects,
 		Delivery: exchange.receiveDelivery, AuthorizeArtifact: exchange.authorizeArtifact,
 		MaxHandlers: maxExchangeRoutes,
 	})
@@ -227,7 +227,7 @@ func (exchange *exchangeRuntime) pullAndCatalog(ctx context.Context, destination
 	delivery agency.PeerDelivery,
 ) error {
 	for _, digest := range delivery.Artifacts() {
-		content, err := exchange.objects.Read(ctx, digest, cas.MaxObjectBytes)
+		content, err := exchange.objects.Read(ctx, digest, artifact.MaxObjectBytes)
 		if err != nil {
 			if !errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("daemon exchange: read local Artifact: %w", err)
@@ -239,7 +239,7 @@ func (exchange *exchangeRuntime) pullAndCatalog(ctx context.Context, destination
 				}
 				return err
 			}
-			content, err = exchange.objects.Read(ctx, digest, cas.MaxObjectBytes)
+			content, err = exchange.objects.Read(ctx, digest, artifact.MaxObjectBytes)
 			if err != nil {
 				return fmt.Errorf("daemon exchange: read pulled Artifact: %w", err)
 			}

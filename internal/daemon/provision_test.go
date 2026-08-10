@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
+	"github.com/mnemon-dev/mnemon/internal/artifact"
 	"github.com/mnemon-dev/mnemon/internal/authority"
-	"github.com/mnemon-dev/mnemon/internal/cas"
 )
 
 func TestResolveProjectStateIsPureAndPhysical(t *testing.T) {
@@ -155,7 +155,7 @@ func TestProvisionReplaysAfterPeerRouteEnrollsItsSurrogatePrincipal(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	objects, err := cas.Open(filepath.Join(first.StateDirectory(), "objects", "sha256"))
+	objects, err := artifact.Open(filepath.Join(first.StateDirectory(), "objects", "sha256"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +446,7 @@ func TestOpenProvisionedRejectsOrphanPrincipalAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	objects, err := cas.OpenExisting(filepath.Join(result.StateDirectory(), "objects", "sha256"))
+	objects, err := artifact.OpenExisting(filepath.Join(result.StateDirectory(), "objects", "sha256"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,13 +473,13 @@ func TestOpenProvisionedRejectsOrphanPrincipalAuthority(t *testing.T) {
 	_ = verify.Close()
 }
 
-func provisionTestCAS(t *testing.T, state string) *cas.Store {
+func provisionTestCAS(t *testing.T, state string) *artifact.Store {
 	t.Helper()
 	parent := filepath.Join(state, "objects")
 	if err := ensureOwnedDirectory(parent, true); err != nil {
 		t.Fatal(err)
 	}
-	objects, err := cas.Open(filepath.Join(parent, "sha256"))
+	objects, err := artifact.Open(filepath.Join(parent, "sha256"))
 	if err != nil {
 		t.Fatal(err)
 	}

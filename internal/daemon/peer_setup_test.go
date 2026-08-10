@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/internal/artifact"
 	"github.com/mnemon-dev/mnemon/internal/authority"
-	"github.com/mnemon-dev/mnemon/internal/cas"
 )
 
 func TestConfigureExchangePublishesCanonicalPrivateCardAndReplays(t *testing.T) {
@@ -305,7 +305,7 @@ func assertPeerEnrollmentRoute(t *testing.T, node ProvisionResult, enrollment Pe
 	remote PeerCard, alias string,
 ) {
 	t.Helper()
-	objects, err := cas.OpenExisting(filepath.Join(node.StateDirectory(), "objects", "sha256"))
+	objects, err := artifact.OpenExisting(filepath.Join(node.StateDirectory(), "objects", "sha256"))
 	if err != nil {
 		t.Fatal(err)
 	}

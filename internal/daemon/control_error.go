@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
+	"github.com/mnemon-dev/mnemon/internal/artifact"
 	"github.com/mnemon-dev/mnemon/internal/authority"
-	"github.com/mnemon-dev/mnemon/internal/cas"
 )
 
 type controlErrorCode string
@@ -98,10 +98,10 @@ func classifyServiceError(err error) *controlError {
 		return newControlError(codeContextStale, "Agency context is stale")
 	case errors.Is(err, authority.ErrOperationConflict):
 		return newControlError(codeOperationMismatch, "Agency operation conflicts with its prior request")
-	case errors.Is(err, authority.ErrArtifactUnavailable), errors.Is(err, cas.ErrCorruption),
+	case errors.Is(err, authority.ErrArtifactUnavailable), errors.Is(err, artifact.ErrCorruption),
 		errors.Is(err, os.ErrNotExist):
 		return newControlError(codeArtifactInvalid, "Artifact is unavailable")
-	case errors.Is(err, agency.ErrLimit), errors.Is(err, cas.ErrInput):
+	case errors.Is(err, agency.ErrLimit), errors.Is(err, artifact.ErrInput):
 		return newControlError(codeInvalidArgument, "Agency input exceeds a closed bound")
 	case errors.Is(err, agency.ErrInvalid):
 		return newControlError(codeInvalidArgument, "Agency input is invalid")

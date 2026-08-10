@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
-	"github.com/mnemon-dev/mnemon/internal/cas"
+	"github.com/mnemon-dev/mnemon/internal/artifact"
 )
 
 const (
@@ -24,7 +24,7 @@ const (
 
 type ClientOptions struct {
 	Identity         Identity
-	CAS              *cas.Store
+	Artifacts        *artifact.Store
 	HandshakeTimeout time.Duration
 	RequestTimeout   time.Duration
 }
@@ -33,7 +33,7 @@ type ClientOptions struct {
 // delivery queue, retry state, route policy, or admission state.
 type Client struct {
 	identity         localIdentity
-	cas              *cas.Store
+	artifacts        *artifact.Store
 	handshakeTimeout time.Duration
 	requestTimeout   time.Duration
 }
@@ -51,7 +51,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{identity: identity, cas: options.CAS,
+	return &Client{identity: identity, artifacts: options.Artifacts,
 		handshakeTimeout: handshakeTimeout, requestTimeout: requestTimeout}, nil
 }
 
@@ -106,41 +106,41 @@ func (client *Client) SendDelivery(ctx context.Context, destination Peer,
 }
 
 // PullArtifact fetches one object only within an exact delivery scope,
-// verifies its digest, and writes it to the caller-owned CAS.
+// verifies its digest, and writes it to the caller-owned Artifact store.
 func (client *Client) PullArtifact(ctx context.Context, destination Peer,
 	delivery agency.PeerDelivery, digest agency.Digest,
-) (cas.PutResult, error) {
-	if client == nil || client.cas == nil {
-		return cas.PutResult{}, fmt.Errorf("%w: client CAS is required", ErrInput)
+) (artifact.PutResult, error) {
+	if client == nil || client.artifacts == nil {
+		return artifact.PutResult{}, fmt.Errorf("%w: client Artifact store is required", ErrInput)
 	}
 	request, err := artifactRequestFrame(delivery, digest)
 	if err != nil {
-		return cas.PutResult{}, err
+		return artifact.PutResult{}, err
 	}
 	peer, err := client.destination(destination)
 	if err != nil {
-		return cas.PutResult{}, err
+		return artifact.PutResult{}, err
 	}
 	session, err := client.open(ctx, peer)
 	if err != nil {
-		return cas.PutResult{}, err
+		return artifact.PutResult{}, err
 	}
 	defer session.close()
 	if err := writeFrame(session.connection, request); err != nil {
-		return cas.PutResult{}, clientSessionError(session.ctx, err)
+		return artifact.PutResult{}, clientSessionError(session.ctx, err)
 	}
 	response, err := readFrame(session.connection)
 	if err != nil {
-		return cas.PutResult{}, clientSessionError(session.ctx, err)
+		return artifact.PutResult{}, clientSessionError(session.ctx, err)
 	}
 	if response.frameType != frameArtifactResponse || response.deliveryID != delivery.ID() ||
 		response.envelopeDigest != delivery.EnvelopeDigest() || response.objectDigest != digest ||
 		agency.Sum(response.body) != digest {
-		return cas.PutResult{}, fmt.Errorf("%w: Artifact response does not bind the request", ErrFrame)
+		return artifact.PutResult{}, fmt.Errorf("%w: Artifact response does not bind the request", ErrFrame)
 	}
-	result, err := client.cas.Put(session.ctx, digest, response.body)
+	result, err := client.artifacts.Put(session.ctx, digest, response.body)
 	if err != nil {
-		return cas.PutResult{}, fmt.Errorf("store received Artifact: %w", err)
+		return artifact.PutResult{}, fmt.Errorf("store received Artifact: %w", err)
 	}
 	return result, nil
 }

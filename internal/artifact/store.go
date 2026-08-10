@@ -1,4 +1,4 @@
-package cas
+package artifact
 
 import (
 	"bytes"
@@ -15,14 +15,14 @@ import (
 
 const (
 	// MaxObjectBytes is the T0 Artifact byte bound shared by local capture and
-	// peer verification. CAS never accepts semantic input that raises it.
+	// peer verification. The store never accepts semantic input that raises it.
 	MaxObjectBytes = 4 << 20
 	digestShards   = 256
 )
 
 var (
-	ErrInput      = errors.New("cas: invalid input")
-	ErrCorruption = errors.New("cas: corruption")
+	ErrInput      = errors.New("artifact: invalid input")
+	ErrCorruption = errors.New("artifact: corruption")
 )
 
 // Store owns one owner-only sha256 object tree. It stores bytes only; pins,
@@ -39,8 +39,8 @@ type PutResult struct {
 	Replayed bool
 }
 
-// Open creates or validates an owner-only CAS root. root is the objects/sha256
-// directory, not an object or workspace path.
+// Open creates or validates an owner-only Artifact root. root is the
+// objects/sha256 directory, not an object or workspace path.
 func Open(root string) (*Store, error) {
 	if root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root {
 		return nil, fmt.Errorf("%w: root must be an absolute canonical path", ErrInput)
@@ -74,7 +74,7 @@ func Open(root string) (*Store, error) {
 	return &Store{root: root, temp: temp}, nil
 }
 
-// OpenExisting adopts an exact provisioned CAS layout. It never creates or
+// OpenExisting adopts an exact provisioned Artifact layout. It never creates or
 // repairs root, .tmp, shard, marker, or object state.
 func OpenExisting(root string) (*Store, error) {
 	if root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root {

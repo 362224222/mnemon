@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/internal/cas"
+	"github.com/mnemon-dev/mnemon/internal/artifact"
 )
 
 // DeliveryHandler receives opaque candidate bytes only after the TLS key has
@@ -27,7 +27,7 @@ type ArtifactAuthorizer func(context.Context, AuthenticatedPeer, ArtifactRequest
 type ServerOptions struct {
 	Identity          Identity
 	Peers             []Peer
-	CAS               *cas.Store
+	Artifacts         *artifact.Store
 	Delivery          DeliveryHandler
 	AuthorizeArtifact ArtifactAuthorizer
 	MaxHandlers       int
@@ -39,7 +39,7 @@ type ServerOptions struct {
 // It has no delivery queue, route selection, retry, admission, or settlement.
 type Server struct {
 	identity          localIdentity
-	cas               *cas.Store
+	artifacts         *artifact.Store
 	delivery          DeliveryHandler
 	authorizeArtifact ArtifactAuthorizer
 	tlsConfig         *tls.Config
@@ -64,8 +64,8 @@ type Server struct {
 // through Server.Wait or Server.CloseContext.
 func Listen(lifetime context.Context, address string, options ServerOptions) (*Server, error) {
 	if lifetime == nil || lifetime.Err() != nil || !validAddress(address) ||
-		options.CAS == nil || options.Delivery == nil || options.AuthorizeArtifact == nil {
-		return nil, fmt.Errorf("%w: live context, address, CAS, and handlers are required", ErrInput)
+		options.Artifacts == nil || options.Delivery == nil || options.AuthorizeArtifact == nil {
+		return nil, fmt.Errorf("%w: live context, address, Artifact store, and handlers are required", ErrInput)
 	}
 	identity, err := prepareIdentity(options.Identity)
 	if err != nil {
@@ -92,7 +92,7 @@ func Listen(lifetime context.Context, address string, options ServerOptions) (*S
 		return nil, fmt.Errorf("%w: listen: %v", ErrTransport, err)
 	}
 	ownedContext, cancel := context.WithCancel(lifetime)
-	server := &Server{identity: identity, cas: options.CAS, delivery: options.Delivery,
+	server := &Server{identity: identity, artifacts: options.Artifacts, delivery: options.Delivery,
 		authorizeArtifact: options.AuthorizeArtifact, tlsConfig: serverTLSConfig(identity, pins),
 		listener: listener, handshakeTimeout: handshakeTimeout, requestTimeout: requestTimeout,
 		budget: make(chan struct{}, maxHandlers), ctx: ownedContext, cancel: cancel,
@@ -250,7 +250,7 @@ func (server *Server) respond(ctx context.Context, peer AuthenticatedPeer,
 		if !authorized {
 			return frame{}, fmt.Errorf("%w: Artifact scope was not authorized", ErrAuthentication)
 		}
-		body, err := server.cas.Read(ctx, artifactRequest.objectDigest, cas.MaxObjectBytes)
+		body, err := server.artifacts.Read(ctx, artifactRequest.objectDigest, artifact.MaxObjectBytes)
 		if err != nil {
 			return frame{}, fmt.Errorf("read Artifact: %w", err)
 		}

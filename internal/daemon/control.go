@@ -8,7 +8,7 @@ import (
 	"net/http"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
-	"github.com/mnemon-dev/mnemon/internal/cas"
+	"github.com/mnemon-dev/mnemon/internal/artifact"
 )
 
 const (
@@ -36,7 +36,7 @@ const (
 	attachmentCredentialBytes = 32
 	maxPrivateResponse        = 4 << 10
 	maxControlDiagnostic      = 512
-	maxArtifactRequestBody    = ((cas.MaxObjectBytes + 2) / 3 * 4) + 256
+	maxArtifactRequestBody    = ((artifact.MaxObjectBytes + 2) / 3 * 4) + 256
 )
 
 var legacyHeaders = [...]string{

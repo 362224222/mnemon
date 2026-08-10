@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
-	"github.com/mnemon-dev/mnemon/internal/cas"
+	artifactstore "github.com/mnemon-dev/mnemon/internal/artifact"
 )
 
 func TestTCPRoundTripAuthenticatesDeliveryAndSeparatesACKReceiptAndArtifact(t *testing.T) {
@@ -53,7 +53,7 @@ func TestTCPRoundTripAuthenticatesDeliveryAndSeparatesACKReceiptAndArtifact(t *t
 				request.ObjectDigest() == agency.Sum(artifact), nil
 		})
 
-	client, err := NewClient(ClientOptions{Identity: clientIdentity, CAS: clientCAS})
+	client, err := NewClient(ClientOptions{Identity: clientIdentity, Artifacts: clientCAS})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestTCPRoundTripAuthenticatesDeliveryAndSeparatesACKReceiptAndArtifact(t *t
 	if put.Digest != agency.Sum(artifact) || put.Size != int64(len(artifact)) {
 		t.Fatalf("PullArtifact() = %#v", put)
 	}
-	stored, err := clientCAS.Read(ctx, agency.Sum(artifact), cas.MaxObjectBytes)
+	stored, err := clientCAS.Read(ctx, agency.Sum(artifact), artifactstore.MaxObjectBytes)
 	if err != nil || !bytes.Equal(stored, artifact) {
 		t.Fatalf("client CAS bytes = %q, %v", stored, err)
 	}
@@ -190,7 +190,7 @@ func TestServerBoundsConcurrencyAndCloseWaitsForHandlers(t *testing.T) {
 	var calls atomic.Int32
 	server := testServerWithOptions(t, "127.0.0.1:0", ServerOptions{
 		Identity: serverIdentity, Peers: []Peer{testPeer(t, clientIdentity, "")},
-		CAS: testCAS(t, "bounded-server"), MaxHandlers: 1,
+		Artifacts: testCAS(t, "bounded-server"), MaxHandlers: 1,
 		Delivery: func(ctx context.Context, _ AuthenticatedPeer,
 			_ DeliveryOffer,
 		) (DeliveryResponse, error) {
@@ -256,25 +256,25 @@ func TestServerBoundsConcurrencyAndCloseWaitsForHandlers(t *testing.T) {
 	}
 }
 
-func testCAS(t *testing.T, name string) *cas.Store {
+func testCAS(t *testing.T, name string) *artifactstore.Store {
 	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := cas.Open(filepath.Join(root, name))
+	store, err := artifactstore.Open(filepath.Join(root, name))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return store
 }
 
-func testServer(t *testing.T, identity Identity, peers []Peer, store *cas.Store,
+func testServer(t *testing.T, identity Identity, peers []Peer, store *artifactstore.Store,
 	delivery DeliveryHandler, authorize ArtifactAuthorizer,
 ) *Server {
 	t.Helper()
 	return testServerWithOptions(t, "127.0.0.1:0", ServerOptions{Identity: identity,
-		Peers: peers, CAS: store, Delivery: delivery, AuthorizeArtifact: authorize})
+		Peers: peers, Artifacts: store, Delivery: delivery, AuthorizeArtifact: authorize})
 }
 
 func testServerWithOptions(t *testing.T, address string, options ServerOptions) *Server {

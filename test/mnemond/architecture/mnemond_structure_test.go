@@ -39,7 +39,7 @@ func assertNativeMemoryDoesNotImportAgency(t *testing.T, root string) {
 	agency := map[string]struct{}{
 		"cmd/agency":      {},
 		"internal/agency": {}, "internal/agencyclient": {}, "internal/attach": {}, "internal/authority": {},
-		"internal/cas": {}, "internal/daemon": {},
+		"internal/artifact": {}, "internal/daemon": {},
 		"internal/peerlink": {},
 	}
 	for _, component := range []string{
@@ -74,9 +74,9 @@ func assertMnemondPackageGraph(t *testing.T, root string) {
 		"internal/agencyclient": {"internal/agency"},
 		"internal/attach":       {},
 		"internal/authority":    {"internal/agency"},
-		"internal/cas":          {"internal/agency"},
-		"internal/daemon":       {"internal/agency", "internal/authority", "internal/cas", "internal/peerlink"},
-		"internal/peerlink":     {"internal/agency", "internal/cas"},
+		"internal/artifact":     {"internal/agency"},
+		"internal/daemon":       {"internal/agency", "internal/authority", "internal/artifact", "internal/peerlink"},
+		"internal/peerlink":     {"internal/agency", "internal/artifact"},
 		"cmd/agency":            {"internal/agencyclient", "internal/attach", "internal/daemon"},
 		"cmd/memory": {
 			"internal/embed", "internal/graph", "internal/importdraft", "internal/model",

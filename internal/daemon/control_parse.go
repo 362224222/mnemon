@@ -10,8 +10,8 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
+	"github.com/mnemon-dev/mnemon/internal/artifact"
 	"github.com/mnemon-dev/mnemon/internal/authority"
-	"github.com/mnemon-dev/mnemon/internal/cas"
 )
 
 func prepareControlRequest(request *http.Request, readOnly, requireAttachment,
@@ -165,7 +165,7 @@ func decodeArtifactContent(value string) ([]byte, *controlError) {
 		return nil, newControlError(codeArtifactInvalid,
 			"Artifact content must be canonical raw base64")
 	}
-	if len(value) > base64.RawStdEncoding.EncodedLen(cas.MaxObjectBytes) {
+	if len(value) > base64.RawStdEncoding.EncodedLen(artifact.MaxObjectBytes) {
 		return nil, newControlError(codeArtifactTooLarge, "Artifact exceeds the closed byte bound")
 	}
 	content, err := base64.RawStdEncoding.Strict().DecodeString(value)
@@ -173,7 +173,7 @@ func decodeArtifactContent(value string) ([]byte, *controlError) {
 		clear(content)
 		return nil, newControlError(codeArtifactInvalid, "Artifact content is invalid")
 	}
-	if len(content) > cas.MaxObjectBytes {
+	if len(content) > artifact.MaxObjectBytes {
 		clear(content)
 		return nil, newControlError(codeArtifactTooLarge, "Artifact exceeds the closed byte bound")
 	}

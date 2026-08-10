@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
-	"github.com/mnemon-dev/mnemon/internal/cas"
+	"github.com/mnemon-dev/mnemon/internal/artifact"
 )
 
 const (
@@ -153,7 +153,7 @@ func artifactRequestFrame(delivery agency.PeerDelivery, digest agency.Digest) (f
 
 func artifactResponseFrame(request ArtifactRequest, body []byte) (frame, error) {
 	if request.deliveryID.IsZero() || request.envelopeDigest.IsZero() ||
-		request.objectDigest.IsZero() || len(body) > cas.MaxObjectBytes ||
+		request.objectDigest.IsZero() || len(body) > artifact.MaxObjectBytes ||
 		agency.Sum(body) != request.objectDigest {
 		return frame{}, fmt.Errorf("%w: verified delivery-scoped Artifact is required", ErrInput)
 	}
@@ -350,7 +350,7 @@ func validateArtifactRequest(wire frameWire, value frame) error {
 
 func validateArtifactResponse(wire frameWire, value frame) error {
 	if value.objectDigest.IsZero() || len(wire.Canonical) != 0 || len(wire.Signature) != 0 ||
-		wire.BodyBytes < 0 || wire.BodyBytes > cas.MaxObjectBytes {
+		wire.BodyBytes < 0 || wire.BodyBytes > artifact.MaxObjectBytes {
 		return fmt.Errorf("%w: invalid Artifact response", ErrFrame)
 	}
 	return nil

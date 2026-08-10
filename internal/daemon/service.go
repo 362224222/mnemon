@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
+	"github.com/mnemon-dev/mnemon/internal/artifact"
 	"github.com/mnemon-dev/mnemon/internal/authority"
-	"github.com/mnemon-dev/mnemon/internal/cas"
 )
 
 const candidateEntropyBytes = 16
@@ -19,7 +19,7 @@ const candidateEntropyBytes = 16
 type localService struct {
 	principal agency.AgentPrincipalID
 	authority *authority.Store
-	cas       *cas.Store
+	artifacts *artifact.Store
 	now       func() time.Time
 	random    io.Reader
 }
@@ -47,13 +47,13 @@ type candidateBinding struct {
 }
 
 func newLocalService(principal agency.AgentPrincipalID, store *authority.Store,
-	objects *cas.Store, now func() time.Time,
+	objects *artifact.Store, now func() time.Time,
 ) (*localService, error) {
 	if principal.IsZero() || store == nil || store.Path() == "" || objects == nil ||
 		objects.Root() == "" || now == nil {
-		return nil, errors.New("daemon: Principal, authority, and CAS are required")
+		return nil, errors.New("daemon: Principal, authority, and Artifact store are required")
 	}
-	return &localService{principal: principal, authority: store, cas: objects,
+	return &localService{principal: principal, authority: store, artifacts: objects,
 		now: now, random: cryptorand.Reader}, nil
 }
 
@@ -166,13 +166,13 @@ func (service *localService) capture(ctx context.Context, content []byte) (captu
 	if err := service.available(ctx); err != nil {
 		return capturedArtifact{}, err
 	}
-	if len(content) > cas.MaxObjectBytes {
-		return capturedArtifact{}, fmt.Errorf("daemon capture: Artifact exceeds %d bytes", cas.MaxObjectBytes)
+	if len(content) > artifact.MaxObjectBytes {
+		return capturedArtifact{}, fmt.Errorf("daemon capture: Artifact exceeds %d bytes", artifact.MaxObjectBytes)
 	}
 	digest := agency.Sum(content)
-	stored, err := service.cas.Put(ctx, digest, content)
+	stored, err := service.artifacts.Put(ctx, digest, content)
 	if err != nil {
-		return capturedArtifact{}, fmt.Errorf("daemon capture CAS: %w", err)
+		return capturedArtifact{}, fmt.Errorf("daemon capture Artifact: %w", err)
 	}
 	verified, err := authority.VerifyArtifact(content, service.now().Round(0).UTC())
 	if err != nil || verified.Digest() != stored.Digest || verified.ByteSize() != stored.Size {
@@ -202,9 +202,9 @@ func (service *localService) readArtifact(ctx context.Context, proof authority.A
 		return nil, agency.Digest{}, fmt.Errorf("%w: Agent Artifact read exceeds %d bytes",
 			agency.ErrLimit, agency.MaxAgentArtifactReadBytes)
 	}
-	content, err := service.cas.Read(ctx, digest, byteSize)
+	content, err := service.artifacts.Read(ctx, digest, byteSize)
 	if err != nil {
-		return nil, agency.Digest{}, fmt.Errorf("daemon read Artifact CAS: %w", err)
+		return nil, agency.Digest{}, fmt.Errorf("daemon read Artifact bytes: %w", err)
 	}
 	if int64(len(content)) != byteSize || agency.Sum(content) != digest {
 		clear(content)
@@ -218,7 +218,7 @@ func (service *localService) readArtifact(ctx context.Context, proof authority.A
 }
 
 func (service *localService) available(ctx context.Context) error {
-	if service == nil || service.authority == nil || service.cas == nil || service.now == nil ||
+	if service == nil || service.authority == nil || service.artifacts == nil || service.now == nil ||
 		service.random == nil || service.principal.IsZero() || ctx == nil {
 		return errors.New("daemon: local service is unavailable")
 	}
