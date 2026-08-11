@@ -1,5 +1,10 @@
 # mnemond protocol
 
+> **Stability: Preview.** This is the current authority contract implemented by
+> Agency, not a long-term compatibility promise. Protocol fields, persistence,
+> peer exchange, and Runtime projections may evolve until Agency declares an
+> explicit stability milestone.
+
 This document defines the small product contract behind Mnemon Agency. It is
 an architecture boundary, not an Event-sourcing requirement and not a catalog
 of built-in collaboration patterns.

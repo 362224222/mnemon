@@ -2,6 +2,11 @@
 
 [English](../AGENCY.md) | **中文**
 
+> **状态：Preview，持续迭代中。** Agency 已有可运行实现和测试覆盖，但当前面向
+> macOS/Linux 上的评估与受控使用。在明确宣布稳定里程碑前，其命令表面、Runtime
+> 集成、协议、Peer 交互以及磁盘/wire 格式仍可能变化。这个成熟度标签只适用于
+> Agency；Memory 拥有独立的状态模型与产品契约。
+
 Mnemon Agency 为一个项目中的 Agent 提供持久、受约束的协作状态。它不替
 Agent 规划或执行任务，而是在 Agent 提议改变状态时决定是否接纳，并留下可
 重放、可核验的结果。

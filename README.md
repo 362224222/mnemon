@@ -20,7 +20,7 @@ LLM agents forget everything between sessions. Context compaction drops critical
 Mnemon gives your agent persistent, cross-session memory — a four-graph knowledge store with intent-aware recall, importance decay, and automatic deduplication. The `mnemon` memory path remains one local binary with zero API keys and one setup command.
 
 Mnemon ships one executable with two separate surfaces. Memory stays at the
-`mnemon` root; [Agency](docs/AGENCY.md) lives at `mnemon agency ...` and adds
+`mnemon` root; [Agency Preview](docs/AGENCY.md) lives at `mnemon agency ...` and adds
 durable, project-local responsibility and effect admission to an existing Pi
 agent. Agency does not replace Memory or the Agent Runtime.
 
@@ -85,7 +85,7 @@ mnemon --version
 mnemon agency --version
 ```
 
-### Agency (Pi)
+### Agency (Preview · Pi-first)
 
 ```bash
 mnemon agency setup --runtime pi --project-root .
@@ -94,7 +94,8 @@ mnemon agency setup --runtime pi --project-root .
 Set up each project once, then use Pi normally. Agency is available on macOS
 and Linux and remains independent from Memory: `mnemon setup --target pi --yes`
 enables Memory, while the command above enables Agency. See the
-[Agency guide](docs/AGENCY.md) for its operating model and optional peers.
+[Agency guide](docs/AGENCY.md) for its operating model, Preview compatibility
+boundary, and optional peers.
 
 ### [Claude Code](https://github.com/anthropics/claude-code)
 
@@ -408,7 +409,7 @@ See [Development and Deployment](docs/DEPLOYMENT.md) for Docker, Compose, Ollama
 
 ## Documentation
 
-- [Agency](docs/AGENCY.md) — one-time Pi setup, operating model, completion semantics, and optional peers
+- [Agency Preview](docs/AGENCY.md) — maturity boundary, Pi setup, operating model, completion semantics, and optional peers
 - [Go Engineering Standard](docs/development/go-engineering-standard.md) — maintainability, concurrency, persistence, testing, and review thresholds
 - [Design & Architecture](docs/DESIGN.md) — current engine architecture, algorithms, integration design
 - [Memory Usage & Reference](docs/USAGE.md) — root Memory commands, import, receipts, and embedding support

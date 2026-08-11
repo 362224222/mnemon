@@ -1,5 +1,9 @@
 # mnemond 协议
 
+> **稳定性：Preview。** 本文是 Agency 当前实现遵循的 authority contract，
+> 不是长期兼容承诺。在 Agency 明确宣布稳定里程碑前，协议字段、持久格式、Peer
+> 交互和 Runtime 投影仍可能演进。
+
 本文定义 Mnemon Agency 背后的最小产品契约。它不是纯 Event Sourcing
 要求，也不是内置协作模式清单。
 

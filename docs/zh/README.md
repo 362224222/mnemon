@@ -20,8 +20,8 @@ LLM 智能体在会话之间会遗忘一切。上下文压缩丢失关键决策�
 Mnemon 为你的 LLM 提供持久的跨会话记忆 — 四图知识存储、意图感知检索、重要度衰减、自动去重。`mnemon` 记忆路径仍是一个本地二进制，零 API 密钥，一条命令完成部署。
 
 Mnemon 只发布一个 `mnemon` 可执行文件，同时提供两套相互独立的能力：根级
-Memory 命令保存跨会话知识；`mnemon agency ...` 为项目内 Agent 提供持久、
-受约束的协作状态。Agency 以 Pi 为首个 Runtime 集成，详情见
+Memory 命令保存跨会话知识；Preview 阶段的 `mnemon agency ...` 为项目内 Agent
+提供持久、受约束的协作状态。Agency 以 Pi 为首个 Runtime 集成，详情见
 [Agency 指南](AGENCY.md)。
 
 > **Claude Max / Pro 订阅用户？** Mnemon 完全通过你现有的订阅运作——不需要额外的 API 密钥。你的 LLM 订阅*本身*就是智能层。两条命令即可完成。
@@ -85,7 +85,7 @@ mnemon --version
 mnemon agency --version
 ```
 
-### Agency（Pi）
+### Agency（Preview · Pi-first）
 
 ```bash
 mnemon agency setup --runtime pi --project-root .
@@ -93,7 +93,8 @@ mnemon agency setup --runtime pi --project-root .
 
 每个项目设置一次，之后照常使用 Pi。Agency 支持 macOS 和 Linux，并与
 Memory 保持独立：`mnemon setup --target pi --yes` 启用 Memory，以上命令启用
-Agency。工作方式与可选 peer 配置见 [Agency 指南](AGENCY.md)。
+Agency。当前成熟度与兼容边界、工作方式及可选 peer 配置见
+[Agency 指南](AGENCY.md)。
 
 ### [Claude Code](https://github.com/anthropics/claude-code)
 
@@ -360,7 +361,7 @@ make help           # 显示所有目标
 
 ## 文档
 
-- [Agency 指南](AGENCY.md) — Pi 设置、普通使用、View → Intent → Receipt 与可选 peer 协作
+- [Agency Preview 指南](AGENCY.md) — 成熟度边界、Pi 设置、View → Intent → Receipt 与可选 peer 协作
 - [Go 工程规范](../development/go-engineering-standard.md) — 可维护性、并发、持久化、测试与质量 ratchet
 - [设计与架构](DESIGN.md) — 当前 engine architecture、核心概念、算法、集成设计
 - [Memory 用法与参考](USAGE.md) — 根级 Memory 命令、导入、回执与嵌入向量支持
