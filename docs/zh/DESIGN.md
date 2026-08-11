@@ -4,13 +4,11 @@
 >
 > 该词同源于记忆女神 Mnemosyne（Μνημοσύνη）——宙斯与她结合诞生了九位缪斯，象征记忆是一切知识与创造的源泉。
 
-Mnemon 是一个为 LLM agent 设计的持久化记忆系统。它采用 **LLM-Supervised** 模式：宿主 LLM 作为独立记忆 Binary 的外部编排者，通过符号化 CLI 接口交互，而 Binary 负责确定性的存储、图索引和生命周期管理。记忆以四图知识结构组织 — temporal、entity、causal、semantic 四种 edge。以单一 Go binary + SQLite 的形式实现，不依赖任何外部 API。
+Mnemon 是一个为 LLM agent 设计的持久化记忆系统。它采用 **LLM-Supervised** 模式：宿主 LLM 作为独立记忆 Binary 的外部编排者，通过符号化 CLI 接口交互，而 Binary 负责确定性的存储、图索引和生命周期管理。记忆以四图知识结构组织 — temporal、entity、causal、semantic 四种 edge。`mnemon` 记忆引擎仍以一个 Go binary + SQLite 实现，不依赖任何外部 API。
 
-本文档描述当前 Mnemon binary 与 engine architecture。正式 modular self-evolution harness 文档见 [Mnemon Harness](harness/README.md)，可安装 runtime 资产位于仓库根目录的 [harness](../../harness/) 目录。
-
-Harness 方向把这个 engine 扩展为给已有 agent 使用的事件溯源生命周期层。Mnemon
-保留宿主 agent 作为任务执行 runtime，并在其外围治理 memory、skill、eval、
-proposal、audit 和 projection 生命周期。
+本文档描述 Memory 引擎。同一个 `mnemon` 可执行文件还提供可选的
+[Mnemon Agency](AGENCY.md)，用于保存持久工作、回执与 peer 协作。Memory 与
+Agency 虽然共享可执行文件，但状态和 authority 彼此独立。
 
 ---
 
@@ -26,7 +24,8 @@ Mnemon 存在的原因 — LLM agent 的失忆问题、传统方案的结构性�
 
 ### [3. 核心概念与架构](design/03-concepts.md)
 
-Insight/Edge 数据模型、数据库 Schema（SQLite WAL）、系统架构（CLI 层 → 引擎 → 存储）、代码结构，以及通过命名 Store 实现的数据隔离。
+Insight/Edge 数据模型、数据库 Schema（SQLite WAL）、单可执行文件中的
+Memory/Agency 边界、当前 package 结构，以及通过命名 Store 实现的 Memory 隔离。
 
 ### [4. 图模型与结构理论](design/04-graph-model.md)
 
@@ -42,11 +41,13 @@ MAGMA 四图模型（temporal、entity、causal、semantic），LLM 注意力与
 
 ### [7. LLM CLI 集成](design/07-integration.md)
 
-Markdown 可安装的 runtime 集成：`SKILL.md`、`INSTALL.md`、`GUIDELINE.md`、四个 hook phase（Prime、Remind、Nudge、Compact）、agent 主导的记忆判断、可选 setup 自动化，以及轻量 Markdown 自进化。
+Runtime 原生集成：各 runtime 的 `SKILL.md`、共享 `guide.md`、受支持的 hook
+或 extension、agent 主导的记忆判断、setup 自动化，以及经过 review 的轻量
+Markdown 演化。
 
-### [Self-Evolution Harness](harness/README.md)
+### [Mnemon Agency](AGENCY.md)
 
-正式 modular harness 文档，覆盖 agent-agnostic 安装挂载、Agent Integration、event package 与未来可外挂 evolution modules。
+说明如何把持久工作、回执和可选 peer 协作接入已有 Agent Runtime。
 
 ### [8. 设计决策与未来方向](design/08-decisions.md)
 

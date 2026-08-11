@@ -1,101 +1,70 @@
+// Package cmd composes the single Mnemon product command.
 package cmd
 
 import (
+	"context"
 	"fmt"
-	"os"
+	"io"
 
-	"github.com/mnemon-dev/mnemon/internal/embed"
-	"github.com/mnemon-dev/mnemon/internal/store"
+	"github.com/mnemon-dev/mnemon/cmd/agency"
+	"github.com/mnemon-dev/mnemon/cmd/memory"
 	"github.com/spf13/cobra"
 )
 
-// version is set at build time via ldflags.
 var version = "dev"
 
-var (
-	dataDir    string
-	storeName  string
-	readOnly   bool
-	embedModel string
-)
-
-var rootCmd = &cobra.Command{
-	Use:     "mnemon",
-	Version: version,
-	Short:   "Memory daemon for LLM agents",
-	Long:    "Mnemon is a standalone memory daemon based on MAGMA's four-graph architecture.",
+// Execute runs one Mnemon command. Process signal handling and exit remain the
+// root main package's responsibility.
+func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if ctx == nil || stdin == nil || stdout == nil || stderr == nil {
+		return 1
+	}
+	root := productRoot()
+	if command, _, findErr := root.Find(args); findErr == nil {
+		for current := command; current != nil; current = current.Parent() {
+			if current.Name() == "agency" {
+				root.SilenceErrors = true
+				root.SilenceUsage = true
+				break
+			}
+		}
+	}
+	root.SetArgs(args)
+	root.SetIn(stdin)
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	executed, err := root.ExecuteContextC(ctx)
+	if err == nil {
+		return 0
+	}
+	if err.Error() != "" {
+		_, _ = fmt.Fprintln(stderr, err)
+	}
+	if code, ok := agency.ExitCode(err); ok {
+		return code
+	}
+	for command := executed; command != nil; command = command.Parent() {
+		if command.Name() == "agency" {
+			return 2
+		}
+	}
+	return 1
 }
 
-func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+func productRoot() *cobra.Command {
+	root := memory.New(version)
+	root.Short = "Memory and durable agency for LLM agents"
+	root.Long = "Mnemon gives LLM agents persistent memory and a local authority for durable, peer-to-peer work."
+	root.SilenceErrors = false
+	root.SilenceUsage = false
+	// Memory's current command tree is process-global. Remove a prior command
+	// so focused tests can construct the product root more than once without
+	// changing the production command set.
+	for _, child := range root.Commands() {
+		if child.Name() == "agency" {
+			root.RemoveCommand(child)
+		}
 	}
-}
-
-func init() {
-	defaultDataDir := store.DefaultDataDir()
-	if env := os.Getenv("MNEMON_DATA_DIR"); env != "" {
-		defaultDataDir = env
-	}
-	rootCmd.PersistentFlags().StringVar(&dataDir, "data-dir", defaultDataDir, "base data directory (env: MNEMON_DATA_DIR)")
-	rootCmd.PersistentFlags().StringVar(&storeName, "store", "", "named memory store (overrides MNEMON_STORE and active file)")
-	rootCmd.PersistentFlags().BoolVar(&readOnly, "readonly", false, "open database in read-only mode (no WAL files, safe for read-only mounts)")
-	rootCmd.PersistentFlags().StringVar(&embedModel, "embed-model", "",
-		fmt.Sprintf("Ollama embedding model (env: MNEMON_EMBED_MODEL; default: %s)", embed.DefaultModel))
-}
-
-// resolveEmbedModel returns the embedding model selector that should be
-// passed to embed.NewClientWithModel.
-//
-// Resolution chain (delegated to NewClientWithModel):
-//
-//	non-empty --embed-model flag > MNEMON_EMBED_MODEL env var > embed.DefaultModel
-//
-// An explicitly empty --embed-model is treated as "unset" and falls through
-// to the env var / built-in default; this matches how the existing --data-dir
-// flag behaves and avoids surprises when a user clears the flag via shell
-// scripting. Env-var resolution happens inside NewClientWithModel at command
-// execution time (not at cmd/init time), so test setups using t.Setenv after
-// package init still work as expected.
-func resolveEmbedModel() string {
-	return embedModel
-}
-
-// resolveStoreName returns the effective store name.
-// Priority: --store flag > MNEMON_STORE env > active file > "default".
-func resolveStoreName() string {
-	if storeName != "" {
-		return storeName
-	}
-	if env := os.Getenv("MNEMON_STORE"); env != "" {
-		return env
-	}
-	return store.ReadActive(dataDir)
-}
-
-// truncID safely truncates an ID to 8 characters for display.
-func truncID(id string) string {
-	if len(id) > 8 {
-		return id[:8]
-	}
-	return id
-}
-
-// openDB is a helper used by subcommands.
-func openDB() (*store.DB, error) {
-	name := resolveStoreName()
-	if !store.ValidStoreName(name) {
-		return nil, fmt.Errorf("invalid store name %q", name)
-	}
-	dir := store.StoreDir(dataDir, name)
-
-	if readOnly {
-		return store.OpenReadOnly(dir)
-	}
-
-	if err := store.MigrateIfNeeded(dataDir); err != nil {
-		return nil, fmt.Errorf("migrate: %w", err)
-	}
-	return store.Open(dir)
+	root.AddCommand(agency.New(version))
+	return root
 }

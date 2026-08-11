@@ -1,22 +1,24 @@
-# Mnemon — 用法与参考
+# Mnemon Memory — 用法与参考
 
-> 你不需要自己运行 mnemon 命令 — agent 会自动执行，由钩子驱动，受技能文件指引。本文档是理解 agent 能力、调试和高级手动操作的参考。
+> 你不需要自己运行 Memory 命令 — agent 会在 Hook 和 Skill 指引下执行。本文档只介绍根命名空间下的 Memory CLI，供理解能力、调试和高级手动操作使用。持久 Agent 工作与 Peer 协作请参阅 [Agency 指南](AGENCY.md)。
 
 ---
 
-## 全局标志
+## Memory 根标志
 
-以下标志适用于所有命令：
+以下根标志用于配置 Memory 命令：
 
 | 标志 | 默认值 | 说明 |
 |---|---|---|
 | `--store <name>` | (自动) | 命名记忆体（覆盖 `MNEMON_STORE` 和 active 文件） |
 | `--data-dir <path>` | `~/.mnemon` | 基础数据目录 |
+| `--embed-model <name>` | `nomic-embed-text` | Ollama 嵌入模型（覆盖 `MNEMON_EMBED_MODEL`） |
+| `--readonly` | `false` | 以只读模式打开 Memory 数据库，不创建 WAL 文件 |
 | `--version` | | 打印版本并退出 |
 
 ---
 
-## 安装部署
+## Memory 设置
 
 将 mnemon 部署到 LLM CLI 环境中。安装后首先运行此命令。
 
@@ -60,7 +62,7 @@ mnemon setup --eject --target claude-code
 
 ---
 
-## CLI 命令
+## Memory CLI 命令
 
 ### 核心命令
 
@@ -72,8 +74,11 @@ mnemon remember "选择 Qdrant 而非 Milvus 做向量搜索" \
 # 跳过重复/冲突检测
 mnemon remember "原始笔记" --no-diff
 
-# Recall — 意图感知的图增强检索（默认）
+# Recall — 意图感知的图增强检索（默认输出为紧凑格式）
 mnemon recall "vector database" --limit 10
+
+# 输出完整召回结果（signals、meta、时间戳）
+mnemon recall "vector database" --verbose
 
 # 显式指定意图覆盖
 mnemon recall "为什么选择 Qdrant" --intent WHY
@@ -86,6 +91,11 @@ mnemon recall "auth" --basic
 
 # Search — 基于 token 评分的关键词搜索
 mnemon search "authentication" --limit 10
+
+# Import — 批量导入 Memory draft（格式与 LLM prompt 见 docs/IMPORT.md）
+mnemon import memory_draft.json
+mnemon import --dry-run memory_draft.json   # 只验证，不写入
+mnemon import --no-diff memory_draft.json   # 跳过去重
 
 # Forget — 软删除洞察
 mnemon forget <id>
@@ -112,6 +122,19 @@ mnemon forget <id>
 | `--cat` | | 按分类过滤 |
 | `--source` | | 按来源过滤 |
 | `--basic` | `false` | 使用简单 SQL LIKE 匹配代替智能召回 |
+| `--verbose` | `false` | 输出完整召回响应（signals、meta、时间戳） |
+
+默认紧凑输出针对 LLM/agent 消费优化，包含 `id`、`content`、`category`、
+`importance`、`intent`、`matched_via`、`confidence` 和 `score`。使用
+`--verbose` 可恢复包含 signals、遍历元数据和时间戳的完整响应。置信度标签只在
+紧凑模式输出；完整响应保留原始分数，供调用方自行设置阈值。
+
+**Import 标志：**
+
+| 标志 | 默认值 | 说明 |
+|---|---|---|
+| `--dry-run` | `false` | 只验证 draft 文件，不写入数据库 |
+| `--no-diff` | `false` | 跳过去重，将全部洞察作为新记录插入 |
 
 ### 图操作
 
@@ -168,6 +191,33 @@ mnemon store remove old-project
 mnemon status             # 记忆统计
 mnemon log                # 操作日志（默认：最近 20 条）
 mnemon log --limit 50     # 显示更多条目
+mnemon receipt            # 输出包含近期操作哈希的 JSON 回执
+mnemon receipt --limit 50 # 在回执中包含更多操作
+```
+
+`mnemon receipt` 是经过隐私缩减的 Memory 边界审计导出，用于共享或归档观察，
+而不公开原始记忆、召回查询、路径或操作详情。它输出操作名、时间戳以及标识符和
+详情的 SHA-256 哈希，便于团队关联观察到的 `remember`、`recall`、`forget` 或
+GC 活动，同时不暴露底层内容；它不是带签名、可由第三方独立验证的 proof。
+
+示例结构：
+
+```json
+{
+  "schema": "mnemon.memory.receipt.v1",
+  "privacy": {
+    "raw_detail_included": false,
+    "hash_algorithm": "sha256"
+  },
+  "events": [
+    {
+      "event_name": "mnemon.memory.operation.observed",
+      "operation": "remember",
+      "detail_present": true,
+      "detail_hash": "..."
+    }
+  ]
+}
 ```
 
 ### 可视化
@@ -196,6 +246,7 @@ open graph.html
 | `MNEMON_STORE` | `default` | 活跃命名记忆体 |
 | `MNEMON_EMBED_ENDPOINT` | `http://localhost:11434` | Ollama API 端点 |
 | `MNEMON_EMBED_MODEL` | `nomic-embed-text` | Ollama 嵌入模型 |
+| `MNEMON_EMBED_DIMENSIONS` | (原生维度) | 嵌入向量维度；可设置截断值（例如 Matryoshka 模型使用 `256`） |
 
 ---
 

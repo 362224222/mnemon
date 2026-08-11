@@ -95,90 +95,62 @@ oplog (
 
 ## 3.4 System Architecture
 
-Mnemon's architecture is divided into five layers:
+Mnemon ships one executable that composes two deliberately separate product
+paths. Memory remains available through root commands; Agency is available only
+under `mnemon agency ...`. Sharing the executable does not merge their state or
+authority.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Integration Layer    Hook / Skill / Guide                   │
-├─────────────────────────────────────────────────────────────┤
-│  CLI Layer            remember, recall, diff, link, gc ...  │
-├─────────────────────────────────────────────────────────────┤
-│  Core Engine          search/ (recall, intent, keyword)     │
-│                       graph/  (temporal, entity, causal,    │
-│                                semantic)                    │
-│                       embed/  (ollama, vector)              │
-├─────────────────────────────────────────────────────────────┤
-│  Storage Layer        store/  (db, node, edge, oplog)       │
-├─────────────────────────────────────────────────────────────┤
-│  External (Optional)  Ollama (localhost:11434)               │
-└─────────────────────────────────────────────────────────────┘
+                         mnemon
+                            |
+              +-------------+-------------+
+              |                           |
+       root Memory commands        mnemon agency ...
+              |                           |
+  model / graph / search / store    View / Intent / admission
+  embed / import / setup assets     Artifact / peer / attachment
+              |                           |
+       named Memory stores          project .mnemon/agency
 ```
 
+The Memory path owns knowledge storage and retrieval. The Agency path owns
+durable responsibility and admitted effects for an existing Agent Runtime. Its
+normative object and package boundaries are documented in the
+[mnemond protocol](../mnemond/protocol.md).
 
 **Project code structure:**
 
 ```
 mnemon/
-├── cmd/                       # CLI commands (Cobra)
-│   ├── root.go                # Root command, global flags, store resolution
-│   ├── store.go               # Store management (list, create, set, remove)
-│   ├── remember.go            # Store insight + auto-create edges
-│   ├── recall.go              # Retrieval (smart graph-enhanced, default)
-│   ├── link.go                # Manually create edges
-│   ├── related.go             # BFS traversal from an insight
-│   ├── search.go              # Keyword search
-│   ├── embed.go               # Manage embeddings
-│   ├── forget.go              # Soft-delete insight
-│   ├── gc.go                  # Garbage collection
-│   ├── setup.go               # Deploy integrations (hooks, skill, guide)
-│   ├── viz.go                 # Knowledge graph visualization
-│   ├── status.go              # Statistics
-│   └── log.go                 # Operation log
+├── main.go                    # Process entry point
+├── cmd/
+│   ├── root.go                # Compose the single product command
+│   ├── memory/                # Root Memory commands and Memory flags
+│   └── agency/                # `mnemon agency` user commands
 ├── internal/
-│   ├── model/                 # Data structures
-│   │   ├── node.go            # Insight definition
-│   │   └── edge.go            # Edge definition
-│   ├── graph/                 # MAGMA four-graph implementation
-│   │   ├── engine.go          # Auto edge-creation orchestrator
-│   │   ├── temporal.go        # Temporal edges
-│   │   ├── entity.go          # Entity edges
-│   │   ├── causal.go          # Causal edges
-│   │   └── semantic.go        # Semantic edges
-│   ├── search/                # Retrieval algorithms
-│   │   ├── recall.go          # Intent-aware multi-signal retrieval
-│   │   ├── diff.go            # Built-in dedup check
-│   │   ├── intent.go          # Intent detection
-│   │   └── keyword.go         # Token-level keyword scoring
-│   ├── store/                 # SQLite persistence
-│   │   ├── db.go              # Database initialization, transactions, store management
-│   │   ├── node.go            # Insight CRUD, lifecycle
-│   │   ├── edge.go            # Edge CRUD
-│   │   └── oplog.go           # Operation log
-│   ├── embed/                 # Embedding support
-│   │   ├── ollama.go          # Ollama HTTP client
-│   │   └── vector.go          # Vector serialization, cosine similarity
-│   └── setup/                 # LLM CLI integration setup
-│       ├── claude.go          # Claude Code deployment logic
-│       ├── openclaw.go        # OpenClaw deployment logic
-│       ├── detect.go          # Environment detection
-│       ├── prompt.go          # Prompt file deployment (guide.md)
-│       ├── settings.go        # Hook registration in settings.json
-│       ├── markdown.go        # Markdown injection/ejection
-│       └── assets/            # Embedded templates (synced from source)
-│           ├── claude/        # Claude Code assets
-│           │   ├── SKILL.md, guide.md
-│           │   ├── prime.sh, user_prompt.sh
-│           │   ├── stop.sh, compact.sh
-│           └── openclaw/      # OpenClaw assets
-│               └── SKILL.md
-├── scripts/
-│   └── e2e_test.sh            # End-to-end test suite
-├── main.go                    # Entry point
-├── CLAUDE.md                  # Project-level development guidelines
-└── Makefile                   # Build, install, test
+│   ├── model/                 # Memory Insight and Edge values
+│   ├── graph/                 # Four-graph edge construction and traversal
+│   ├── search/                # Recall, intent detection, and deduplication
+│   ├── embed/                 # Optional Ollama embeddings
+│   ├── importdraft/           # Memory draft validation and import
+│   ├── store/                 # Memory SQLite persistence
+│   ├── setup/                 # Memory runtime integration and embedded assets
+│   ├── agency/                # Immutable Agency protocol values and projections
+│   ├── authority/             # View sealing, Intent admission, durable fact writer
+│   ├── artifact/              # Content-addressed immutable evidence
+│   ├── peerlink/              # Replaceable authenticated peer transport
+│   ├── daemon/                # Local authority process composition and lifecycle
+│   ├── agencyclient/          # Runtime-facing terminal and replay journal
+│   └── attach/                # Agency Hook, guide, and tool projection
+├── test/mnemond/              # Agency boundary and scenario suites
+├── testdata/mnemond/          # Data-only Agency fixtures
+└── scripts/e2e_test.sh        # Memory CLI end-to-end suite
 ```
 
-## 3.5 Data Directory Layout
+## 3.5 Memory Data Directory Layout
+
+The following user-wide layout belongs only to Memory. Agency keeps its
+independent project-local state under `<project>/.mnemon/agency/`.
 
 ```
 ~/.mnemon/
@@ -197,7 +169,7 @@ mnemon/
 
 **Isolation boundary**: Each store contains an independent `mnemon.db` — insights, edges, and oplog are fully isolated. Prompt files (`guide.md`, `skill.md`) are shared — behavioral rules are universal, memory data is private.
 
-## 3.6 Store Isolation
+## 3.6 Memory Store Isolation
 
 Mnemon supports named stores for lightweight data isolation between different agents, projects, or scenarios.
 

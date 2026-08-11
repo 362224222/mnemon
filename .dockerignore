@@ -18,12 +18,7 @@
 dist
 tmp
 mnemon
-mnemon-harness
 mnemond
-!harness/cmd/mnemon-harness
-!harness/cmd/mnemon-harness/**
-!harness/cmd/mnemond
-!harness/cmd/mnemond/**
 bin
 vendor
 go.work

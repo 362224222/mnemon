@@ -4,7 +4,10 @@
 
 ![集成架构](../../diagrams/08-three-layer-integration.jpg)
 
-Mnemon 以 Markdown 可安装的 memory harness 方式集成到 LLM CLI，而不是作为某个 runtime-specific agent framework。目标 runtime 继续负责对话、规划、文件编辑、工具调用和语义判断。Mnemon 提供持久记忆协议、skill 能力面、memory guideline，以及四个生命周期提醒。
+Mnemon 通过小型的 runtime 原生投影集成到 LLM CLI，而不是成为某个
+runtime-specific agent framework。目标 runtime 继续负责对话、规划、文件编辑、
+工具调用和语义判断。Mnemon 提供持久记忆协议、skill 能力面、共享 guide，并在
+runtime 支持的位置提供轻量生命周期提醒。
 
 集成层遵循 **Hook-native, LLM-led, Protocol-constrained** 原则：
 
@@ -12,18 +15,20 @@ Mnemon 以 Markdown 可安装的 memory harness 方式集成到 LLM CLI，而不
 - **LLM-led**：宿主 agent 判断 recall 或 writeback 是否有用。
 - **Protocol-constrained**：Mnemon 负责确定性命令、结构化输出、provenance、link、去重和生命周期操作。
 
-## 7.1 可安装资产模型
+## 7.1 已安装投影
 
-推荐集成由三份 Markdown 资产和 Mnemon binary 组成：
+当前集成把同一套共享行为模型投影到各 runtime 最接近的原生表面：
 
 | 资产 | 职责 |
 |---|---|
-| `SKILL.md` | 教命令语法、输出解释和硬性 guardrail |
-| `INSTALL.md` | 告诉目标 agent 如何在自身 runtime 中安装 skill、guideline 和 hook phase |
-| `GUIDELINE.md` | 定义 recall/writeback/link/supersede/no-op 判断策略 |
+| 各 runtime 的 `SKILL.md` | 教命令语法、输出解释和硬性 guardrail |
+| `<prompt-dir>/guide.md` | 提供共享的 recall、writeback、link 与 no-op 判断指引；默认 prompt 目录是 `~/.mnemon/prompt/` |
+| 原生 hook 或 extension | 在 runtime 暴露的生命周期点提供有界提醒 |
 | `mnemon` binary | 执行确定性记忆操作 |
 
-`mnemon setup` 仍然可以为已知 runtime 自动化这些步骤，但架构不应依赖 custom adapter。一个足够 capable 的 agent 应能阅读 `INSTALL.md`，并用自身 runtime 最接近的原生机制安装 Mnemon。
+`mnemon setup` 为已知 runtime 安装这些资产。路径和 hook 形态只是集成细节：
+runtime 可以使用 shell hook、plugin、TypeScript extension、持久指令，或只使用
+skill。这些表面都不拥有 Memory 状态。
 
 ## 7.2 四个 Hook Phase
 
@@ -33,7 +38,7 @@ Mnemon 以 Markdown 可安装的 memory harness 方式集成到 LLM CLI，而不
 Session starts
     |
     v
-  Prime   -> 加载 skill/guideline 立场和当前 store 信息
+  Prime   -> 加载 skill/guide 立场和当前 store 信息
     |
     v
 User prompt arrives
@@ -58,7 +63,7 @@ Hook 契约是行为契约。脚本正文是 runtime-specific implementation det
 
 | Phase | 典型事件 | 必须行为 | 应避免 |
 |---|---|---|---|
-| Prime | Session start / bootstrap | 让 Mnemon skill、guideline 和当前 store 可见 | 批量注入历史 memory |
+| Prime | Session start / bootstrap | 让 Mnemon skill、guide 和当前 store 可见 | 批量注入历史 memory |
 | Remind | User prompt submit / before planning | 对记忆敏感任务触发 recall 判断 | 每个 prompt 自动 recall |
 | Nudge | Stop / after response | 对 durable insight 触发 writeback 判断 | 保存普通聊天日志 |
 | Compact | Before compaction | 在上下文丢失前保存关键连续性 | 保存完整 transcript |
@@ -67,7 +72,7 @@ Hook 契约是行为契约。脚本正文是 runtime-specific implementation det
 
 ## 7.3 Runtime 映射
 
-同一个 harness 在不同 runtime 中有不同安装方式：
+同一个集成契约在不同 runtime 中有不同安装方式：
 
 | Runtime | 自然安装机制 |
 |---|---|
@@ -76,9 +81,9 @@ Hook 契约是行为契约。脚本正文是 runtime-specific implementation det
 | OpenClaw | Plugin hooks 和 skill，但不要求 Mnemon-specific memory engine |
 | Pi | `AGENTS.md`、原生 skill，以及 TypeScript extension lifecycle events |
 | Skill-first agents | Skill、memory guidance 和轻量提醒 |
-| Minimal CLIs | 引用 `SKILL.md` 和 `GUIDELINE.md` 的 rules 文件或 system instruction |
+| Minimal CLIs | 承载相同有界指引的 skill、rules 文件或 system instruction |
 
-Mnemon 应在 `INSTALL.md` 中把这些映射写成例子。它们不是独立的产品架构。
+这些映射位于各 runtime 的 setup 代码和内嵌资产中，不是独立的产品架构。
 
 ## 7.4 Agent 主导的记忆工作
 
@@ -101,19 +106,21 @@ Agent 应把 memory 当成判断，而不是反射动作：
 repeated experience
   -> Mnemon recall/writeback evidence
   -> LLM reflection
-  -> candidate patch to SKILL.md / GUIDELINE.md / INSTALL.md / project rule
+  -> candidate patch to SKILL.md / guide.md / project rule
   -> review
   -> installed behavior
 ```
 
-这种方式让自进化可检查、可回滚。稳定 workflow 进入 skill。稳定判断变化进入 guideline。稳定 runtime 安装经验进入 install note。代码、数据库 schema 或 runtime 内核只有在 Markdown loop 证明行为有价值后再演化。
+这种方式让自进化可检查、可回滚。稳定 workflow 进入 skill，稳定判断变化进入
+guide。Runtime setup 的变化仍作为普通代码或内嵌资产接受 review。代码、数据库
+schema 或 runtime 内核只有在 Markdown loop 证明行为有价值后再演化。
 
 ## 7.6 验证
 
 当目标 agent 能做到以下事情时，集成可接受：
 
 1. 找到 Mnemon skill，并解释命令语法。
-2. 找到 memory guideline，并解释 recall/writeback 的跳过条件。
+2. 找到 memory guide，并解释 recall/writeback 的跳过条件。
 3. 针对记忆相关任务运行 `mnemon recall`。
 4. 写入一条带 provenance 的 durable memory。
 5. 对 trivial task 跳过 memory。

@@ -17,12 +17,12 @@
 
 LLM 智能体在会话之间会遗忘一切。上下文压缩丢失关键决策，跨会话知识消失，长对话将早期信息推出窗口。
 
-Mnemon 为你的 LLM 提供持久的跨会话记忆 — 四图知识存储、意图感知检索、重要度衰减、自动去重。单一二进制，零 API 密钥，一条命令完成部署。
+Mnemon 为你的 LLM 提供持久的跨会话记忆 — 四图知识存储、意图感知检索、重要度衰减、自动去重。`mnemon` 记忆路径仍是一个本地二进制，零 API 密钥，一条命令完成部署。
 
-> **实验性 beta：**这个仓库也包含 `mnemon-harness`，它是一个源码构建的
-> project-local host-agent lifecycle state beta。它和稳定版 `mnemon` CLI 分离，
-> 还不是生产可用版本，并且可能随时出现 breaking change。见
-> [harness/README.md](../../harness/README.md)。
+Mnemon 只发布一个 `mnemon` 可执行文件，同时提供两套相互独立的能力：根级
+Memory 命令保存跨会话知识；`mnemon agency ...` 为项目内 Agent 提供持久、
+受约束的协作状态。Agency 以 Pi 为首个 Runtime 集成，详情见
+[Agency 指南](AGENCY.md)。
 
 > **Claude Max / Pro 订阅用户？** Mnemon 完全通过你现有的订阅运作——不需要额外的 API 密钥。你的 LLM 订阅*本身*就是智能层。两条命令即可完成。
 
@@ -59,19 +59,19 @@ Mnemon 同时填补了协议栈中的空白。MCP 标准化了 LLM 如何发现�
 
 ### 安装
 
-**Homebrew**（macOS / Linux）：
+**Homebrew Cask**（macOS）：
 
 ```bash
-brew install mnemon-dev/tap/mnemon
+brew install --cask mnemon-dev/tap/mnemon
 ```
 
-**Go install**：
+**Go install**（macOS / Linux）：
 
 ```bash
 go install github.com/mnemon-dev/mnemon@latest
 ```
 
-**从源码构建**：
+**从源码构建**（macOS / Linux）：
 
 ```bash
 git clone https://github.com/mnemon-dev/mnemon.git && cd mnemon
@@ -82,7 +82,18 @@ make install
 
 ```bash
 mnemon --version
+mnemon agency --version
 ```
+
+### Agency（Pi）
+
+```bash
+mnemon agency setup --runtime pi --project-root .
+```
+
+每个项目设置一次，之后照常使用 Pi。Agency 支持 macOS 和 Linux，并与
+Memory 保持独立：`mnemon setup --target pi --yes` 启用 Memory，以上命令启用
+Agency。工作方式与可选 peer 配置见 [Agency 指南](AGENCY.md)。
 
 ### [Claude Code](https://github.com/anthropics/claude-code)
 
@@ -202,13 +213,16 @@ mnemon setup --eject
 
 ## 工作原理
 
-设置完成后，记忆通过轻量 harness 运作：`SKILL.md` 教命令，`GUIDELINE.md` 教判断，hook 在生命周期边界提醒，`mnemon` binary 执行确定性记忆操作。已支持的 setup 命令可以自动化这些步骤，但 harness 本身仅靠 Markdown 也可安装。
+设置完成后，Memory 通过轻量的 runtime 投影运作：各 runtime 的 `SKILL.md`
+教授命令，共享的 `guide.md`（默认位于 `~/.mnemon/prompt/guide.md`）提供判断
+指引，原生 hook 或 extension 在支持的生命周期边界给出提醒。`mnemon` binary 执行确定性记忆操作，
+`mnemon setup` 则为每个受支持的 runtime 安装最接近其原生机制的映射。
 
 ```text
 会话启动
     |
     v
-  Prime   -> 让 skill、guideline 和当前 store 可见
+  Prime   -> 让 skill、guide 和当前 store 可见
     |
     v
 用户 prompt 到达
@@ -229,16 +243,18 @@ Agent 工作，并且只在有用时调用 Mnemon
   Compact -> 只保存关键连续性
 ```
 
-四个 hook phase 是提醒，不是硬 workflow。**Prime** 让 skill、guideline 和当前 store 可见。**Remind** 触发 recall 判断。**Nudge** 触发 writeback 判断。**Compact** 在上下文压缩前只保留关键连续性。
+四个 hook phase 是提醒，不是硬 workflow。**Prime** 让 skill、guide 和当前
+store 可见。**Remind** 触发 recall 判断。**Nudge** 触发 writeback 判断。
+**Compact** 在上下文压缩前只保留关键连续性。
 
-你不需要自己运行 mnemon 命令。Agent 会在 guideline 判断 memory 有用时执行。
+你不需要自己运行 mnemon 命令。Agent 会在 guide 判断 memory 有用时执行。
 
 ## 特性
 
 - **零用户操作** — 安装一次；支持 hook 的 runtime 可用 hook，minimal runtime 可用持久规则
 - **LLM 监督式** — 宿主 LLM 主动决定记什么、更新什么、遗忘什么；无内嵌 LLM，无 API 密钥
 - **多框架支持** — Claude Code、Codex、Cursor、TRAE/TRAE Work、Qoder/QoderWork、CodeBuddy、WorkBuddy、Kimi Code、OpenCode 和 Hermes Agent（hooks/plugins）、OpenClaw（plugins）、Pi（extensions）、Nanobot（skills）等
-- **Markdown 可安装 harness** — `SKILL.md`、`INSTALL.md`、`GUIDELINE.md` 和四个生命周期提醒
+- **Runtime 原生集成** — 各 runtime 的 `SKILL.md`、共享 `guide.md`，以及受支持的 hook 或 extension
 - **四图架构** — 时序、实体、因果、语义四种边，不仅仅是向量相似度
 - **意图原生协议** — 三个原语（`remember`、`link`、`recall`）映射到 LLM 的认知词汇而非数据库语法；结构化 JSON 输出，带信号透明度
 - **意图感知召回** — 图遍历 + 可选向量搜索（RRF 融合），所有查询默认启用
@@ -286,7 +302,7 @@ Agent 工作，并且只在有用时调用 Mnemon
   Gemini CLI ───┘
 ```
 
-基础已就绪：一个 `~/.mnemon` 数据库，任何 agent 都可以读写。Claude Code、Codex、Cursor、TRAE/TRAE Work、Qoder/QoderWork、CodeBuddy、WorkBuddy、Kimi Code、OpenCode 和 Hermes Agent setup 可自动安装 hook/plugin；OpenClaw 可以使用 plugin hooks；Pi 通过原生 skill 和 TypeScript lifecycle extension 集成；Nanobot 通过 skill 文件集成；NanoClaw 通过容器技能和卷挂载集成。同一个 harness 可以安装到任何支持 skill、rule、system prompt 或 event hook 的 LLM CLI。
+基础已就绪：一个 `~/.mnemon` 数据库，任何 agent 都可以读写。Claude Code、Codex、Cursor、TRAE/TRAE Work、Qoder/QoderWork、CodeBuddy、WorkBuddy、Kimi Code、OpenCode 和 Hermes Agent setup 可自动安装 hook/plugin；OpenClaw 可以使用 plugin hooks；Pi 通过原生 skill 和 TypeScript lifecycle extension 集成；Nanobot 通过 skill 文件集成；NanoClaw 通过容器技能和卷挂载集成。同一套 integration bundle 可以安装到任何支持 skill、rule、system prompt 或 event hook 的 LLM CLI。
 
 更长远的方向是**记忆网关**：协议层与存储引擎解耦。当前 SQLite 后端是第一个适配器；协议面（`remember / link / recall`）可运行在 PostgreSQL、Neo4j 或任何图数据库之上。Agent 侧优化（何时召回、记什么）与存储侧优化（索引、图算法）独立演进。详见[未来方向](design/08-decisions.md#82-未来方向)。
 
@@ -329,10 +345,10 @@ Sub-agent 委派是可选执行策略。当 runtime 支持时，主 agent 可以
 ## 开发
 
 ```bash
-make build          # 构建二进制
+make build          # 构建单一 mnemon 可执行文件
 make install        # 构建 + 安装到 $GOBIN
 make test           # 运行确定性 CI 测试
-make test-integration  # 按需运行 CLI E2E 与 Harness 边界测试
+make test-integration  # 按需运行 CLI E2E 与 Agency 边界测试
 mnemon setup        # 交互式设置（检测环境 + 部署钩子/技能/引导）
 mnemon setup --eject  # 移除所有集成
 make help           # 显示所有目标
@@ -344,10 +360,10 @@ make help           # 显示所有目标
 
 ## 文档
 
-- [Mnemon Harness Beta](../../harness/README.md) — 实验性的 host-agent lifecycle state
+- [Agency 指南](AGENCY.md) — Pi 设置、普通使用、View → Intent → Receipt 与可选 peer 协作
 - [Go 工程规范](../development/go-engineering-standard.md) — 可维护性、并发、持久化、测试与质量 ratchet
 - [设计与架构](DESIGN.md) — 当前 engine architecture、核心概念、算法、集成设计
-- [用法与参考](USAGE.md) — CLI 命令、嵌入向量支持、架构概览
+- [Memory 用法与参考](USAGE.md) — 根级 Memory 命令、导入、回执与嵌入向量支持
 - [记忆导入指南](IMPORT.md) — 导入历史聊天的 schema 与 LLM 提取提示词
 - [架构图](../diagrams/) — 系统架构、记忆/召回流程、四图模型、生命周期管理
 

@@ -16,21 +16,17 @@ builds:
     goos:
       - linux
       - darwin
-      - windows
     goarch:
       - amd64
       - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
 
 archives:
   - id: default
-    format: tar.gz
+    ids:
+      - mnemon
+    formats:
+      - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format_overrides:
-      - goos: windows
-        format: zip
 
 checksum:
   name_template: "checksums.txt"
@@ -44,9 +40,6 @@ changelog:
       - "^ci:"
       - "^chore:"
       - "^Merge"
-      # Harness modules and evaluations are still experimental. Keep them out of
-      # stable release notes until their public contract is ready.
-      - "(?i)harness"
       - "(?i)eval"
       - "(?i)codex app-server"
       - "(?i)skill loop"
@@ -55,19 +48,18 @@ changelog:
       - "(?i)self-evolution"
       - "(?i)agent memory"
 
-brews:
-  - repository:
+homebrew_casks:
+  - name: mnemon
+    ids:
+      - default
+    binaries:
+      - mnemon
+    repository:
       owner: mnemon-dev
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
     homepage: "https://github.com/mnemon-dev/mnemon"
-    description: "Persistent memory for LLM agents"
-    license: "Apache-2.0"
-    test: |
-      system "#{bin}/mnemon", "--version"
-    install: |
-      bin.install "mnemon"
+    description: "Persistent memory and durable agency for LLM agents"
 
 release:
   github:
@@ -77,6 +69,4 @@ release:
   prerelease: auto
   name_template: "v{{.Version}}"
   header: |
-    v{{.Version}} focuses on stable CLI, storage, and entity-graph behavior.
-
-    Note: harness modules, harness documentation, and harness evaluation assets in this repository remain experimental and are not part of this release's public stability guarantee.
+    v{{.Version}} ships Mnemon Memory and the local Agency authority in one `mnemon` binary.

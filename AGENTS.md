@@ -2,16 +2,19 @@
 
 ## Development
 
-- Build with `go build -o mnemon .`.
+- Build the single product executable with `go build -o mnemon .`.
 - Run `make test` for the deterministic CI suite. It excludes real daemon
   readiness, CLI E2E, wall-clock scenarios, Docker, and provider calls.
-- Run `make test-integration` explicitly for CLI E2E plus Harness timing, race,
-  process, and Docker boundaries; it is not a regular CI gate.
+- Run `make test-integration` explicitly for CLI E2E plus Agency
+  timing, race, process, and Docker boundaries; it is not a regular CI gate.
 - Run `make test-live` only when explicitly validating the paid Pi/DeepSeek
   scenarios.
-- Treat `harness/` as an experimental, not-yet-released harness layer. Do not
-  use it as an implementation dependency for release-path commands such as
-  `mnemon setup`; formal integrations belong under `cmd/` and `internal/`.
+- Treat `cmd/memory` and `cmd/agency` as command namespaces within the single
+  `mnemon` executable. Keep existing Memory commands at the root; expose Agency
+  through `mnemon agency ...`. `mnemond` remains the local daemon/protocol role,
+  not a second executable.
+- Keep mnemond boundary suites under `test/mnemond` and their data-only fixtures
+  under `testdata/mnemond`.
 - Treat `.claude/`, `.codex/`, `.openclaw/`, and similar host directories as
   local projection surfaces, not canonical project state.
 
@@ -39,7 +42,7 @@
   Commit title plus one or two focused body paragraphs, with bullets only when
   they improve scanning.
 - Choose the commit type by the primary project effect:
-  - `feat` for new developer-facing or harness capabilities.
+  - `feat` for new developer-facing or Agency capabilities.
   - `fix` for correctness repairs.
   - `test` for tests, eval scenarios, or fixtures that do not add a new
     reusable capability.

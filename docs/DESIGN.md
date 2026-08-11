@@ -4,14 +4,12 @@
 >
 > The word shares its root with Mnemosyne (Μνημοσύνη), the goddess of memory — from her union with Zeus the nine Muses were born, symbolizing memory as the wellspring of all knowledge and creativity.
 
-Mnemon is a persistent memory system designed for LLM agents. It adopts the **LLM-Supervised** pattern: the host LLM acts as external orchestrator of a standalone memory binary through symbolic CLI interfaces, while the binary handles deterministic storage, graph indexing, and lifecycle management. Memory is organized as a four-graph knowledge structure with temporal, entity, causal, and semantic edges. Implemented as a single Go binary + SQLite, with no external API dependencies.
+Mnemon is a persistent memory system designed for LLM agents. It adopts the **LLM-Supervised** pattern: the host LLM acts as external orchestrator of a standalone memory binary through symbolic CLI interfaces, while the binary handles deterministic storage, graph indexing, and lifecycle management. Memory is organized as a four-graph knowledge structure with temporal, entity, causal, and semantic edges. The `mnemon` memory engine remains one Go binary + SQLite, with no external API dependencies.
 
-This document describes the current Mnemon binary and engine architecture. The formal modular self-evolution harness docs live in [Mnemon Harness](harness/README.md), with installable runtime assets under the repository-level [harness](../harness/) directory.
-
-The harness direction extends this engine into an event-sourced lifecycle layer
-for agents users already run. Mnemon keeps host agents as the task execution
-runtime and governs memory, skill, eval, proposal, audit, and projection
-lifecycles around them.
+This document describes the Memory engine. The same `mnemon` executable also
+provides [Mnemon Agency](AGENCY.md), an optional local authority for durable
+Agent work and peer collaboration. Memory and Agency keep separate state and
+authority even though they share one executable.
 
 ---
 
@@ -27,7 +25,9 @@ The current engine's LLM-Supervised pattern, Hook-native / LLM-led / Protocol-co
 
 ### [3. Core Concepts & Architecture](design/03-concepts.md)
 
-The Insight/Edge data model, database schema (SQLite WAL), system architecture (CLI layer → engine → storage), code structure, and store isolation via named stores.
+The Insight/Edge data model, database schema (SQLite WAL), single-executable
+Memory/Agency boundary, current package structure, and Memory isolation through
+named stores.
 
 ### [4. Graph Model & Structural Theory](design/04-graph-model.md)
 
@@ -43,11 +43,14 @@ Effective Importance (EI) decay formula, immunity rules, auto-pruning, GC comman
 
 ### [7. LLM CLI Integration](design/07-integration.md)
 
-Markdown-installable runtime integration: `SKILL.md`, `INSTALL.md`, `GUIDELINE.md`, the four hook phases (Prime, Remind, Nudge, Compact), agent-led memory decisions, optional setup automation, and lightweight markdown self-evolution.
+Runtime-native integration through runtime-specific `SKILL.md`, a shared
+`guide.md`, supported hooks or extensions, agent-led memory decisions, setup
+automation, and lightweight reviewed markdown evolution.
 
-### [Self-Evolution Harness](harness/README.md)
+### [Mnemon Agency](AGENCY.md)
 
-The formal modular harness docs for agent-agnostic installation, Agent Integration, event packages, and future attachable evolution modules.
+How to add durable work, receipts, and optional peer collaboration to an
+existing Agent Runtime.
 
 ### [8. Design Decisions & Future Direction](design/08-decisions.md)
 
