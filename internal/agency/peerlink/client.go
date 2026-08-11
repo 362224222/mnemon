@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
-	"github.com/mnemon-dev/mnemon/internal/artifact"
+	"github.com/mnemon-dev/mnemon/internal/agency/artifact"
 )
 
 const (

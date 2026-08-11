@@ -5,8 +5,8 @@ set -euo pipefail
 runtime_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 runner_dir=$(cd "$runtime_dir/../../domainops" && pwd -P)
 repository_root=$(cd "$runtime_dir/../../../.." && pwd -P)
-lifecycle_extension="$repository_root/internal/attach/assets/pi/mnemond.ts"
-current_extension="$repository_root/internal/attach/assets/pi/mnemond-current.ts"
+lifecycle_extension="$repository_root/internal/agency/attach/assets/pi/mnemond.ts"
+current_extension="$repository_root/internal/agency/attach/assets/pi/mnemond-current.ts"
 current_provider="$runtime_dir/current-rpc-provider.ts"
 image="mnemon-pi-delegate-oracle:$$"
 scratch=$(mktemp -d /tmp/mnemon-pi-runtime-oracle.XXXXXX)

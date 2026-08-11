@@ -114,18 +114,18 @@ Node A 收到 candidate
 ## Package 权责
 
 ```text
-internal/agency       不可变协议值与 canonical projection
-internal/authority    sealed View、Intent binding、admission、Handling/Reference state
-internal/artifact     不可变内容字节与 digest 验证
-internal/peerlink     可替换的认证传输
-internal/daemon       进程组合与生命周期
-internal/agencyclient Runtime 面向的本地 terminal 与 replay journal
-internal/attach       Host Hook、guide 和工具投影
+internal/agency           不可变协议值与 canonical projection
+internal/agency/authority sealed View、Intent binding、admission、Handling/Reference state
+internal/agency/artifact  不可变内容字节与 digest 验证
+internal/agency/peerlink  可替换的认证传输
+internal/agency/client    Runtime 面向的本地 terminal 与 replay journal
+internal/agency/attach    Host Hook、guide 和工具投影
+internal/daemon           进程组合与生命周期
 ```
 
-`internal/authority` 是唯一持久事实 writer。Runtime adapter 和 transport
+`internal/agency/authority` 是唯一持久事实 writer。Runtime adapter 和 transport
 只能提供 candidate 或 observation。`internal/agency` 校验不可变值；解析
-View handle、选择持久 consequence 等 policy 必须属于 `internal/authority`。
+View handle、选择持久 consequence 等 policy 必须属于 `internal/agency/authority`。
 
 ## 能力边界
 

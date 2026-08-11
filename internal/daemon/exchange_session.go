@@ -5,7 +5,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/mnemon-dev/mnemon/internal/peerlink"
+	"github.com/mnemon-dev/mnemon/internal/agency/peerlink"
 )
 
 type exchangeSession struct {

@@ -38,9 +38,8 @@ func assertNativeMemoryDoesNotImportAgency(t *testing.T, root string) {
 	t.Helper()
 	agency := map[string]struct{}{
 		"cmd/agency":      {},
-		"internal/agency": {}, "internal/agencyclient": {}, "internal/attach": {}, "internal/authority": {},
-		"internal/artifact": {}, "internal/daemon": {},
-		"internal/peerlink": {},
+		"internal/agency": {},
+		"internal/daemon": {},
 	}
 	for _, component := range []string{"cmd/memory", "internal/memory"} {
 		forEachComponentGoFile(t, root, component, func(path string, file *ast.File) {
@@ -83,13 +82,16 @@ func assertMnemondPackageGraph(t *testing.T, root string) {
 		"internal/memory/setup/assets": {},
 		"internal/memory/setup":        {"internal/memory/setup/assets"},
 		"internal/agency":              {},
-		"internal/agencyclient":        {"internal/agency"},
-		"internal/attach":              {},
-		"internal/authority":           {"internal/agency"},
-		"internal/artifact":            {"internal/agency"},
-		"internal/daemon":              {"internal/agency", "internal/authority", "internal/artifact", "internal/peerlink"},
-		"internal/peerlink":            {"internal/agency", "internal/artifact"},
-		"cmd/agency":                   {"internal/agencyclient", "internal/attach", "internal/daemon"},
+		"internal/agency/client":       {"internal/agency"},
+		"internal/agency/attach":       {},
+		"internal/agency/authority":    {"internal/agency"},
+		"internal/agency/artifact":     {"internal/agency"},
+		"internal/agency/peerlink":     {"internal/agency", "internal/agency/artifact"},
+		"internal/daemon": {
+			"internal/agency", "internal/agency/artifact", "internal/agency/authority",
+			"internal/agency/peerlink",
+		},
+		"cmd/agency": {"internal/agency/attach", "internal/agency/client", "internal/daemon"},
 		"cmd/memory": {
 			"internal/memory/embed", "internal/memory/graph", "internal/memory/importdraft",
 			"internal/memory/model", "internal/memory/search", "internal/memory/setup",
@@ -180,7 +182,7 @@ func assertInteractiveAttachmentOnly(t *testing.T, root string) {
 			return true
 		})
 	})
-	assertSingleArchitectureMatch(t, declarations, "/internal/authority/",
+	assertSingleArchitectureMatch(t, declarations, "/internal/agency/authority/",
 		"IssueInteractiveAttachment", "attachment issuer declaration")
 	assertSingleArchitectureMatch(t, calls, "/internal/daemon/",
 		"IssueInteractiveAttachment", "attachment issuer call")

@@ -19,10 +19,10 @@ DETERMINISTIC_PKGS := \
 	./cmd/agency \
 	./cmd/memory \
 	./internal/agency \
-	./internal/agencyclient \
-	./internal/attach \
-	./internal/authority \
-	./internal/artifact \
+	./internal/agency/client \
+	./internal/agency/attach \
+	./internal/agency/authority \
+	./internal/agency/artifact \
 	./internal/memory/embed \
 	./internal/memory/graph \
 	./internal/memory/importdraft \

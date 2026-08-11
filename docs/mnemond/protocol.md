@@ -123,19 +123,19 @@ The two nodes never share a canonical Task or Handling. Consequently:
 ## Package ownership
 
 ```text
-internal/agency       immutable protocol values and canonical projections
-internal/authority    sealed View, Intent binding, admission, Handling and Reference state
-internal/artifact     immutable content bytes and digest verification
-internal/peerlink     replaceable authenticated transport only
-internal/daemon       process composition and lifecycle
-internal/agencyclient Runtime-facing local terminal and replay journal
-internal/attach       host Hook, guide, and tool projection
+internal/agency           immutable protocol values and canonical projections
+internal/agency/authority sealed View, Intent binding, admission, Handling and Reference state
+internal/agency/artifact  immutable content bytes and digest verification
+internal/agency/peerlink  replaceable authenticated transport only
+internal/agency/client    Runtime-facing local terminal and replay journal
+internal/agency/attach    host Hook, guide, and tool projection
+internal/daemon           process composition and lifecycle
 ```
 
-`internal/authority` is the only durable fact writer. Runtime adapters and
+`internal/agency/authority` is the only durable fact writer. Runtime adapters and
 transport may present candidates or observations but do not own protocol
 state. `internal/agency` validates immutable values; policy that resolves View
-handles or decides durable consequences belongs to `internal/authority`.
+handles or decides durable consequences belongs to `internal/agency/authority`.
 
 ## Capability boundary
 

@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mnemon-dev/mnemon/internal/attach"
+	"github.com/mnemon-dev/mnemon/internal/agency/attach"
 	"github.com/mnemon-dev/mnemon/internal/daemon"
 	"github.com/spf13/cobra"
 )

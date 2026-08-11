@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/internal/artifact"
-	"github.com/mnemon-dev/mnemon/internal/authority"
+	"github.com/mnemon-dev/mnemon/internal/agency/artifact"
+	"github.com/mnemon-dev/mnemon/internal/agency/authority"
 )
 
 func TestConfigureExchangePublishesCanonicalPrivateCardAndReplays(t *testing.T) {
