@@ -22,7 +22,8 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	}
 	root := productRoot()
 	agencyRequest := false
-	if command, _, findErr := root.Find(args); findErr == nil {
+	command, _, findErr := root.Find(args)
+	if findErr == nil {
 		agencyRequest = belongsToAgency(command)
 		if agencyRequest {
 			root.SilenceErrors = true
@@ -40,7 +41,7 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	if err == nil {
 		return 0
 	}
-	if !agencyRequest && !belongsToAgency(executed) && executed != nil {
+	if findErr == nil && !agencyRequest && !belongsToAgency(executed) && executed != nil {
 		_, _ = fmt.Fprintln(stderr, executed.UsageString())
 	}
 	if err.Error() != "" {

@@ -73,3 +73,15 @@ func TestMemoryHelpRemainsSuccessfulStdout(t *testing.T) {
 			exitCode, stdout.String(), stderr.String())
 	}
 }
+
+func TestUnknownRootCommandKeepsTheShortCobraDiagnostic(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	exitCode := Execute(context.Background(), []string{"unknown"},
+		strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 1 || stdout.Len() != 0 ||
+		!strings.Contains(stderr.String(), "Run 'mnemon --help' for usage.") ||
+		strings.Contains(stderr.String(), "Usage:\n") {
+		t.Fatalf("unknown command: exit=%d stdout=%q stderr=%q",
+			exitCode, stdout.String(), stderr.String())
+	}
+}
