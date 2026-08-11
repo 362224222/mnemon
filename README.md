@@ -416,16 +416,6 @@ See [Development and Deployment](docs/DEPLOYMENT.md) for Docker, Compose, Ollama
 - [Memory Import Guide](docs/IMPORT.md) — schema and LLM prompt for importing historical chats
 - [Architecture Diagrams](docs/diagrams/) — system architecture, pipelines, lifecycle management
 
-## Star History
-
-<a href="https://www.star-history.com/?repos=mnemon-dev%2Fmnemon&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=mnemon-dev/mnemon&type=date&theme=dark&legend=top-left&sealed_token=HiEHosGKgIr8CqiMzhAj-JdbQRuvbb66XUiBCju-fDtOBsLPzgpcNYj1McvN86vZt2SiXbSST2IW2doUBZCM8S1HjSnFcCLvqwfG2EIPe8b6eWdGTFAnlc11sNdTGJPv9U6PNuBlrxwp44T1Vhlp50LHDW6Y-XhEwPM50tPS3LeKd1nTGUqjx9qzRm6V" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=mnemon-dev/mnemon&type=date&legend=top-left&sealed_token=HiEHosGKgIr8CqiMzhAj-JdbQRuvbb66XUiBCju-fDtOBsLPzgpcNYj1McvN86vZt2SiXbSST2IW2doUBZCM8S1HjSnFcCLvqwfG2EIPe8b6eWdGTFAnlc11sNdTGJPv9U6PNuBlrxwp44T1Vhlp50LHDW6Y-XhEwPM50tPS3LeKd1nTGUqjx9qzRm6V" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=mnemon-dev/mnemon&type=date&legend=top-left&sealed_token=HiEHosGKgIr8CqiMzhAj-JdbQRuvbb66XUiBCju-fDtOBsLPzgpcNYj1McvN86vZt2SiXbSST2IW2doUBZCM8S1HjSnFcCLvqwfG2EIPe8b6eWdGTFAnlc11sNdTGJPv9U6PNuBlrxwp44T1Vhlp50LHDW6Y-XhEwPM50tPS3LeKd1nTGUqjx9qzRm6V" />
- </picture>
-</a>
-
 ## References
 
 Mnemon combines the paradigm of one paper with the methodology of another, grounded in the structural insight that graph memory is isomorphic to LLM attention. See [Theoretical Foundations](docs/DESIGN.md#25-theoretical-foundations) for details.
