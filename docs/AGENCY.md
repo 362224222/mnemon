@@ -2,6 +2,13 @@
 
 **English** | [中文](zh/AGENCY.md)
 
+> **Status: Preview — actively evolving.** Agency has a working implementation
+> and test coverage, but is currently intended for evaluation and controlled
+> use on macOS and Linux. Its command surface, Runtime integration, protocol,
+> peer exchange, and on-disk/wire formats may change before an explicit
+> stability milestone. This maturity label applies only to Agency; Memory has a
+> separate state model and product contract.
+
 Mnemon Agency gives an existing agent durable, project-local responsibility and
 effect admission. It records what the agent is responsible for, admits only
 valid proposed changes, and returns a durable result for each proposal.

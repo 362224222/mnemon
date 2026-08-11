@@ -47,10 +47,10 @@ Runtime-native integration through runtime-specific `SKILL.md`, a shared
 `guide.md`, supported hooks or extensions, agent-led memory decisions, setup
 automation, and lightweight reviewed markdown evolution.
 
-### [Mnemon Agency](AGENCY.md)
+### [Mnemon Agency Preview](AGENCY.md)
 
 How to add durable work, receipts, and optional peer collaboration to an
-existing Agent Runtime.
+existing Agent Runtime, including its current maturity and compatibility boundary.
 
 ### [8. Design Decisions & Future Direction](design/08-decisions.md)
 

@@ -45,9 +45,10 @@ Runtime 原生集成：各 runtime 的 `SKILL.md`、共享 `guide.md`、受支�
 或 extension、agent 主导的记忆判断、setup 自动化，以及经过 review 的轻量
 Markdown 演化。
 
-### [Mnemon Agency](AGENCY.md)
+### [Mnemon Agency Preview](AGENCY.md)
 
-说明如何把持久工作、回执和可选 peer 协作接入已有 Agent Runtime。
+说明如何把持久工作、回执和可选 peer 协作接入已有 Agent Runtime，以及当前
+成熟度与兼容边界。
 
 ### [8. 设计决策与未来方向](design/08-decisions.md)
 
