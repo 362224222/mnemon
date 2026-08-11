@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/internal/model"
-	"github.com/mnemon-dev/mnemon/internal/search"
+	"github.com/mnemon-dev/mnemon/internal/memory/model"
+	"github.com/mnemon-dev/mnemon/internal/memory/search"
 )
 
 func makeTestRecallResponse() search.RecallResponse {

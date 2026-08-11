@@ -325,7 +325,7 @@ OUT=$($M --data-dir "$TESTDIR2" related "$ID_D" --edge entity)
 assert_contains "D → E via entity (reverse)" "$OUT" "$ID_E"
 
 step "Entity extraction — file paths"
-OUT=$($M --data-dir "$TESTDIR2" remember --no-diff "Config lives at ./cmd/root.go and internal/store/db.go" --cat fact)
+OUT=$($M --data-dir "$TESTDIR2" remember --no-diff "Config lives at ./cmd/root.go and internal/memory/store/db.go" --cat fact)
 echo -e "    ${DIM}entities: $(echo "$OUT" | jq -c '.entities')${RESET}"
 assert_contains "file path extracted" "$OUT" './cmd/root.go'
 

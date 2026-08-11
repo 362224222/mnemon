@@ -10,7 +10,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/mnemon-dev/mnemon/internal/authority"
+	"github.com/mnemon-dev/mnemon/internal/agency/authority"
 )
 
 const (

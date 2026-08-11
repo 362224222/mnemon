@@ -7,7 +7,7 @@ package agency
 import (
 	"errors"
 
-	"github.com/mnemon-dev/mnemon/internal/agencyclient"
+	"github.com/mnemon-dev/mnemon/internal/agency/client"
 	"github.com/mnemon-dev/mnemon/internal/daemon"
 	"github.com/spf13/cobra"
 )

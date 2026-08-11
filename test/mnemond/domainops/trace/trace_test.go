@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
-	"github.com/mnemon-dev/mnemon/internal/authority"
+	"github.com/mnemon-dev/mnemon/internal/agency/authority"
 )
 
 func TestParseStoredEventRequiresExactCanonicalDigestAndColumns(t *testing.T) {

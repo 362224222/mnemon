@@ -38,15 +38,10 @@ func assertNativeMemoryDoesNotImportAgency(t *testing.T, root string) {
 	t.Helper()
 	agency := map[string]struct{}{
 		"cmd/agency":      {},
-		"internal/agency": {}, "internal/agencyclient": {}, "internal/attach": {}, "internal/authority": {},
-		"internal/artifact": {}, "internal/daemon": {},
-		"internal/peerlink": {},
+		"internal/agency": {},
+		"internal/daemon": {},
 	}
-	for _, component := range []string{
-		"cmd/memory", "internal/embed", "internal/graph",
-		"internal/importdraft", "internal/model", "internal/search", "internal/setup",
-		"internal/store",
-	} {
+	for _, component := range []string{"cmd/memory", "internal/memory"} {
 		forEachComponentGoFile(t, root, component, func(path string, file *ast.File) {
 			for _, spec := range file.Imports {
 				importPath, err := strconv.Unquote(spec.Path.Value)
@@ -58,9 +53,12 @@ func assertNativeMemoryDoesNotImportAgency(t *testing.T, root string) {
 				if !strings.HasPrefix(importPath, prefix) {
 					continue
 				}
-				dependency := importComponent(strings.TrimPrefix(importPath, prefix))
-				if _, forbidden := agency[dependency]; forbidden {
-					t.Errorf("%s imports Agency component %q", path, dependency)
+				dependency := strings.TrimPrefix(importPath, prefix)
+				for component := range agency {
+					if dependency == component || strings.HasPrefix(dependency, component+"/") {
+						t.Errorf("%s imports Agency component %q", path, dependency)
+						break
+					}
 				}
 			}
 		})
@@ -70,23 +68,40 @@ func assertNativeMemoryDoesNotImportAgency(t *testing.T, root string) {
 func assertMnemondPackageGraph(t *testing.T, root string) {
 	t.Helper()
 	want := map[string][]string{
-		"internal/agency":       {},
-		"internal/agencyclient": {"internal/agency"},
-		"internal/attach":       {},
-		"internal/authority":    {"internal/agency"},
-		"internal/artifact":     {"internal/agency"},
-		"internal/daemon":       {"internal/agency", "internal/authority", "internal/artifact", "internal/peerlink"},
-		"internal/peerlink":     {"internal/agency", "internal/artifact"},
-		"cmd/agency":            {"internal/agencyclient", "internal/attach", "internal/daemon"},
+		"internal/memory/embed":       {},
+		"internal/memory/model":       {},
+		"internal/memory/importdraft": {"internal/memory/model"},
+		"internal/memory/store":       {"internal/memory/embed", "internal/memory/model"},
+		"internal/memory/search": {
+			"internal/memory/embed", "internal/memory/model", "internal/memory/store",
+		},
+		"internal/memory/graph": {
+			"internal/memory/embed", "internal/memory/model", "internal/memory/search",
+			"internal/memory/store",
+		},
+		"internal/memory/setup/assets": {},
+		"internal/memory/setup":        {"internal/memory/setup/assets"},
+		"internal/agency":              {},
+		"internal/agency/client":       {"internal/agency"},
+		"internal/agency/attach":       {},
+		"internal/agency/authority":    {"internal/agency"},
+		"internal/agency/artifact":     {"internal/agency"},
+		"internal/agency/peerlink":     {"internal/agency", "internal/agency/artifact"},
+		"internal/daemon": {
+			"internal/agency", "internal/agency/artifact", "internal/agency/authority",
+			"internal/agency/peerlink",
+		},
+		"cmd/agency": {"internal/agency/attach", "internal/agency/client", "internal/daemon"},
 		"cmd/memory": {
-			"internal/embed", "internal/graph", "internal/importdraft", "internal/model",
-			"internal/search", "internal/setup", "internal/store",
+			"internal/memory/embed", "internal/memory/graph", "internal/memory/importdraft",
+			"internal/memory/model", "internal/memory/search", "internal/memory/setup",
+			"internal/memory/setup/assets", "internal/memory/store",
 		},
 	}
 	got := make(map[string]map[string]struct{}, len(want))
 	for component := range want {
 		got[component] = map[string]struct{}{}
-		forEachComponentGoFile(t, root, component, func(path string, file *ast.File) {
+		forEachPackageGoFile(t, root, component, func(path string, file *ast.File) {
 			for _, spec := range file.Imports {
 				importPath, err := strconv.Unquote(spec.Path.Value)
 				if err != nil {
@@ -101,7 +116,7 @@ func assertMnemondPackageGraph(t *testing.T, root string) {
 				if !strings.HasPrefix(importPath, prefix) {
 					continue
 				}
-				dependency := importComponent(strings.TrimPrefix(importPath, prefix))
+				dependency := strings.TrimPrefix(importPath, prefix)
 				if dependency != component {
 					got[component][dependency] = struct{}{}
 				}
@@ -167,7 +182,7 @@ func assertInteractiveAttachmentOnly(t *testing.T, root string) {
 			return true
 		})
 	})
-	assertSingleArchitectureMatch(t, declarations, "/internal/authority/",
+	assertSingleArchitectureMatch(t, declarations, "/internal/agency/authority/",
 		"IssueInteractiveAttachment", "attachment issuer declaration")
 	assertSingleArchitectureMatch(t, calls, "/internal/daemon/",
 		"IssueInteractiveAttachment", "attachment issuer call")
@@ -264,6 +279,30 @@ func forEachComponentGoFile(t *testing.T, root, component string, visit func(str
 	walkGoFiles(t, filepath.Join(root, filepath.FromSlash(component)), visit)
 }
 
+// forEachPackageGoFile visits one exact Go package directory. Unlike a product
+// component scan, it must not merge child packages into their parent when
+// enforcing the promoted import graph.
+func forEachPackageGoFile(t *testing.T, root, packagePath string, visit func(string, *ast.File)) {
+	t.Helper()
+	base := filepath.Join(root, filepath.FromSlash(packagePath))
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		t.Fatalf("scan package %s: %v", base, err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") ||
+			strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(base, entry.Name())
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		visit(path, file)
+	}
+}
+
 func forEachProductionGoFile(t *testing.T, root string, visit func(string, *ast.File)) {
 	t.Helper()
 	for _, base := range []string{filepath.Join(root, "internal"), filepath.Join(root, "cmd")} {
@@ -296,14 +335,6 @@ func walkGoFiles(t *testing.T, base string, visit func(string, *ast.File)) {
 	if err != nil {
 		t.Fatalf("scan %s: %v", base, err)
 	}
-}
-
-func importComponent(importPath string) string {
-	parts := strings.Split(importPath, "/")
-	if len(parts) < 2 {
-		return importPath
-	}
-	return parts[0] + "/" + parts[1]
 }
 
 func assertSingleArchitectureMatch(t *testing.T, matches []string, directory, want, label string) {

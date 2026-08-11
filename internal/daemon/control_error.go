@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
-	"github.com/mnemon-dev/mnemon/internal/artifact"
-	"github.com/mnemon-dev/mnemon/internal/authority"
+	"github.com/mnemon-dev/mnemon/internal/agency/artifact"
+	"github.com/mnemon-dev/mnemon/internal/agency/authority"
 )
 
 type controlErrorCode string

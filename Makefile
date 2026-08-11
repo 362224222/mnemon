@@ -19,18 +19,18 @@ DETERMINISTIC_PKGS := \
 	./cmd/agency \
 	./cmd/memory \
 	./internal/agency \
-	./internal/agencyclient \
-	./internal/attach \
-	./internal/authority \
-	./internal/artifact \
-	./internal/embed \
-	./internal/graph \
-	./internal/importdraft \
-	./internal/model \
-	./internal/search \
-	./internal/setup \
-	./internal/setup/assets \
-	./internal/store \
+	./internal/agency/client \
+	./internal/agency/attach \
+	./internal/agency/authority \
+	./internal/agency/artifact \
+	./internal/memory/embed \
+	./internal/memory/graph \
+	./internal/memory/importdraft \
+	./internal/memory/model \
+	./internal/memory/search \
+	./internal/memory/setup \
+	./internal/memory/setup/assets \
+	./internal/memory/store \
 	./test/mnemond/architecture \
 	./test/mnemond/observer \
 	./test/mnemond/domainops/trace

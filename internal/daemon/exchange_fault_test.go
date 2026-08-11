@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
-	"github.com/mnemon-dev/mnemon/internal/authority"
-	"github.com/mnemon-dev/mnemon/internal/peerlink"
+	"github.com/mnemon-dev/mnemon/internal/agency/authority"
+	"github.com/mnemon-dev/mnemon/internal/agency/peerlink"
 )
 
 var (

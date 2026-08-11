@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/internal/model"
+	"github.com/mnemon-dev/mnemon/internal/memory/model"
 	"github.com/spf13/cobra"
 )
 

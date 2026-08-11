@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/internal/model"
-	"github.com/mnemon-dev/mnemon/internal/store"
+	"github.com/mnemon-dev/mnemon/internal/memory/model"
+	"github.com/mnemon-dev/mnemon/internal/memory/store"
 )
 
 func TestImportRepairsBackdatedTemporalBackbone(t *testing.T) {

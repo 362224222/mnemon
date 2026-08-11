@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/internal/authority"
+	"github.com/mnemon-dev/mnemon/internal/agency/authority"
 	"golang.org/x/sys/unix"
 )
 
