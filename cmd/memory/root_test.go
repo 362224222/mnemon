@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/internal/embed"
+	"github.com/mnemon-dev/mnemon/internal/memory/embed"
 )
 
 func TestNewReturnsComposableMemoryRoot(t *testing.T) {

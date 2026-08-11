@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mnemon-dev/mnemon/internal/graph"
-	"github.com/mnemon-dev/mnemon/internal/model"
-	"github.com/mnemon-dev/mnemon/internal/store"
+	"github.com/mnemon-dev/mnemon/internal/memory/graph"
+	"github.com/mnemon-dev/mnemon/internal/memory/model"
+	"github.com/mnemon-dev/mnemon/internal/memory/store"
 	"github.com/spf13/cobra"
 )
 

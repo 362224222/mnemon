@@ -70,14 +70,14 @@ func TestRepositoryHygieneRulesRejectGeneratedFiles(t *testing.T) {
 	}{
 		{"scratch/result.json", `{}`, "durable JSON category"},
 		{"testdata/mnemond/cases/example/tmp.json", `{}`, "temporary JSON name"},
-		{"internal/setup/assets/fixtures/report-copy.json",
+		{"internal/memory/setup/assets/fixtures/report-copy.json",
 			`{"schema_version":1,"run_id":"run","status":"passed","git_sha":"abc",` +
 				`"scenario":"example","commands":[],"assertions":[]}`,
 			"run report"},
-		{"internal/setup/assets/fixtures/manifest-copy.json",
+		{"internal/memory/setup/assets/fixtures/manifest-copy.json",
 			`{"schema_version":1,"run_id":"run","files":[]}`,
 			"run evidence manifest"},
-		{"internal/setup/assets/fixtures/command.json",
+		{"internal/memory/setup/assets/fixtures/command.json",
 			`{"sequence":1,"node":"A","kind":"setup","started_unix_ms":1,` +
 				`"finished_unix_ms":2,"exit_code":0,"evidence":[]}`,
 			"run transcript"},
@@ -92,8 +92,8 @@ func TestRepositoryHygieneRulesRejectGeneratedFiles(t *testing.T) {
 
 func TestRepositoryHygieneRulesAcceptDurableJSONCategories(t *testing.T) {
 	for _, trackedPath := range []string{
-		"internal/setup/assets/openclaw/plugin/openclaw.plugin.json",
-		"internal/setup/assets/openclaw/plugin/package.json",
+		"internal/memory/setup/assets/openclaw/plugin/openclaw.plugin.json",
+		"internal/memory/setup/assets/openclaw/plugin/package.json",
 	} {
 		if reason := forbiddenTrackedPathReason(trackedPath); reason != "" {
 			t.Errorf("%s: %s", trackedPath, reason)
@@ -235,7 +235,7 @@ func temporaryJSONNameReason(trackedPath string) string {
 
 func durableJSONCategory(trackedPath string) string {
 	switch {
-	case strings.HasPrefix(trackedPath, "internal/setup/assets/"):
+	case strings.HasPrefix(trackedPath, "internal/memory/setup/assets/"):
 		return "managed asset"
 	default:
 		return ""

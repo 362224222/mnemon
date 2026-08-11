@@ -42,11 +42,7 @@ func assertNativeMemoryDoesNotImportAgency(t *testing.T, root string) {
 		"internal/artifact": {}, "internal/daemon": {},
 		"internal/peerlink": {},
 	}
-	for _, component := range []string{
-		"cmd/memory", "internal/embed", "internal/graph",
-		"internal/importdraft", "internal/model", "internal/search", "internal/setup",
-		"internal/store",
-	} {
+	for _, component := range []string{"cmd/memory", "internal/memory"} {
 		forEachComponentGoFile(t, root, component, func(path string, file *ast.File) {
 			for _, spec := range file.Imports {
 				importPath, err := strconv.Unquote(spec.Path.Value)
@@ -73,17 +69,31 @@ func assertNativeMemoryDoesNotImportAgency(t *testing.T, root string) {
 func assertMnemondPackageGraph(t *testing.T, root string) {
 	t.Helper()
 	want := map[string][]string{
-		"internal/agency":       {},
-		"internal/agencyclient": {"internal/agency"},
-		"internal/attach":       {},
-		"internal/authority":    {"internal/agency"},
-		"internal/artifact":     {"internal/agency"},
-		"internal/daemon":       {"internal/agency", "internal/authority", "internal/artifact", "internal/peerlink"},
-		"internal/peerlink":     {"internal/agency", "internal/artifact"},
-		"cmd/agency":            {"internal/agencyclient", "internal/attach", "internal/daemon"},
+		"internal/memory/embed":       {},
+		"internal/memory/model":       {},
+		"internal/memory/importdraft": {"internal/memory/model"},
+		"internal/memory/store":       {"internal/memory/embed", "internal/memory/model"},
+		"internal/memory/search": {
+			"internal/memory/embed", "internal/memory/model", "internal/memory/store",
+		},
+		"internal/memory/graph": {
+			"internal/memory/embed", "internal/memory/model", "internal/memory/search",
+			"internal/memory/store",
+		},
+		"internal/memory/setup/assets": {},
+		"internal/memory/setup":        {"internal/memory/setup/assets"},
+		"internal/agency":              {},
+		"internal/agencyclient":        {"internal/agency"},
+		"internal/attach":              {},
+		"internal/authority":           {"internal/agency"},
+		"internal/artifact":            {"internal/agency"},
+		"internal/daemon":              {"internal/agency", "internal/authority", "internal/artifact", "internal/peerlink"},
+		"internal/peerlink":            {"internal/agency", "internal/artifact"},
+		"cmd/agency":                   {"internal/agencyclient", "internal/attach", "internal/daemon"},
 		"cmd/memory": {
-			"internal/embed", "internal/graph", "internal/importdraft", "internal/model",
-			"internal/search", "internal/setup", "internal/setup/assets", "internal/store",
+			"internal/memory/embed", "internal/memory/graph", "internal/memory/importdraft",
+			"internal/memory/model", "internal/memory/search", "internal/memory/setup",
+			"internal/memory/setup/assets", "internal/memory/store",
 		},
 	}
 	got := make(map[string]map[string]struct{}, len(want))

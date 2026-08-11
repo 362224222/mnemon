@@ -23,14 +23,14 @@ DETERMINISTIC_PKGS := \
 	./internal/attach \
 	./internal/authority \
 	./internal/artifact \
-	./internal/embed \
-	./internal/graph \
-	./internal/importdraft \
-	./internal/model \
-	./internal/search \
-	./internal/setup \
-	./internal/setup/assets \
-	./internal/store \
+	./internal/memory/embed \
+	./internal/memory/graph \
+	./internal/memory/importdraft \
+	./internal/memory/model \
+	./internal/memory/search \
+	./internal/memory/setup \
+	./internal/memory/setup/assets \
+	./internal/memory/store \
 	./test/mnemond/architecture \
 	./test/mnemond/observer \
 	./test/mnemond/domainops/trace
