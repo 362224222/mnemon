@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/mnemon-dev/mnemon/internal/daemon"
@@ -37,7 +39,9 @@ func runServe(command *cobra.Command, _ []string) error {
 	}
 	resolved, err := resolveStateDirectory(stateDirectory)
 	if err == nil {
-		err = serveDaemon(command.Context(), resolved)
+		lifetime, stop := signal.NotifyContext(command.Context(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		err = serveDaemon(lifetime, resolved)
 	}
 	if err != nil {
 		return commandFailure{code: 1, err: fmt.Errorf("mnemon agency serve: %w", err)}

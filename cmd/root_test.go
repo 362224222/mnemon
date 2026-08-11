@@ -54,9 +54,22 @@ func TestMemoryKeepsItsExistingCobraErrorOutput(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	exitCode := Execute(context.Background(), []string{"forget"},
 		strings.NewReader(""), &stdout, &stderr)
-	if exitCode != 1 || !strings.Contains(stderr.String(), "Error:") ||
-		!strings.Contains(stdout.String(), "Usage:") {
+	if exitCode != 1 || stdout.Len() != 0 ||
+		!strings.Contains(stderr.String(), "Error:") ||
+		!strings.Contains(stderr.String(), "Usage:") ||
+		!strings.Contains(stderr.String(), "\n\naccepts 1 arg(s), received 0\n") {
 		t.Fatalf("memory usage error: exit=%d stdout=%q stderr=%q",
+			exitCode, stdout.String(), stderr.String())
+	}
+}
+
+func TestMemoryHelpRemainsSuccessfulStdout(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	exitCode := Execute(context.Background(), []string{"forget", "--help"},
+		strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 || !strings.Contains(stdout.String(), "mnemon forget [id]") ||
+		stderr.Len() != 0 {
+		t.Fatalf("memory help: exit=%d stdout=%q stderr=%q",
 			exitCode, stdout.String(), stderr.String())
 	}
 }

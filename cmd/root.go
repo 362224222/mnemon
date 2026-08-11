@@ -13,22 +13,25 @@ import (
 
 var version = "dev"
 
-// Execute runs one Mnemon command. Process signal handling and exit remain the
-// root main package's responsibility.
+// Execute runs one Mnemon command. Process exit remains the root main package's
+// responsibility; a long-running command owns any graceful signal handling it
+// requires so ordinary Memory commands retain the operating system defaults.
 func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if ctx == nil || stdin == nil || stdout == nil || stderr == nil {
 		return 1
 	}
 	root := productRoot()
+	agencyRequest := false
 	if command, _, findErr := root.Find(args); findErr == nil {
-		for current := command; current != nil; current = current.Parent() {
-			if current.Name() == "agency" {
-				root.SilenceErrors = true
-				root.SilenceUsage = true
-				break
-			}
+		agencyRequest = belongsToAgency(command)
+		if agencyRequest {
+			root.SilenceErrors = true
 		}
 	}
+	// Cobra renders automatic usage through the command output writer. Keep
+	// successful help and version output on stdout, but render Memory's usage
+	// explicitly to stderr after an execution error, as the established CLI did.
+	root.SilenceUsage = true
 	root.SetArgs(args)
 	root.SetIn(stdin)
 	root.SetOut(stdout)
@@ -37,18 +40,28 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	if err == nil {
 		return 0
 	}
+	if !agencyRequest && !belongsToAgency(executed) && executed != nil {
+		_, _ = fmt.Fprintln(stderr, executed.UsageString())
+	}
 	if err.Error() != "" {
 		_, _ = fmt.Fprintln(stderr, err)
 	}
 	if code, ok := agency.ExitCode(err); ok {
 		return code
 	}
-	for command := executed; command != nil; command = command.Parent() {
-		if command.Name() == "agency" {
-			return 2
-		}
+	if agencyRequest || belongsToAgency(executed) {
+		return 2
 	}
 	return 1
+}
+
+func belongsToAgency(command *cobra.Command) bool {
+	for current := command; current != nil; current = current.Parent() {
+		if current.Name() == "agency" {
+			return true
+		}
+	}
+	return false
 }
 
 func productRoot() *cobra.Command {
