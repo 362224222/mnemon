@@ -437,8 +437,52 @@ func looksLikeLegacyVector(v []float64) bool {
 // migrateRemoveNarrativeEdges recreates the edges table without the 'narrative' type
 // if the old CHECK constraint still allows it.
 func (db *DB) migrateRemoveNarrativeEdges() error {
-	// Probe whether the old schema allows 'narrative'
-	_, testErr := db.conn.Exec(`INSERT INTO edges VALUES ('__test','__test','narrative',0,'{}',datetime('now'))`)
+	// Foreign key enforcement is disabled for both the probe and the rebuild.
+	//
+	// The probe needs it because it inserts a sentinel edge whose endpoints do
+	// not exist. The driver opens the database with foreign_keys(1), so the
+	// insert fails on the foreign key long before the CHECK constraint is
+	// consulted -- and the error was being read as "the schema already rejects
+	// 'narrative'". The migration therefore never ran on any database opened
+	// through the driver, and legacy stores still carry the old constraint.
+	//
+	// The rebuild needs it because copying every row into a fresh table is
+	// rejected by any pre-existing dangling edge, and real stores accumulate
+	// them: a `.recover` after corruption, or any write made while
+	// enforcement was off, leaves edges pointing at rows that are gone. One
+	// such row would abort the migration on every open. Orphans are copied
+	// verbatim rather than filtered out -- dropping them would be a silent
+	// data deletion justified only by the convenience of this migration.
+	//
+	// PRAGMA foreign_keys is a no-op inside a transaction, so it is toggled
+	// around one. The pool is capped at a single connection, so it applies to
+	// the connection performing the work.
+	if _, err := db.conn.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		return fmt.Errorf("disable foreign keys for edge rebuild: %w", err)
+	}
+	defer func() { _, _ = db.conn.Exec(`PRAGMA foreign_keys=ON`) }()
+
+	// The probe is rolled back, always. Written in autocommit -- which is what
+	// it was, and what disabling enforcement above now lets succeed -- the
+	// sentinel row outlives a rebuild that fails or a process that dies
+	// mid-migration. The next open's probe then collides with the leftover on
+	// the primary key, and this function reads any error as "the schema
+	// already rejects 'narrative'", so the migration is skipped from then on
+	// and the database is stranded on the old schema permanently: the same
+	// failure being repaired here, arriving through a different door.
+	//
+	// The id is random rather than a fixed '__test' because insight ids are
+	// caller-supplied. A fixed sentinel can collide with a real row, and a
+	// cleanup keyed on it can take real edges with it.
+	probeTx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("begin probe: %w", err)
+	}
+	_, testErr := probeTx.Exec(
+		`INSERT INTO edges VALUES ('__probe_'||hex(randomblob(8)),'__probe_'||hex(randomblob(8)),'narrative',0,'{}',datetime('now'))`)
+	if err := probeTx.Rollback(); err != nil {
+		return fmt.Errorf("roll back probe: %w", err)
+	}
 	if testErr != nil {
 		return nil // current schema already rejects 'narrative', nothing to do
 	}
@@ -451,7 +495,8 @@ func (db *DB) migrateRemoveNarrativeEdges() error {
 	defer tx.Rollback()
 
 	steps := []string{
-		`DELETE FROM edges WHERE source_id = '__test'`,
+		// A sentinel left behind by the older autocommit probe is a
+		// 'narrative' row, so the next step removes it along with the rest.
 		`DELETE FROM edges WHERE edge_type = 'narrative'`,
 		`ALTER TABLE edges RENAME TO edges_old`,
 		`CREATE TABLE edges (

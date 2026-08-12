@@ -452,6 +452,171 @@ func TestBaseWeight(t *testing.T) {
 	}
 }
 
+// --- edge table rebuild ---
+
+// allowNarrativeEdges restores the historical edges schema, which still admits
+// the 'narrative' edge type, by rewriting the stored CHECK constraint in place.
+func allowNarrativeEdges(t *testing.T, db *DB) {
+	t.Helper()
+	for _, s := range []string{
+		`PRAGMA writable_schema=ON`,
+		`UPDATE sqlite_master SET sql = replace(sql, "'entity'", "'entity','narrative'") WHERE name = 'edges'`,
+		`PRAGMA writable_schema=OFF`,
+	} {
+		if _, err := db.conn.Exec(s); err != nil {
+			t.Fatalf("%s: %v", s, err)
+		}
+	}
+}
+
+// Removing the 'narrative' edge type rebuilds the edges table, copying every
+// row into a fresh one. The driver enables foreign key enforcement, so a
+// single pre-existing dangling edge aborts that copy -- and because the
+// migration runs on every open, the database can never get past it.
+//
+// Orphans are not exotic. A `.recover` rebuild after corruption, or any write
+// made while enforcement was off, produces them; one live store was found
+// holding 51. They must survive the rebuild verbatim rather than being
+// silently dropped.
+func TestMigrateRemoveNarrativeEdges_ToleratesOrphanedEdges(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := db.InsertInsight(makeInsight("narr-src", "content", 3)); err != nil {
+		t.Fatalf("insert insight: %v", err)
+	}
+
+	// Restore the historical schema that still admits 'narrative', and plant
+	// an orphan the way real damage arrives: with enforcement off.
+	if _, err := db.conn.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		t.Fatalf("disable fk: %v", err)
+	}
+	allowNarrativeEdges(t, db)
+	if _, err := db.conn.Exec(
+		`INSERT INTO edges VALUES ('narr-src','vanished','semantic',0.5,'{}','2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("insert orphaned edge: %v", err)
+	}
+	db.Close()
+
+	// Reopening runs migrate(); the rebuild must not be blocked by the orphan.
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("migration must survive an orphaned edge, got: %v", err)
+	}
+	defer reopened.Close()
+
+	var orphans int
+	if err := reopened.conn.QueryRow(
+		`SELECT COUNT(*) FROM edges WHERE target_id = 'vanished'`).Scan(&orphans); err != nil {
+		t.Fatalf("count orphan: %v", err)
+	}
+	if orphans != 1 {
+		t.Errorf("orphaned edge must survive the rebuild verbatim, got %d", orphans)
+	}
+
+	// And the migration actually did its job.
+	if _, err := reopened.conn.Exec(
+		`INSERT INTO edges VALUES ('narr-src','narr-src','narrative',1,'{}','2026-01-01T00:00:00Z')`); err == nil {
+		t.Error("narrative edge type must be rejected after migration")
+	}
+}
+
+// The probe writes a sentinel edge to learn whether the CHECK still admits
+// 'narrative'. Written outside a transaction it outlives a rebuild that fails
+// or a process that dies mid-migration, and the next probe then collides with
+// the leftover on the primary key. This function reads any error as "the
+// schema already rejects narrative", so the rebuild is skipped from then on
+// and the database is stranded on the old schema permanently.
+func TestMigrateRemoveNarrativeEdges_ProbeSurvivesNothing(t *testing.T) {
+	dir := t.TempDir()
+
+	// A second handle, kept open, is the only way to inspect and repair the
+	// file between two failed opens: Open closes its connection when migrate
+	// fails and hands back nothing to inspect with.
+	side, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer side.Close()
+	if err := side.InsertInsight(makeInsight("probe-src", "content", 3)); err != nil {
+		t.Fatalf("insert insight: %v", err)
+	}
+	allowNarrativeEdges(t, side)
+
+	// Fail the rebuild the way a crash would: after the probe has run. An
+	// existing `edges_old` makes the rename step fail deterministically.
+	if _, err := side.conn.Exec(`CREATE TABLE edges_old (x)`); err != nil {
+		t.Fatalf("block rebuild: %v", err)
+	}
+	if _, err := Open(dir); err == nil {
+		t.Fatal("blocked rebuild must be reported, not silently skipped")
+	}
+
+	var left int
+	if err := side.conn.QueryRow(
+		`SELECT COUNT(*) FROM edges WHERE edge_type = 'narrative'`).Scan(&left); err != nil {
+		t.Fatalf("count leftovers: %v", err)
+	}
+	if left != 0 {
+		t.Errorf("probe row outlived a failed migration: %d left behind", left)
+	}
+
+	// Unblocked, the migration must still run. This is the assertion that
+	// matters: a surviving probe row makes every later attempt collide, and
+	// the database keeps the old constraint for good.
+	if _, err := side.conn.Exec(`DROP TABLE edges_old`); err != nil {
+		t.Fatalf("unblock rebuild: %v", err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen after unblocking: %v", err)
+	}
+	defer reopened.Close()
+	if _, err := reopened.conn.Exec(
+		`INSERT INTO edges VALUES ('probe-src','probe-src','narrative',1,'{}','2026-01-01T00:00:00Z')`); err == nil {
+		t.Error("narrative edge type must be rejected after migration")
+	}
+}
+
+// Insight ids are caller-supplied, so the fixed '__test' sentinel could name a
+// real insight -- and the migration deleted edges by that id to clean up after
+// itself.
+func TestMigrateRemoveNarrativeEdges_KeepsRealEdgesNamedLikeTheSentinel(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := db.InsertInsight(makeInsight("__test", "content", 3)); err != nil {
+		t.Fatalf("insert insight: %v", err)
+	}
+	allowNarrativeEdges(t, db)
+	if _, err := db.conn.Exec(
+		`INSERT INTO edges VALUES ('__test','__test','semantic',0.5,'{}','2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("insert edge: %v", err)
+	}
+	db.Close()
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+
+	var kept int
+	if err := reopened.conn.QueryRow(
+		`SELECT COUNT(*) FROM edges WHERE source_id = '__test' AND edge_type = 'semantic'`).Scan(&kept); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if kept != 1 {
+		t.Errorf("a real edge was deleted because its id matched the probe sentinel, got %d", kept)
+	}
+}
+
 // --- AutoPrune ---
 
 func TestAutoPrune_PrunesLowestEI(t *testing.T) {
