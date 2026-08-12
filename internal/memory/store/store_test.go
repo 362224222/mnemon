@@ -478,6 +478,58 @@ func TestAutoPrune_PrunesLowestEI(t *testing.T) {
 	}
 }
 
+// Auto-prune is destructive and, before this test, was the only mutation that
+// left no oplog entry — a store could silently shed thousands of insights with
+// no record of which ones. Every pruned id must be recoverable from the oplog.
+func TestAutoPrune_RecordsOplogEntryPerPrunedInsight(t *testing.T) {
+	db := testDB(t)
+
+	for i := range 5 {
+		db.InsertInsight(makeInsight("audit-"+string(rune('a'+i)), "content", 2))
+	}
+
+	pruned, err := db.AutoPrune(3, nil)
+	if err != nil {
+		t.Fatalf("auto prune: %v", err)
+	}
+	if pruned != 2 {
+		t.Fatalf("want 2 pruned, got %d", pruned)
+	}
+
+	entries, err := db.GetOplog(50)
+	if err != nil {
+		t.Fatalf("get oplog: %v", err)
+	}
+	logged := map[string]bool{}
+	for _, e := range entries {
+		if e.Operation == "prune" {
+			logged[e.InsightID] = true
+			if e.Detail == "" {
+				t.Errorf("prune entry for %s has empty detail", e.InsightID)
+			}
+		}
+	}
+	if len(logged) != pruned {
+		t.Errorf("want %d prune oplog entries, got %d", pruned, len(logged))
+	}
+
+	// Every id recorded as pruned must name a row that still exists and is
+	// soft-deleted, so the oplog can be trusted as the recovery index. Asking
+	// only whether the id is inactive is not the same claim: a lookup that
+	// excludes deleted rows also returns nothing for an id that was never in
+	// the store, so a fabricated entry would satisfy it.
+	for id := range logged {
+		ins, err := db.GetInsightByIDIncludeDeleted(id)
+		if err != nil {
+			t.Errorf("oplog names %s, but no such insight exists: %v", id, err)
+			continue
+		}
+		if ins.DeletedAt == nil {
+			t.Errorf("oplog claims %s pruned but it is still active", id)
+		}
+	}
+}
+
 func TestAutoPrune_RespectsImmune(t *testing.T) {
 	db := testDB(t)
 

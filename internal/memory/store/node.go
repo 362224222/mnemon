@@ -477,6 +477,12 @@ func (db *DB) autoPrune(maxInsights int, excludeIDs []string) (int, error) {
 			if err := db.DeleteEdgesByNode(id); err != nil {
 				return pruned, fmt.Errorf("delete edges for pruned %s: %w", id, err)
 			}
+			// Auto-prune is the only destructive path that leaves no trace:
+			// every other write the CLI makes -- remember, forget, link,
+			// import, embed -- records an oplog entry. Without this, a store
+			// can silently lose thousands of insights with no way to find out
+			// which, when, or why.
+			db.LogOp("prune", id, fmt.Sprintf("auto-prune: over capacity (active=%d, max=%d)", total, maxInsights))
 			pruned++
 		}
 	}
