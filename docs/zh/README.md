@@ -198,7 +198,23 @@ mnemon setup --target hermes --yes
 
 ### [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
 
-DeepSeek Harness（DSH）通过 [dsh-mnemon](https://github.com/omdsh-dev/dsh-mnemon) 插件集成：该插件把 DSH 的运行时热记忆、受管项目档案与 Mnemon 长期记忆体组织成一套受监督的三层记忆系统。在 DSH 环境安装插件并保证宿主机有 `mnemon` 即可使用——召回只读取已激活的记忆体，持久写入经由受监督子 Agent 执行。
+DeepSeek Harness（DSH）通过 [dsh-mnemon](https://github.com/omdsh-dev/dsh-mnemon) 插件集成：该插件把 DSH 的运行时热记忆、受管项目档案与 Mnemon 长期记忆体组织成一套受监督的三层记忆系统。
+
+宿主机安装好 `mnemon`（见[安装](#安装)）后，安装插件并重启 DSH Web profile：
+
+```bash
+dsh plugin --profile web add dsh-mnemon
+dsh --profile web
+```
+
+未发布到 npm 的预发布版本可从 git 安装；本地开发检出使用绝对路径：
+
+```bash
+dsh plugin --profile web add "github:omdsh-dev/dsh-mnemon"
+dsh plugin --profile web add "link:/absolute/path/to/dsh-mnemon"
+```
+
+然后在 DSH 的「设置 → 插件配置 → Mnemon」选择存储范围，并在会话的「记忆系统」Tab 创建或激活记忆体。召回只读取已激活的记忆体，持久写入经由受监督子 Agent 执行。
 
 ### [NanoClaw](https://github.com/qwibitai/nanoclaw)
 

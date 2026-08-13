@@ -220,7 +220,23 @@ hooks.
 
 ### [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
 
-DeepSeek Harness (DSH) integrates through the [dsh-mnemon](https://github.com/omdsh-dev/dsh-mnemon) plugin, which layers DSH's runtime memory, managed project documents, and Mnemon's long-term memory spaces into one supervised three-tier memory system. Install the plugin on your DSH setup with `mnemon` available on the host — recall reads only from active memory spaces, and durable writes go through supervised sub-agents.
+DeepSeek Harness (DSH) integrates through the [dsh-mnemon](https://github.com/omdsh-dev/dsh-mnemon) plugin, which layers DSH's runtime memory, managed project documents, and Mnemon's long-term memory spaces into one supervised three-tier memory system.
+
+With `mnemon` installed on the host (see [Install](#install)), add the plugin and restart your DSH Web profile:
+
+```bash
+dsh plugin --profile web add dsh-mnemon
+dsh --profile web
+```
+
+Unreleased builds install from git; local development checkouts use an absolute path:
+
+```bash
+dsh plugin --profile web add "github:omdsh-dev/dsh-mnemon"
+dsh plugin --profile web add "link:/absolute/path/to/dsh-mnemon"
+```
+
+Then open DSH's Settings → Plugin Config → Mnemon to pick a storage scope, and use the Memory System tab in a session to create or activate memory spaces. Recall reads only from active memory spaces; durable writes go through supervised sub-agents.
 
 ### [NanoClaw](https://github.com/qwibitai/nanoclaw)
 
