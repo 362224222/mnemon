@@ -130,17 +130,27 @@ func (store *Store) Put(ctx context.Context, digest agency.Digest,
 	if err != nil {
 		return PutResult{}, err
 	}
-	_, present, err := store.settlePromotion(ctx, digest, final)
+	// The first settle can install the final link itself: another writer may
+	// have staged a complete marker and not yet promoted it. Dropping created
+	// here reported the writer that published the object as a replay, and when
+	// the staging writer then lost the link race no caller was told it had
+	// created anything.
+	created, present, err := store.settlePromotion(ctx, digest, final)
 	if err != nil {
 		return PutResult{}, err
 	}
 	if present {
-		return store.inspectReplay(ctx, digest, final, content)
+		result, err := store.inspectReplay(ctx, digest, final, content)
+		if err != nil {
+			return PutResult{}, err
+		}
+		result.Replayed = !created
+		return result, nil
 	}
 	if err := store.stageMarker(ctx, digest, content); err != nil {
 		return PutResult{}, err
 	}
-	created, present, err := store.settlePromotion(ctx, digest, final)
+	created, present, err = store.settlePromotion(ctx, digest, final)
 	if err != nil {
 		return PutResult{}, err
 	}
