@@ -196,6 +196,10 @@ mnemon setup --target hermes --yes
 `on_session_start`、`pre_llm_call`、`post_llm_call`，以及可选的
 `on_session_finalize`。Hermes 可能会在首次运行时提示批准这些 shell hooks。
 
+### [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
+
+DeepSeek Harness（DSH）通过 [dsh-mnemon](https://github.com/omdsh-dev/dsh-mnemon) 插件集成：该插件把 DSH 的运行时热记忆、受管项目档案与 Mnemon 长期记忆体组织成一套受监督的三层记忆系统。在 DSH 环境安装插件并保证宿主机有 `mnemon` 即可使用——召回只读取已激活的记忆体，持久写入经由受监督子 Agent 执行。
+
 ### [NanoClaw](https://github.com/qwibitai/nanoclaw)
 
 NanoClaw 在 Linux 容器内运行智能体。使用 `/add-mnemon` 技能集成：
@@ -254,7 +258,7 @@ store 可见。**Remind** 触发 recall 判断。**Nudge** 触发 writeback 判�
 
 - **零用户操作** — 安装一次；支持 hook 的 runtime 可用 hook，minimal runtime 可用持久规则
 - **LLM 监督式** — 宿主 LLM 主动决定记什么、更新什么、遗忘什么；无内嵌 LLM，无 API 密钥
-- **多框架支持** — Claude Code、Codex、Cursor、TRAE/TRAE Work、Qoder/QoderWork、CodeBuddy、WorkBuddy、Kimi Code、OpenCode 和 Hermes Agent（hooks/plugins）、OpenClaw（plugins）、Pi（extensions）、Nanobot（skills）等
+- **多框架支持** — Claude Code、Codex、Cursor、TRAE/TRAE Work、Qoder/QoderWork、CodeBuddy、WorkBuddy、Kimi Code、OpenCode 和 Hermes Agent（hooks/plugins）、OpenClaw（plugins）、Pi（extensions）、Nanobot（skills）、DeepSeek Harness（通过 dsh-mnemon 插件）等
 - **Runtime 原生集成** — 各 runtime 的 `SKILL.md`、共享 `guide.md`，以及受支持的 hook 或 extension
 - **四图架构** — 时序、实体、因果、语义四种边，不仅仅是向量相似度
 - **意图原生协议** — 三个原语（`remember`、`link`、`recall`）映射到 LLM 的认知词汇而非数据库语法；结构化 JSON 输出，带信号透明度
