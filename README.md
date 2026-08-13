@@ -218,6 +218,10 @@ One command deploys the mnemon skill, prompt files, and Hermes shell hooks to
 `on_session_finalize`. Hermes may prompt once to approve the installed shell
 hooks.
 
+### [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
+
+DeepSeek Harness (DSH) integrates through the [dsh-mnemon](https://github.com/omdsh-dev/dsh-mnemon) plugin, which layers DSH's runtime memory, managed project documents, and Mnemon's long-term memory spaces into one supervised three-tier memory system. Install the plugin on your DSH setup with `mnemon` available on the host — recall reads only from active memory spaces, and durable writes go through supervised sub-agents.
+
 ### [NanoClaw](https://github.com/qwibitai/nanoclaw)
 
 NanoClaw runs agents inside Linux containers. Use the `/add-mnemon` skill to integrate:
@@ -288,7 +292,7 @@ memory is useful.
 
 - **Zero user-side operation** — install once; supported runtimes can use hooks, minimal runtimes can use persistent rules
 - **LLM-supervised** — the host LLM decides what to remember, update, and forget; no embedded LLM, no API keys
-- **Multi-framework support** — Claude Code, Codex, Cursor, TRAE/TRAE Work, Qoder/QoderWork, CodeBuddy, WorkBuddy, Kimi Code, OpenCode, and Hermes Agent (hooks/plugins), OpenClaw (plugins), Pi (extensions), Nanobot (skills), and more
+- **Multi-framework support** — Claude Code, Codex, Cursor, TRAE/TRAE Work, Qoder/QoderWork, CodeBuddy, WorkBuddy, Kimi Code, OpenCode, and Hermes Agent (hooks/plugins), OpenClaw (plugins), Pi (extensions), Nanobot (skills), DeepSeek Harness (via the dsh-mnemon plugin), and more
 - **Runtime-native integration** — runtime-specific `SKILL.md`, shared `guide.md`, and supported hooks or extensions
 - **Four-graph architecture** — temporal, entity, causal, and semantic edges, not just vector similarity
 - **Intent-native protocol** — three primitives (`remember`, `link`, `recall`) map to the LLM's cognitive vocabulary, not database syntax; structured JSON output with signal transparency
