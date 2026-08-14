@@ -1,3 +1,5 @@
+//go:build !windows
+
 package agency
 
 import (
@@ -16,18 +18,6 @@ import (
 )
 
 const gracefulShutdownBudget = 5 * time.Second
-
-func serveCommand() *cobra.Command {
-	command := &cobra.Command{
-		Use:   "serve",
-		Short: "Serve one already-provisioned Agency authority",
-		Args:  cobra.NoArgs,
-		RunE:  runServe,
-	}
-	command.Flags().Var(new(singleString), "state-dir",
-		"already-provisioned Agency state directory")
-	return command
-}
 
 func runServe(command *cobra.Command, _ []string) error {
 	stateDirectory, err := command.Flags().GetString("state-dir")

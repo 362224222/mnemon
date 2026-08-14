@@ -32,3 +32,25 @@ jobs:
 
       - name: Run deterministic test suite
         run: make test
+
+  windows-memory:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build Windows Memory product
+        run: go build -o mnemon.exe .
+
+      - name: Test Windows command boundary
+        run: go test ./cmd ./cmd/agency -count=1

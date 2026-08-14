@@ -65,11 +65,14 @@ Mnemon 同时填补了协议栈中的空白。MCP 标准化了 LLM 如何发现�
 brew install --cask mnemon-dev/tap/mnemon
 ```
 
-**Go install**（macOS / Linux）：
+**Go install**（macOS / Linux / Windows）：
 
 ```bash
 go install github.com/mnemon-dev/mnemon@latest
 ```
+
+Windows 支持核心 Memory 命令。Agency 的本地权威边界完成原生 Windows
+安全实现前，在 Windows 上保持不可用。
 
 **从源码构建**（macOS / Linux）：
 
