@@ -1,0 +1,33 @@
+{
+  "name": "@mnemon-dev/dsh-mnemon",
+  "version": "0.1.0",
+  "description": "Install the full dsh-mnemon integration from the Mnemon repository.",
+  "files": [
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "dsh-mnemon": "0.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "mnemon",
+    "agent-memory",
+    "dsh-plugin"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mnemon-dev/mnemon.git"
+  },
+  "license": "MIT"
+}

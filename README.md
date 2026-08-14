@@ -229,9 +229,12 @@ dsh plugin --profile web add dsh-mnemon
 dsh --profile web
 ```
 
-Unreleased builds install from git; local development checkouts use an absolute path:
+The Mnemon repository is also a direct GitHub installation source. Unreleased
+plugin builds can still be installed from the dedicated repository, and local
+development checkouts use an absolute path:
 
 ```bash
+dsh plugin --profile web add github:mnemon-dev/mnemon
 dsh plugin --profile web add "github:omdsh-dev/dsh-mnemon"
 dsh plugin --profile web add "link:/absolute/path/to/dsh-mnemon"
 ```

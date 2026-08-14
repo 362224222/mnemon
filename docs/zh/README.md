@@ -207,9 +207,11 @@ dsh plugin --profile web add dsh-mnemon
 dsh --profile web
 ```
 
-未发布到 npm 的预发布版本可从 git 安装；本地开发检出使用绝对路径：
+Mnemon 主仓库也可以直接作为 GitHub 安装源。未发布到 npm 的插件版本仍可从
+独立仓库安装；本地开发检出使用绝对路径：
 
 ```bash
+dsh plugin --profile web add github:mnemon-dev/mnemon
 dsh plugin --profile web add "github:omdsh-dev/dsh-mnemon"
 dsh plugin --profile web add "link:/absolute/path/to/dsh-mnemon"
 ```

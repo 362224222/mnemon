@@ -92,6 +92,7 @@ func TestRepositoryHygieneRulesRejectGeneratedFiles(t *testing.T) {
 
 func TestRepositoryHygieneRulesAcceptDurableJSONCategories(t *testing.T) {
 	for _, trackedPath := range []string{
+		"package.json",
 		"internal/memory/setup/assets/openclaw/plugin/openclaw.plugin.json",
 		"internal/memory/setup/assets/openclaw/plugin/package.json",
 	} {
@@ -235,6 +236,8 @@ func temporaryJSONNameReason(trackedPath string) string {
 
 func durableJSONCategory(trackedPath string) string {
 	switch {
+	case trackedPath == "package.json":
+		return "DSH package manifest"
 	case strings.HasPrefix(trackedPath, "internal/memory/setup/assets/"):
 		return "managed asset"
 	default:
