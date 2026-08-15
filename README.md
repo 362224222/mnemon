@@ -65,11 +65,14 @@ See [Design & Architecture](docs/DESIGN.md) for details.
 brew install --cask mnemon-dev/tap/mnemon
 ```
 
-**Go install** (macOS / Linux):
+**Go install** (macOS / Linux / Windows):
 
 ```bash
 go install github.com/mnemon-dev/mnemon@latest
 ```
+
+Windows supports the core Memory commands. Agency remains unavailable on
+Windows until its local authority boundary has native Windows security.
 
 **From source** (macOS / Linux):
 
