@@ -219,6 +219,10 @@ dsh plugin --profile web add "github:omdsh-dev/dsh-mnemon"
 dsh plugin --profile web add "link:/absolute/path/to/dsh-mnemon"
 ```
 
+从 Mnemon 主仓库执行全新安装时，会解析 npm 上标记为 `latest` 的
+`dsh-mnemon` 版本，因此发布新版插件后无需同步修改本仓库。已有安装仍会保留
+此前解析到的版本，直至重新安装或更新插件。
+
 然后在 DSH 的「设置 → 插件配置 → Mnemon」选择存储范围，并在会话的「记忆系统」Tab 创建或激活记忆体。召回只读取已激活的记忆体，持久写入经由受监督子 Agent 执行。
 
 ### [NanoClaw](https://github.com/qwibitai/nanoclaw)
