@@ -13,7 +13,7 @@
     }
   },
   "dependencies": {
-    "dsh-mnemon": "0.1.0"
+    "dsh-mnemon": "latest"
   },
   "engines": {
     "node": ">=20"

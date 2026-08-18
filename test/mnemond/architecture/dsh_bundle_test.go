@@ -31,8 +31,8 @@ func TestDSHGitHubBundleContract(t *testing.T) {
 	if manifest.Name != "@mnemon-dev/dsh-mnemon" {
 		t.Errorf("package name = %q", manifest.Name)
 	}
-	if manifest.Dependencies["dsh-mnemon"] != "0.1.0" {
-		t.Errorf("dsh-mnemon pin = %q", manifest.Dependencies["dsh-mnemon"])
+	if manifest.Dependencies["dsh-mnemon"] != "latest" {
+		t.Errorf("dsh-mnemon dependency = %q, want latest", manifest.Dependencies["dsh-mnemon"])
 	}
 	if manifest.DSH.Bundle.Patch != "./cordis.patch.yml" {
 		t.Errorf("bundle patch = %q", manifest.DSH.Bundle.Patch)

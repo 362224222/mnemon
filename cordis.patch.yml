@@ -1,5 +1,6 @@
-# Mount the full dsh-mnemon package pinned in package.json. Keeping the original
-# package as the mounted row preserves its host and browser plugin identities.
+# Mount the full dsh-mnemon package selected by its npm latest tag in
+# package.json. Keeping the original package as the mounted row preserves its
+# host and browser plugin identities.
 - insert:
     - id: mnemon
       name: dsh-mnemon

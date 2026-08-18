@@ -242,6 +242,11 @@ dsh plugin --profile web add "github:omdsh-dev/dsh-mnemon"
 dsh plugin --profile web add "link:/absolute/path/to/dsh-mnemon"
 ```
 
+New installations from the Mnemon repository resolve the `latest` npm release
+of `dsh-mnemon`, so publishing a new plugin release does not require a matching
+change in this repository. Existing installations remain on their resolved
+version until the plugin is reinstalled or updated.
+
 Then open DSH's Settings → Plugin Config → Mnemon to pick a storage scope, and use the Memory System tab in a session to create or activate memory spaces. Recall reads only from active memory spaces; durable writes go through supervised sub-agents.
 
 ### [NanoClaw](https://github.com/qwibitai/nanoclaw)
