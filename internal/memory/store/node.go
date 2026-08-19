@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,7 +24,37 @@ const (
 
 	// PruneBatchSize is how many excess insights to prune at once.
 	PruneBatchSize = 10
+
+	// MaxInsightsUnlimited is the ceiling MaxInsightsLimit returns when
+	// auto-pruning is switched off. No store reaches it, so AutoPrune's
+	// capacity check never trips and no other code path needs a special case.
+	MaxInsightsUnlimited = math.MaxInt
 )
+
+// MaxInsightsLimit returns the active auto-prune capacity ceiling.
+//
+// Resolution: MNEMON_MAX_INSIGHTS > MaxInsights. A value of 0 or below
+// switches auto-pruning off and resolves to MaxInsightsUnlimited; an
+// unparseable value is reported on stderr and ignored, so a typo cannot
+// silently shrink the store.
+//
+// Resolved at call time rather than at package init, so a caller or test that
+// sets the variable after start-up sees the value it set.
+func MaxInsightsLimit() int {
+	raw := strings.TrimSpace(os.Getenv("MNEMON_MAX_INSIGHTS"))
+	if raw == "" {
+		return MaxInsights
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: invalid MNEMON_MAX_INSIGHTS %q: %v (ignored)\n", raw, err)
+		return MaxInsights
+	}
+	if n <= 0 {
+		return MaxInsightsUnlimited
+	}
+	return n
+}
 
 // InsertInsight inserts a new insight into the database.
 func (db *DB) InsertInsight(i *model.Insight) error {

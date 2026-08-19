@@ -75,12 +75,19 @@ Keep mode:
 
 		db.LogOp("gc", "", fmt.Sprintf("threshold=%.2f found=%d total=%d", gcThreshold, len(candidates), total))
 
+		// Report the ceiling the way it is configured rather than the sentinel
+		// AutoPrune consumes: 0 is how MNEMON_MAX_INSIGHTS spells "no cap".
+		maxInsights := store.MaxInsightsLimit()
+		if maxInsights == store.MaxInsightsUnlimited {
+			maxInsights = 0
+		}
+
 		output := map[string]interface{}{
 			"total_insights":   total,
 			"threshold":        gcThreshold,
 			"candidates_found": len(candidates),
 			"candidates":       candidates,
-			"max_insights":     store.MaxInsights,
+			"max_insights":     maxInsights,
 			"actions": map[string]string{
 				"purge": "mnemon forget <id>",
 				"keep":  "mnemon gc --keep <id>",

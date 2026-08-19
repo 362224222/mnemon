@@ -259,7 +259,7 @@ var rememberCmd = &cobra.Command{
 
 			// Auto-prune if over capacity (excludeID protects the just-created insight)
 			var pruneErr error
-			pruned, pruneErr = db.AutoPrune(store.MaxInsights, []string{insight.ID})
+			pruned, pruneErr = db.AutoPrune(store.MaxInsightsLimit(), []string{insight.ID})
 			if pruneErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: auto-prune: %v\n", pruneErr)
 			}
