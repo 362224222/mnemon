@@ -174,6 +174,46 @@ func TestStoreConcurrentPutHasOneFinalEffectAcrossInstances(t *testing.T) {
 	}
 }
 
+// Promoting another writer's complete marker is how the object gets created,
+// so the promoting Put is the creator. Reporting it as a replay loses the
+// only creation signal: the writer that staged the marker lost the link race
+// and replays too, leaving a stored object no caller claims to have written.
+func TestStorePutReportsCreationWhenItPromotesAnotherWritersMarker(t *testing.T) {
+	root := testRoot(t)
+	stager, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promoter, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := bytes.Repeat([]byte("staged then promoted"), 128)
+	digest := agency.Sum(content)
+
+	// The marker is complete and verified, but never promoted by its writer.
+	if err := stager.stageMarker(context.Background(), digest, content); err != nil {
+		t.Fatalf("stage marker: %v", err)
+	}
+
+	promoted, err := promoter.Put(context.Background(), digest, content)
+	if err != nil {
+		t.Fatalf("Put over a staged marker: %v", err)
+	}
+	if promoted.Replayed {
+		t.Error("Put installed the final link, so it created the object and must not report a replay")
+	}
+
+	replay, err := stager.Put(context.Background(), digest, content)
+	if err != nil {
+		t.Fatalf("second Put: %v", err)
+	}
+	if !replay.Replayed {
+		t.Error("a Put against an existing final object must report a replay")
+	}
+	assertPromotionSettled(t, promoter, digest)
+}
+
 func TestStoreConcurrentProcessesPreserveImmutableFinal(t *testing.T) {
 	const helper = "MNEMON_CAS_PROCESS_HELPER"
 	content := bytes.Repeat([]byte("cross-process immutable bytes"), 4096)
