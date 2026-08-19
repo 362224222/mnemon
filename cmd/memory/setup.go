@@ -22,17 +22,18 @@ var setupCmd = &cobra.Command{
 	Short: "Deploy mnemon into LLM CLI environments",
 	Long: `Detect installed LLM CLIs and deploy mnemon integration.
 
-By default, installs to project-local config (.claude/, .codex/, .cursor/, .trae/, .qoder/, .codebuddy/, .workbuddy/, .opencode/, .openclaw/, .nanobot/, .pi/).
-Use --global to install to user-wide config (~/.claude/, ~/.codex/, ~/.cursor/, ~/.trae/, ~/.qoder/, ~/.codebuddy/, ~/.workbuddy/, ~/.config/opencode/, ~/.openclaw/, ~/.nanobot/workspace/, ~/.pi/agent/).
+By default, installs to project-local config (.claude/, .codex/, .cursor/, .zcode/, .trae/, .qoder/, .codebuddy/, .workbuddy/, .opencode/, .openclaw/, .nanobot/, .pi/).
+Use --global to install to user-wide config (~/.claude/, ~/.codex/, ~/.cursor/, ~/.zcode/, ~/.trae/, ~/.qoder/, ~/.codebuddy/, ~/.workbuddy/, ~/.config/opencode/, ~/.openclaw/, ~/.nanobot/workspace/, ~/.pi/agent/).
 Hermes Agent, QoderWork, and Kimi Code use native user config at ~/.hermes/, ~/.qoderwork/, and ~/.kimi-code/.
 
-Supported environments: Claude Code, Codex, Cursor, Trae, Qoder, QoderWork, CodeBuddy, WorkBuddy, Kimi Code, OpenCode, OpenClaw, Nanobot, Pi, Hermes Agent.
+Supported environments: Claude Code, Codex, Cursor, ZCode, Trae, Qoder, QoderWork, CodeBuddy, WorkBuddy, Kimi Code, OpenCode, OpenClaw, Nanobot, Pi, Hermes Agent.
 
 Examples:
   mnemon setup                              # Interactive: project-local install
   mnemon setup --global                     # Interactive: user-wide install
   mnemon setup --target claude-code         # Non-interactive: Claude Code only
   mnemon setup --target cursor              # Non-interactive: Cursor skill only
+  mnemon setup --target zcode --global      # Non-interactive: ZCode skill and user hooks
   mnemon setup --target trae                # Non-interactive: Trae skill and hooks
   mnemon setup --target qoder               # Non-interactive: Qoder skill and hooks
   mnemon setup --target qoderwork           # Non-interactive: QoderWork skill and hooks
@@ -48,7 +49,7 @@ Examples:
 }
 
 func init() {
-	setupCmd.Flags().StringVar(&setupTarget, "target", "", "target environment (claude-code, codex, cursor, trae, qoder, qoderwork, codebuddy, workbuddy, kimi, opencode, openclaw, nanobot, pi, hermes)")
+	setupCmd.Flags().StringVar(&setupTarget, "target", "", "target environment (claude-code, codex, cursor, zcode, trae, qoder, qoderwork, codebuddy, workbuddy, kimi, opencode, openclaw, nanobot, pi, hermes)")
 	setupCmd.Flags().BoolVar(&setupEject, "eject", false, "remove mnemon integrations")
 	setupCmd.Flags().BoolVar(&setupYes, "yes", false, "auto-confirm all prompts (CI-friendly)")
 	setupCmd.Flags().BoolVar(&setupGlobal, "global", false, "install to user-wide config instead of project-local config")
@@ -56,8 +57,8 @@ func init() {
 }
 
 func runSetup(cmd *cobra.Command, args []string) error {
-	if setupTarget != "" && setupTarget != "claude-code" && setupTarget != "codex" && setupTarget != "cursor" && setupTarget != "trae" && setupTarget != "qoder" && setupTarget != "qoderwork" && setupTarget != "codebuddy" && setupTarget != "workbuddy" && setupTarget != "kimi" && setupTarget != "opencode" && setupTarget != "openclaw" && setupTarget != "nanobot" && setupTarget != "pi" && setupTarget != "hermes" {
-		return fmt.Errorf("invalid target %q (must be claude-code, codex, cursor, trae, qoder, qoderwork, codebuddy, workbuddy, kimi, opencode, openclaw, nanobot, pi, or hermes)", setupTarget)
+	if setupTarget != "" && setupTarget != "claude-code" && setupTarget != "codex" && setupTarget != "cursor" && setupTarget != "zcode" && setupTarget != "trae" && setupTarget != "qoder" && setupTarget != "qoderwork" && setupTarget != "codebuddy" && setupTarget != "workbuddy" && setupTarget != "kimi" && setupTarget != "opencode" && setupTarget != "openclaw" && setupTarget != "nanobot" && setupTarget != "pi" && setupTarget != "hermes" {
+		return fmt.Errorf("invalid target %q (must be claude-code, codex, cursor, zcode, trae, qoder, qoderwork, codebuddy, workbuddy, kimi, opencode, openclaw, nanobot, pi, or hermes)", setupTarget)
 	}
 
 	envs := setup.DetectEnvironments(setupGlobal)
@@ -93,7 +94,7 @@ func runInstallFlow(envs []setup.Environment) error {
 
 	if len(detected) == 0 {
 		fmt.Println("\nNo supported LLM CLI environments detected.")
-		fmt.Println("Install Claude Code, Codex, Cursor, Trae, Qoder, QoderWork, CodeBuddy, WorkBuddy, Kimi Code, OpenCode, OpenClaw, Nanobot, Pi, or Hermes Agent, then run 'mnemon setup' again.")
+		fmt.Println("Install Claude Code, Codex, Cursor, ZCode, Trae, Qoder, QoderWork, CodeBuddy, WorkBuddy, Kimi Code, OpenCode, OpenClaw, Nanobot, Pi, or Hermes Agent, then run 'mnemon setup' again.")
 		return nil
 	}
 
@@ -139,6 +140,8 @@ func installEnv(env *setup.Environment) error {
 		err = installCodex(env)
 	case "cursor":
 		err = installCursor(env)
+	case "zcode":
+		err = installZCode(env)
 	case "trae":
 		err = installTrae(env)
 	case "qoder":
@@ -508,6 +511,103 @@ func selectCursorOptionalHooks() setup.HookSelection {
 	sel.Nudge = choices[0]
 	sel.Compact = choices[1]
 	return sel
+}
+
+// ─── ZCode ─────────────────────────────────────────────────────────
+
+func installZCode(env *setup.Environment) error {
+	configDir := env.ConfigDir
+	globalInstall := setupGlobal
+
+	if !setupGlobal && !setupYes && setup.IsInteractive() {
+		home := setup.HomeDir()
+		localDir := ".zcode"
+		globalDir := home + "/.zcode"
+		idx := setup.SelectOne("Install scope",
+			[]string{
+				fmt.Sprintf("Local — skill for this project only (%s/)", localDir),
+				fmt.Sprintf("Global — skill and lifecycle hooks (%s/)", globalDir),
+			}, 0)
+		if idx == 1 {
+			configDir = globalDir
+			globalInstall = true
+		} else {
+			configDir = localDir
+		}
+	}
+
+	totalSteps := 2
+	if globalInstall {
+		totalSteps = 4
+	}
+	fmt.Printf("\nSetting up ZCode (%s)...\n", configDir)
+
+	fmt.Printf("\n[1/%d] Skill\n", totalSteps)
+	if path, err := setup.ZCodeWriteSkill(configDir); err != nil {
+		setup.StatusError(0, 0, "Skill", err)
+		return err
+	} else {
+		setup.StatusOK(0, 0, "Skill", path)
+	}
+
+	fmt.Printf("\n[2/%d] Prompts\n", totalSteps)
+	var promptPath string
+	if path, err := setup.WritePromptFiles(); err != nil {
+		setup.StatusError(0, 0, "Prompts", err)
+		return err
+	} else {
+		setup.StatusOK(0, 0, "Prompts", path)
+		promptPath = path
+	}
+
+	if !globalInstall {
+		fmt.Println()
+		fmt.Println("Setup complete!")
+		fmt.Printf("  Skill   %s/skills/mnemon/SKILL.md\n", configDir)
+		fmt.Printf("  Prompts %s/ (guide.md, skill.md)\n", promptPath)
+		fmt.Println()
+		fmt.Println("ZCode currently ignores project-level hooks; use '--global' to install lifecycle hooks.")
+		fmt.Println("Refresh Settings → Skills or start a new ZCode session to activate.")
+		fmt.Println("Run 'mnemon setup --eject --target zcode' to remove.")
+		return nil
+	}
+
+	fmt.Printf("\n[3/%d] Hooks\n", totalSteps)
+	hooks := []struct {
+		label, filename string
+		content         []byte
+	}{
+		{label: "Hook: prime", filename: "prime.sh", content: assets.ZCodePrimeHook},
+		{label: "Hook: remind", filename: "user_prompt.sh", content: assets.ZCodeUserPromptHook},
+		{label: "Hook: nudge", filename: "stop.sh", content: assets.ZCodeStopHook},
+	}
+	for _, hook := range hooks {
+		if path, err := setup.ZCodeWriteHook(configDir, hook.filename, hook.content); err != nil {
+			setup.StatusError(0, 0, hook.label, err)
+			return err
+		} else {
+			setup.StatusOK(0, 0, hook.label, path)
+		}
+	}
+
+	fmt.Printf("\n[4/%d] Config\n", totalSteps)
+	if path, err := setup.ZCodeRegisterHooks(configDir); err != nil {
+		setup.StatusError(0, 0, "Hooks config", err)
+		return err
+	} else {
+		setup.StatusUpdated(0, 0, "Hooks config", path)
+	}
+
+	fmt.Println()
+	fmt.Println("Setup complete!")
+	fmt.Printf("  Skill   %s/skills/mnemon/SKILL.md\n", configDir)
+	fmt.Printf("  Hooks   %s/cli/config.json (SessionStart, UserPromptSubmit, Stop)\n", configDir)
+	fmt.Printf("  Prompts %s/ (guide.md, skill.md)\n", promptPath)
+	fmt.Println()
+	fmt.Println("Start a new ZCode session to activate the mnemon skill and hooks.")
+	fmt.Println("Run 'mnemon setup --eject --target zcode --global' to remove.")
+
+	return nil
 }
 
 // ─── Trae ───────────────────────────────────────────────────────────
@@ -1403,6 +1503,12 @@ func ejectEnv(env *setup.Environment) error {
 
 	case "cursor":
 		errs := setup.CursorEject(env.ConfigDir)
+		if len(errs) > 0 {
+			return errs[0]
+		}
+
+	case "zcode":
+		errs := setup.ZCodeEject(env.ConfigDir)
 		if len(errs) > 0 {
 			return errs[0]
 		}

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `mnemon setup --target zcode` now installs a ZCode-compatible Mnemon skill.
+  With `--global`, setup also registers user-level `SessionStart`,
+  `UserPromptSubmit`, and `Stop` process hooks in
+  `~/.zcode/cli/config.json`; project-local setup intentionally skips hooks
+  because ZCode does not execute project-level hook configuration.
+- `mnemon setup --eject --target zcode` removes Mnemon-owned ZCode files and
+  hook entries while preserving unrelated skills, hook events, and settings.
+
+### Tests
+
+- Added ZCode coverage for embedded artifacts, hook registration, unrelated
+  configuration preservation, and scoped eject cleanup.
+
 ## [0.1.15] - 2026-06-18
 
 ### Added
