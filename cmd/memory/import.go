@@ -277,7 +277,7 @@ exports are documented in docs/IMPORT.md.`,
 			}
 
 			var pruneErr error
-			pruned, pruneErr = db.AutoPrune(store.MaxInsights, nil)
+			pruned, pruneErr = db.AutoPrune(store.MaxInsightsLimit(), nil)
 			return pruneErr
 		}); err != nil {
 			return fmt.Errorf("finalize import graph: %w", err)

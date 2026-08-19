@@ -740,6 +740,91 @@ func TestAutoPrune_RespectsExcludeIDs(t *testing.T) {
 	}
 }
 
+func TestMaxInsightsLimit(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want int
+	}{
+		{"unset", "", MaxInsights},
+		{"raised", "5000", 5000},
+		{"lowered", "200", 200},
+		{"padded", "  2500 ", 2500},
+		{"zero disables", "0", MaxInsightsUnlimited},
+		{"negative disables", "-1", MaxInsightsUnlimited},
+		// A typo must not silently shrink the store.
+		{"unparseable", "1_000", MaxInsights},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("MNEMON_MAX_INSIGHTS", tt.env)
+			if got := MaxInsightsLimit(); got != tt.want {
+				t.Errorf("MaxInsightsLimit() with %q = %d, want %d", tt.env, got, tt.want)
+			}
+		})
+	}
+}
+
+// Switching auto-prune off has to hold at the capacity check itself, not only
+// at the call sites, or a future caller reintroduces the reaping.
+func TestAutoPrune_UnlimitedCeilingPrunesNothing(t *testing.T) {
+	db := testDB(t)
+	for i := range 5 {
+		if err := db.InsertInsight(makeInsight("uncapped-"+string(rune('a'+i)), "content", 1)); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+
+	pruned, err := db.AutoPrune(MaxInsightsUnlimited, nil)
+	if err != nil {
+		t.Fatalf("auto prune: %v", err)
+	}
+	if pruned != 0 {
+		t.Errorf("want 0 pruned with auto-prune disabled, got %d", pruned)
+	}
+	all, _ := db.GetAllActiveInsights()
+	if len(all) != 5 {
+		t.Errorf("want all 5 insights retained, got %d", len(all))
+	}
+}
+
+// A raised ceiling has to change what AutoPrune actually takes, not only what
+// gc reports: the same store that prunes under a lower resolved ceiling is
+// left whole once MNEMON_MAX_INSIGHTS resolves above its size.
+func TestAutoPrune_RaisedCeilingChangesEnforcement(t *testing.T) {
+	db := testDB(t)
+	for i := range 5 {
+		if err := db.InsertInsight(makeInsight("raised-"+string(rune('a'+i)), "content", 2)); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+
+	t.Setenv("MNEMON_MAX_INSIGHTS", "8")
+	pruned, err := db.AutoPrune(MaxInsightsLimit(), nil)
+	if err != nil {
+		t.Fatalf("auto prune: %v", err)
+	}
+	if pruned != 0 {
+		t.Errorf("raised ceiling: want 0 pruned, got %d", pruned)
+	}
+
+	// Control: the same store over a lower resolved ceiling does prune, so the
+	// zero above is the ceiling's doing rather than an inert store.
+	t.Setenv("MNEMON_MAX_INSIGHTS", "3")
+	pruned, err = db.AutoPrune(MaxInsightsLimit(), nil)
+	if err != nil {
+		t.Fatalf("auto prune: %v", err)
+	}
+	if pruned != 2 {
+		t.Errorf("lowered ceiling control: want 2 pruned, got %d", pruned)
+	}
+
+	all, _ := db.GetAllActiveInsights()
+	if len(all) != 3 {
+		t.Errorf("want 3 remaining after control prune, got %d", len(all))
+	}
+}
+
 func TestAutoPrune_NothingToPrune(t *testing.T) {
 	db := testDB(t)
 	db.InsertInsight(makeInsight("ok-1", "content", 3))

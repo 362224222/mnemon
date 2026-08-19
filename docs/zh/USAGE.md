@@ -247,6 +247,7 @@ open graph.html
 | `MNEMON_EMBED_ENDPOINT` | `http://localhost:11434` | Ollama API 端点 |
 | `MNEMON_EMBED_MODEL` | `nomic-embed-text` | Ollama 嵌入模型 |
 | `MNEMON_EMBED_DIMENSIONS` | (原生维度) | 嵌入向量维度；可设置截断值（例如 Matryoshka 模型使用 `256`） |
+| `MNEMON_MAX_INSIGHTS` | `1000` | 触发自动清理的活跃洞察数量上限；设为 `0` 可关闭自动清理 |
 
 ---
 
