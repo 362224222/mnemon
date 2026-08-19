@@ -139,6 +139,19 @@ sessions, add recall guidance before model calls, and prompt for durable-memory
 writeback at stop. Without `--global`, setup installs only the project skill;
 ZCode currently ignores project-level hook configuration.
 
+### [MiniMax Code](https://github.com/MiniMax-AI/minimax-code)
+
+```bash
+mnemon setup --target minimax-code --yes
+```
+
+One command deploys the Mnemon skill to
+`.minimax/skills/mnemon/SKILL.md`. Add `--global` to use
+`~/.minimax/skills/mnemon/SKILL.md` across projects. Current MiniMax Code
+releases discover both roots natively. The integration is intentionally
+skill-only: in MiniMax Code 3.0.65, the local Agent V2 path does not dispatch
+the user-prompt lifecycle hook required for dependable automatic recall.
+
 ### [TRAE](https://www.trae.ai/) (TRAE Work)
 
 ```bash
@@ -331,7 +344,7 @@ memory is useful.
 
 - **Zero user-side operation** — install once; supported runtimes can use hooks, minimal runtimes can use persistent rules
 - **LLM-supervised** — the host LLM decides what to remember, update, and forget; no embedded LLM, no API keys
-- **Multi-framework support** — Claude Code, Codex, Cursor, ZCode, TRAE/TRAE Work, Qoder/QoderWork, CodeBuddy, WorkBuddy, Kimi Code, OpenCode, and Hermes Agent (hooks/plugins), OpenClaw (plugins), Pi (extensions), Nanobot (skills), DeepSeek Harness (via the dsh-mnemon plugin), and more
+- **Multi-framework support** — Claude Code, Codex, Cursor, ZCode, TRAE/TRAE Work, Qoder/QoderWork, CodeBuddy, WorkBuddy, Kimi Code, OpenCode, and Hermes Agent (hooks/plugins), OpenClaw (plugins), Pi (extensions), MiniMax Code and Nanobot (skills), DeepSeek Harness (via the dsh-mnemon plugin), and more
 - **Runtime-native integration** — runtime-specific `SKILL.md`, shared `guide.md`, and supported hooks or extensions
 - **Four-graph architecture** — temporal, entity, causal, and semantic edges, not just vector similarity
 - **Intent-native protocol** — three primitives (`remember`, `link`, `recall`) map to the LLM's cognitive vocabulary, not database syntax; structured JSON output with signal transparency
@@ -351,6 +364,10 @@ All your local agentic AIs — across sessions and frameworks — sharing one po
   Codex ────────┤
                 │
   Cursor ───────┤
+                │
+  ZCode ────────┤
+                │
+  MiniMax Code ─┤
                 │
   TRAE ─────────┤
                 │
@@ -385,7 +402,7 @@ The foundation is in place: a single `~/.mnemon` database that any agent can
 read and write. Claude Code, Codex, Cursor, ZCode, TRAE/TRAE Work, Qoder/QoderWork,
 CodeBuddy, WorkBuddy, Kimi Code, OpenCode, and Hermes Agent setup automate hook/plugin installation;
 OpenClaw can use plugin hooks; Pi integrates via native skills and TypeScript
-lifecycle extensions; Nanobot integrates via skill files; NanoClaw integrates
+lifecycle extensions; MiniMax Code and Nanobot integrate via skill files; NanoClaw integrates
 via container skills and volume mounts. The same integration bundle can be installed in any
 LLM CLI that supports skills, rules, system prompts, or event hooks.
 

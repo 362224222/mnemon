@@ -118,6 +118,18 @@ ZCode 会将 Mnemon skill 安装到 `~/.zcode/skills/`，并在
 模型调用前会收到 recall 指引，停止时会评估 durable-memory 回写。不加
 `--global` 时只安装项目 skill，因为 ZCode 当前不会执行项目级 hooks 配置。
 
+### [MiniMax Code](https://github.com/MiniMax-AI/minimax-code)
+
+```bash
+mnemon setup --target minimax-code --yes
+```
+
+一条命令将 Mnemon skill 安装到 `.minimax/skills/mnemon/SKILL.md`。添加
+`--global` 后会安装到 `~/.minimax/skills/mnemon/SKILL.md`，供所有项目使用。
+当前 MiniMax Code 会原生发现这两个目录。该集成刻意保持 skill-only：在
+MiniMax Code 3.0.65 中，本地 Agent V2 路径不会触发可靠自动 recall 所需的
+用户提示生命周期 hook。
+
 ### [TRAE](https://www.trae.ai/) (TRAE Work)
 
 ```bash
@@ -294,7 +306,7 @@ store 可见。**Remind** 触发 recall 判断。**Nudge** 触发 writeback 判�
 
 - **零用户操作** — 安装一次；支持 hook 的 runtime 可用 hook，minimal runtime 可用持久规则
 - **LLM 监督式** — 宿主 LLM 主动决定记什么、更新什么、遗忘什么；无内嵌 LLM，无 API 密钥
-- **多框架支持** — Claude Code、Codex、Cursor、ZCode、TRAE/TRAE Work、Qoder/QoderWork、CodeBuddy、WorkBuddy、Kimi Code、OpenCode 和 Hermes Agent（hooks/plugins）、OpenClaw（plugins）、Pi（extensions）、Nanobot（skills）、DeepSeek Harness（通过 dsh-mnemon 插件）等
+- **多框架支持** — Claude Code、Codex、Cursor、ZCode、TRAE/TRAE Work、Qoder/QoderWork、CodeBuddy、WorkBuddy、Kimi Code、OpenCode 和 Hermes Agent（hooks/plugins）、OpenClaw（plugins）、Pi（extensions）、MiniMax Code 和 Nanobot（skills）、DeepSeek Harness（通过 dsh-mnemon 插件）等
 - **Runtime 原生集成** — 各 runtime 的 `SKILL.md`、共享 `guide.md`，以及受支持的 hook 或 extension
 - **四图架构** — 时序、实体、因果、语义四种边，不仅仅是向量相似度
 - **意图原生协议** — 三个原语（`remember`、`link`、`recall`）映射到 LLM 的认知词汇而非数据库语法；结构化 JSON 输出，带信号透明度
@@ -313,6 +325,10 @@ store 可见。**Remind** 触发 recall 判断。**Nudge** 触发 writeback 判�
   Codex ────────┤
                 │
   Cursor ───────┤
+                │
+  ZCode ────────┤
+                │
+  MiniMax Code ─┤
                 │
   TRAE ─────────┤
                 │
@@ -343,7 +359,7 @@ store 可见。**Remind** 触发 recall 判断。**Nudge** 触发 writeback 判�
   Gemini CLI ───┘
 ```
 
-基础已就绪：一个 `~/.mnemon` 数据库，任何 agent 都可以读写。Claude Code、Codex、Cursor、TRAE/TRAE Work、Qoder/QoderWork、CodeBuddy、WorkBuddy、Kimi Code、OpenCode 和 Hermes Agent setup 可自动安装 hook/plugin；OpenClaw 可以使用 plugin hooks；Pi 通过原生 skill 和 TypeScript lifecycle extension 集成；Nanobot 通过 skill 文件集成；NanoClaw 通过容器技能和卷挂载集成。同一套 integration bundle 可以安装到任何支持 skill、rule、system prompt 或 event hook 的 LLM CLI。
+基础已就绪：一个 `~/.mnemon` 数据库，任何 agent 都可以读写。Claude Code、Codex、Cursor、ZCode、TRAE/TRAE Work、Qoder/QoderWork、CodeBuddy、WorkBuddy、Kimi Code、OpenCode 和 Hermes Agent setup 可自动安装 hook/plugin；OpenClaw 可以使用 plugin hooks；Pi 通过原生 skill 和 TypeScript lifecycle extension 集成；MiniMax Code 和 Nanobot 通过 skill 文件集成；NanoClaw 通过容器技能和卷挂载集成。同一套 integration bundle 可以安装到任何支持 skill、rule、system prompt 或 event hook 的 LLM CLI。
 
 更长远的方向是**记忆网关**：协议层与存储引擎解耦。当前 SQLite 后端是第一个适配器；协议面（`remember / link / recall`）可运行在 PostgreSQL、Neo4j 或任何图数据库之上。Agent 侧优化（何时召回、记什么）与存储侧优化（索引、图算法）独立演进。详见[未来方向](design/08-decisions.md#82-未来方向)。
 

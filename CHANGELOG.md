@@ -17,12 +17,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   use Bash on macOS/Linux and native Windows PowerShell on Windows.
 - `mnemon setup --eject --target zcode` removes Mnemon-owned ZCode files and
   hook entries while preserving unrelated skills, hook events, and settings.
+- `mnemon setup --target minimax-code` now installs a MiniMax Code skill to
+  `.minimax/skills/mnemon/SKILL.md`, or to
+  `~/.minimax/skills/mnemon/SKILL.md` with `--global`.
+- MiniMax Code detection recognizes both the current `~/.minimax/` data
+  directory and the legacy `~/.mavis/` directory migrated by current releases.
+- `mnemon setup --eject --target minimax-code` removes only the Mnemon skill
+  while preserving other MiniMax Code skills.
 
 ### Tests
 
 - Added ZCode coverage for embedded artifacts, POSIX and Windows hook
   registration, unrelated configuration preservation, and scoped eject
   cleanup.
+- Added MiniMax Code coverage for skill installation, current and legacy data
+  directory detection, and scoped eject cleanup.
+
+### Note
+
+- The integration intentionally stays skill-only. MiniMax Code 3.0.65 ships a
+  hook registry, but its current local Agent V2 turn path does not dispatch the
+  user-prompt lifecycle event needed for reliable automatic recall.
 
 ## [0.1.15] - 2026-06-18
 

@@ -23,11 +23,11 @@ var setupCmd = &cobra.Command{
 	Short: "Deploy mnemon into LLM CLI environments",
 	Long: `Detect installed LLM CLIs and deploy mnemon integration.
 
-By default, installs to project-local config (.claude/, .codex/, .cursor/, .zcode/, .trae/, .qoder/, .codebuddy/, .workbuddy/, .opencode/, .openclaw/, .nanobot/, .pi/).
-Use --global to install to user-wide config (~/.claude/, ~/.codex/, ~/.cursor/, ~/.zcode/, ~/.trae/, ~/.qoder/, ~/.codebuddy/, ~/.workbuddy/, ~/.config/opencode/, ~/.openclaw/, ~/.nanobot/workspace/, ~/.pi/agent/).
+By default, installs to project-local config (.claude/, .codex/, .cursor/, .zcode/, .minimax/, .trae/, .qoder/, .codebuddy/, .workbuddy/, .opencode/, .openclaw/, .nanobot/, .pi/).
+Use --global to install to user-wide config (~/.claude/, ~/.codex/, ~/.cursor/, ~/.zcode/, ~/.minimax/, ~/.trae/, ~/.qoder/, ~/.codebuddy/, ~/.workbuddy/, ~/.config/opencode/, ~/.openclaw/, ~/.nanobot/workspace/, ~/.pi/agent/).
 Hermes Agent, QoderWork, and Kimi Code use native user config at ~/.hermes/, ~/.qoderwork/, and ~/.kimi-code/.
 
-Supported environments: Claude Code, Codex, Cursor, ZCode, Trae, Qoder, QoderWork, CodeBuddy, WorkBuddy, Kimi Code, OpenCode, OpenClaw, Nanobot, Pi, Hermes Agent.
+Supported environments: Claude Code, Codex, Cursor, ZCode, MiniMax Code, Trae, Qoder, QoderWork, CodeBuddy, WorkBuddy, Kimi Code, OpenCode, OpenClaw, Nanobot, Pi, Hermes Agent.
 
 Examples:
   mnemon setup                              # Interactive: project-local install
@@ -35,6 +35,7 @@ Examples:
   mnemon setup --target claude-code         # Non-interactive: Claude Code only
   mnemon setup --target cursor              # Non-interactive: Cursor skill only
   mnemon setup --target zcode --global      # Non-interactive: ZCode skill and user hooks
+  mnemon setup --target minimax-code        # Non-interactive: MiniMax Code skill
   mnemon setup --target trae                # Non-interactive: Trae skill and hooks
   mnemon setup --target qoder               # Non-interactive: Qoder skill and hooks
   mnemon setup --target qoderwork           # Non-interactive: QoderWork skill and hooks
@@ -50,7 +51,7 @@ Examples:
 }
 
 func init() {
-	setupCmd.Flags().StringVar(&setupTarget, "target", "", "target environment (claude-code, codex, cursor, zcode, trae, qoder, qoderwork, codebuddy, workbuddy, kimi, opencode, openclaw, nanobot, pi, hermes)")
+	setupCmd.Flags().StringVar(&setupTarget, "target", "", "target environment (claude-code, codex, cursor, zcode, minimax-code, trae, qoder, qoderwork, codebuddy, workbuddy, kimi, opencode, openclaw, nanobot, pi, hermes)")
 	setupCmd.Flags().BoolVar(&setupEject, "eject", false, "remove mnemon integrations")
 	setupCmd.Flags().BoolVar(&setupYes, "yes", false, "auto-confirm all prompts (CI-friendly)")
 	setupCmd.Flags().BoolVar(&setupGlobal, "global", false, "install to user-wide config instead of project-local config")
@@ -58,8 +59,8 @@ func init() {
 }
 
 func runSetup(cmd *cobra.Command, args []string) error {
-	if setupTarget != "" && setupTarget != "claude-code" && setupTarget != "codex" && setupTarget != "cursor" && setupTarget != "zcode" && setupTarget != "trae" && setupTarget != "qoder" && setupTarget != "qoderwork" && setupTarget != "codebuddy" && setupTarget != "workbuddy" && setupTarget != "kimi" && setupTarget != "opencode" && setupTarget != "openclaw" && setupTarget != "nanobot" && setupTarget != "pi" && setupTarget != "hermes" {
-		return fmt.Errorf("invalid target %q (must be claude-code, codex, cursor, zcode, trae, qoder, qoderwork, codebuddy, workbuddy, kimi, opencode, openclaw, nanobot, pi, or hermes)", setupTarget)
+	if setupTarget != "" && setupTarget != "claude-code" && setupTarget != "codex" && setupTarget != "cursor" && setupTarget != "zcode" && setupTarget != "minimax-code" && setupTarget != "trae" && setupTarget != "qoder" && setupTarget != "qoderwork" && setupTarget != "codebuddy" && setupTarget != "workbuddy" && setupTarget != "kimi" && setupTarget != "opencode" && setupTarget != "openclaw" && setupTarget != "nanobot" && setupTarget != "pi" && setupTarget != "hermes" {
+		return fmt.Errorf("invalid target %q (must be claude-code, codex, cursor, zcode, minimax-code, trae, qoder, qoderwork, codebuddy, workbuddy, kimi, opencode, openclaw, nanobot, pi, or hermes)", setupTarget)
 	}
 
 	envs := setup.DetectEnvironments(setupGlobal)
@@ -95,7 +96,7 @@ func runInstallFlow(envs []setup.Environment) error {
 
 	if len(detected) == 0 {
 		fmt.Println("\nNo supported LLM CLI environments detected.")
-		fmt.Println("Install Claude Code, Codex, Cursor, ZCode, Trae, Qoder, QoderWork, CodeBuddy, WorkBuddy, Kimi Code, OpenCode, OpenClaw, Nanobot, Pi, or Hermes Agent, then run 'mnemon setup' again.")
+		fmt.Println("Install Claude Code, Codex, Cursor, ZCode, MiniMax Code, Trae, Qoder, QoderWork, CodeBuddy, WorkBuddy, Kimi Code, OpenCode, OpenClaw, Nanobot, Pi, or Hermes Agent, then run 'mnemon setup' again.")
 		return nil
 	}
 
@@ -143,6 +144,8 @@ func installEnv(env *setup.Environment) error {
 		err = installCursor(env)
 	case "zcode":
 		err = installZCode(env)
+	case "minimax-code":
+		err = installMiniMaxCode(env)
 	case "trae":
 		err = installTrae(env)
 	case "qoder":
@@ -617,6 +620,64 @@ func installZCode(env *setup.Environment) error {
 	fmt.Println()
 	fmt.Println("Start a new ZCode session to activate the mnemon skill and hooks.")
 	fmt.Println("Run 'mnemon setup --eject --target zcode --global' to remove.")
+
+	return nil
+}
+
+// ─── MiniMax Code ──────────────────────────────────────────────────
+
+func installMiniMaxCode(env *setup.Environment) error {
+	configDir := env.ConfigDir
+	globalInstall := setupGlobal
+
+	if !setupGlobal && !setupYes && setup.IsInteractive() {
+		home := setup.HomeDir()
+		localDir := ".minimax"
+		globalDir := home + "/.minimax"
+		idx := setup.SelectOne("Install scope",
+			[]string{
+				fmt.Sprintf("Local — this project only (%s/)", localDir),
+				fmt.Sprintf("Global — all projects (%s/)", globalDir),
+			}, 0)
+		if idx == 1 {
+			configDir = globalDir
+			globalInstall = true
+		} else {
+			configDir = localDir
+		}
+	}
+
+	fmt.Printf("\nSetting up MiniMax Code (%s)...\n", configDir)
+
+	fmt.Println("\n[1/2] Skill")
+	if path, err := setup.MiniMaxCodeWriteSkill(configDir); err != nil {
+		setup.StatusError(0, 0, "Skill", err)
+		return err
+	} else {
+		setup.StatusOK(0, 0, "Skill", path)
+	}
+
+	fmt.Println("\n[2/2] Prompts")
+	var promptPath string
+	if path, err := setup.WritePromptFiles(); err != nil {
+		setup.StatusError(0, 0, "Prompts", err)
+		return err
+	} else {
+		setup.StatusOK(0, 0, "Prompts", path)
+		promptPath = path
+	}
+
+	fmt.Println()
+	fmt.Println("Setup complete!")
+	fmt.Printf("  Skill   %s/skills/mnemon/SKILL.md\n", configDir)
+	fmt.Printf("  Prompts %s/ (guide.md, skill.md)\n", promptPath)
+	fmt.Println()
+	fmt.Println("Start a new MiniMax Code conversation to activate the mnemon skill.")
+	if globalInstall {
+		fmt.Println("Run 'mnemon setup --eject --target minimax-code --global' to remove.")
+	} else {
+		fmt.Println("Run 'mnemon setup --eject --target minimax-code' to remove.")
+	}
 
 	return nil
 }
@@ -1520,6 +1581,12 @@ func ejectEnv(env *setup.Environment) error {
 
 	case "zcode":
 		errs := setup.ZCodeEject(env.ConfigDir)
+		if len(errs) > 0 {
+			return errs[0]
+		}
+
+	case "minimax-code":
+		errs := setup.MiniMaxCodeEject(env.ConfigDir)
 		if len(errs) > 0 {
 			return errs[0]
 		}
