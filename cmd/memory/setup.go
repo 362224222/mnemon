@@ -2,6 +2,7 @@ package memory
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/internal/memory/setup"
@@ -580,6 +581,16 @@ func installZCode(env *setup.Environment) error {
 		{label: "Hook: prime", filename: "prime.sh", content: assets.ZCodePrimeHook},
 		{label: "Hook: remind", filename: "user_prompt.sh", content: assets.ZCodeUserPromptHook},
 		{label: "Hook: nudge", filename: "stop.sh", content: assets.ZCodeStopHook},
+	}
+	if runtime.GOOS == "windows" {
+		hooks = []struct {
+			label, filename string
+			content         []byte
+		}{
+			{label: "Hook: prime", filename: "prime.ps1", content: assets.ZCodePrimeHookPowerShell},
+			{label: "Hook: remind", filename: "user_prompt.ps1", content: assets.ZCodeUserPromptHookPowerShell},
+			{label: "Hook: nudge", filename: "stop.ps1", content: assets.ZCodeStopHookPowerShell},
+		}
 	}
 	for _, hook := range hooks {
 		if path, err := setup.ZCodeWriteHook(configDir, hook.filename, hook.content); err != nil {

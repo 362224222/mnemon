@@ -32,7 +32,7 @@ func TestZCodeRegisterHooksPreservesUnrelatedConfig(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	if _, err := ZCodeRegisterHooks(dir); err != nil {
+	if _, err := zcodeRegisterHooks(dir, "linux"); err != nil {
 		t.Fatalf("register hooks: %v", err)
 	}
 
@@ -75,7 +75,7 @@ func TestZCodeEjectRemovesOnlyMnemonFilesAndHooks(t *testing.T) {
 	if _, err := ZCodeWriteHook(dir, "prime.sh", []byte("#!/bin/bash\n")); err != nil {
 		t.Fatalf("write hook: %v", err)
 	}
-	if _, err := ZCodeRegisterHooks(dir); err != nil {
+	if _, err := zcodeRegisterHooks(dir, "linux"); err != nil {
 		t.Fatalf("register hooks: %v", err)
 	}
 
@@ -127,5 +127,37 @@ func TestZCodeEjectRemovesOnlyMnemonFilesAndHooks(t *testing.T) {
 	}
 	if _, ok := events["Stop"]; ok {
 		t.Fatalf("stop hook should be removed: %#v", events)
+	}
+}
+
+func TestZCodeRegisterHooksUsesNativeWindowsPowerShell(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := zcodeRegisterHooks(dir, "windows"); err != nil {
+		t.Fatalf("register hooks: %v", err)
+	}
+
+	data, err := ReadJSONFile(filepath.Join(dir, "cli", "config.json"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	hooks := data["hooks"].(map[string]interface{})
+	events := hooks["events"].(map[string]interface{})
+	for event, filename := range map[string]string{
+		"SessionStart":     "prime.ps1",
+		"UserPromptSubmit": "user_prompt.ps1",
+		"Stop":             "stop.ps1",
+	} {
+		entry := events[event].([]interface{})[0].(map[string]interface{})
+		process := entry["hooks"].([]interface{})[0].(map[string]interface{})
+		args := process["args"].([]interface{})
+		if process["command"] != "powershell.exe" || len(args) != 6 {
+			t.Fatalf("unexpected %s Windows process hook: %#v", event, process)
+		}
+		if args[0] != "-NoProfile" || args[1] != "-NonInteractive" || args[2] != "-ExecutionPolicy" || args[3] != "Bypass" || args[4] != "-File" {
+			t.Fatalf("unexpected %s PowerShell arguments: %#v", event, args)
+		}
+		if path, ok := args[5].(string); !ok || !strings.HasSuffix(path, filepath.Join("hooks", "mnemon", filename)) {
+			t.Fatalf("unexpected %s PowerShell script path: %#v", event, args[5])
+		}
 	}
 }

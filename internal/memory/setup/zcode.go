@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/mnemon-dev/mnemon/internal/memory/setup/assets"
 )
@@ -36,6 +37,10 @@ func ZCodeWriteHook(configDir, filename string, content []byte) (string, error) 
 
 // ZCodeRegisterHooks registers user-level Mnemon hooks in cli/config.json.
 func ZCodeRegisterHooks(configDir string) (string, error) {
+	return zcodeRegisterHooks(configDir, runtime.GOOS)
+}
+
+func zcodeRegisterHooks(configDir, goos string) (string, error) {
 	hooksDir := filepath.Join(configDir, "hooks", "mnemon")
 	absHooksDir, err := filepath.Abs(hooksDir)
 	if err != nil {
@@ -46,7 +51,7 @@ func ZCodeRegisterHooks(configDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	addZCodeHooks(data, absHooksDir)
+	addZCodeHooks(data, absHooksDir, goos)
 	if err := WriteJSONFile(configPath, data); err != nil {
 		return "", err
 	}
@@ -97,7 +102,7 @@ func ZCodeEject(configDir string) []error {
 	return errs
 }
 
-func addZCodeHooks(data map[string]interface{}, hooksDir string) {
+func addZCodeHooks(data map[string]interface{}, hooksDir, goos string) {
 	removeZCodeHooks(data)
 	hooks := ensureHooksMap(data)
 	hooks["enabled"] = true
@@ -111,17 +116,17 @@ func addZCodeHooks(data map[string]interface{}, hooksDir string) {
 	events["SessionStart"] = appendZCodeHook(events["SessionStart"], map[string]interface{}{
 		"matcher": "startup|clear|compact",
 		"hooks": []interface{}{
-			zcodeProcessHook(filepath.Join(hooksDir, "prime.sh"), "Loading Mnemon context"),
+			zcodeProcessHook(filepath.Join(hooksDir, zcodeHookFilename("prime", goos)), "Loading Mnemon context", goos),
 		},
 	})
 	events["UserPromptSubmit"] = appendZCodeHook(events["UserPromptSubmit"], map[string]interface{}{
 		"hooks": []interface{}{
-			zcodeProcessHook(filepath.Join(hooksDir, "user_prompt.sh"), "Checking Mnemon recall guidance"),
+			zcodeProcessHook(filepath.Join(hooksDir, zcodeHookFilename("user_prompt", goos)), "Checking Mnemon recall guidance", goos),
 		},
 	})
 	events["Stop"] = appendZCodeHook(events["Stop"], map[string]interface{}{
 		"hooks": []interface{}{
-			zcodeProcessHook(filepath.Join(hooksDir, "stop.sh"), "Checking Mnemon writeback guidance"),
+			zcodeProcessHook(filepath.Join(hooksDir, zcodeHookFilename("stop", goos)), "Checking Mnemon writeback guidance", goos),
 		},
 	})
 }
@@ -131,11 +136,31 @@ func appendZCodeHook(current interface{}, entry map[string]interface{}) []interf
 	return append(entries, entry)
 }
 
-func zcodeProcessHook(scriptPath, status string) map[string]interface{} {
+func zcodeHookFilename(base, goos string) string {
+	if goos == "windows" {
+		return base + ".ps1"
+	}
+	return base + ".sh"
+}
+
+func zcodeProcessHook(scriptPath, status, goos string) map[string]interface{} {
+	command := "bash"
+	args := []interface{}{scriptPath}
+	if goos == "windows" {
+		command = "powershell.exe"
+		args = []interface{}{
+			"-NoProfile",
+			"-NonInteractive",
+			"-ExecutionPolicy",
+			"Bypass",
+			"-File",
+			scriptPath,
+		}
+	}
 	return map[string]interface{}{
 		"type":          "process",
-		"command":       "bash",
-		"args":          []interface{}{scriptPath},
+		"command":       command,
+		"args":          args,
 		"enabled":       true,
 		"timeoutMs":     30000,
 		"statusMessage": status,
