@@ -320,43 +320,45 @@ store 可见。**Remind** 触发 recall 判断。**Nudge** 触发 writeback 判�
 所有本地 AI 智能体 — 跨会话、跨框架 — 共享一个活跃的记忆池。
 
 ```
-  Claude Code ──┐
-                │
-  Codex ────────┤
-                │
-  Cursor ───────┤
-                │
-  ZCode ────────┤
-                │
-  MiniMax Code ─┤
-                │
-  TRAE ─────────┤
-                │
-  TRAE Work ────┤
-                │
-  Qoder ────────┤
-                │
-  QoderWork ────┤
-                │
-  CodeBuddy ────┤
-                │
-  WorkBuddy ────┤
-                │
-  Kimi Code ────┤
-                │
-  Hermes Agent ─┤
-                │
-  OpenClaw ─────┤
-                │
-  Pi ───────────┤
-                │
-  Nanobot ──────┤
-                │
-  NanoClaw ─────┤
-                ├──▶  ~/.mnemon  ◀── 共享记忆
-  OpenCode ─────┤
-                │
-  Gemini CLI ───┘
+  Claude Code ───────┐
+                     │
+  Codex ─────────────┤
+                     │
+  Cursor ────────────┤
+                     │
+  ZCode ─────────────┤
+                     │
+  MiniMax Code ──────┤
+                     │
+  TRAE ──────────────┤
+                     │
+  TRAE Work ─────────┤
+                     │
+  Qoder ─────────────┤
+                     │
+  QoderWork ─────────┤
+                     │
+  CodeBuddy ─────────┤
+                     │
+  WorkBuddy ─────────┤
+                     │
+  Kimi Code ─────────┤
+                     │
+  Hermes Agent ──────┤
+                     │
+  DeepSeek Harness ──┤
+                     │
+  OpenClaw ──────────┤
+                     │
+  Pi ────────────────┤
+                     │
+  Nanobot ───────────┤
+                     │
+  NanoClaw ──────────┤
+                     ├──▶  ~/.mnemon  ◀── 共享记忆
+  OpenCode ──────────┤
+                     │
+  Gemini CLI ────────┘
 ```
 
 基础已就绪：一个 `~/.mnemon` 数据库，任何 agent 都可以读写。Claude Code、Codex、Cursor、ZCode、TRAE/TRAE Work、Qoder/QoderWork、CodeBuddy、WorkBuddy、Kimi Code、OpenCode 和 Hermes Agent setup 可自动安装 hook/plugin；OpenClaw 可以使用 plugin hooks；Pi 通过原生 skill 和 TypeScript lifecycle extension 集成；MiniMax Code 和 Nanobot 通过 skill 文件集成；NanoClaw 通过容器技能和卷挂载集成。同一套 integration bundle 可以安装到任何支持 skill、rule、system prompt 或 event hook 的 LLM CLI。
