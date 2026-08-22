@@ -24,6 +24,7 @@ func TestHostSkillAndHookArtifacts(t *testing.T) {
 		{name: "Kimi", skill: assets.KimiSkill, writeSkill: KimiWriteSkill, writeHook: KimiWriteHook},
 		{name: "Trae", skill: assets.TraeSkill, writeSkill: TraeWriteSkill, writeHook: TraeWriteHook},
 		{name: "WorkBuddy", skill: assets.WorkBuddySkill, writeSkill: WorkBuddyWriteSkill, writeHook: WorkBuddyWriteHook},
+		{name: "ZCode", skill: assets.ZCodeSkill, writeSkill: ZCodeWriteSkill, writeHook: ZCodeWriteHook},
 	}
 
 	for _, test := range tests {

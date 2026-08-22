@@ -33,6 +33,7 @@ mnemon setup --global
 mnemon setup --target claude-code
 mnemon setup --target codex
 mnemon setup --target cursor
+mnemon setup --target zcode --global
 mnemon setup --target trae
 mnemon setup --target qoder
 mnemon setup --target qoderwork
@@ -55,8 +56,8 @@ mnemon setup --eject --target claude-code
 
 | Flag | Default | Description |
 |---|---|---|
-| `--global` | `false` | Install to user-wide config instead of project-local (recommended for Nanobot: installs to `~/.nanobot/workspace/`; Pi installs to `~/.pi/agent/`; Hermes installs to `~/.hermes/`; QoderWork installs to `~/.qoderwork/`; Kimi Code installs to `~/.kimi-code/` or `$KIMI_CODE_HOME/`; OpenCode installs to `~/.config/opencode/`) |
-| `--target <name>` | (auto-detect) | Target environment: `claude-code`, `codex`, `cursor`, `trae`, `qoder`, `qoderwork`, `codebuddy`, `workbuddy`, `kimi`, `opencode`, `openclaw`, `nanobot`, `pi`, or `hermes` |
+| `--global` | `false` | Install to user-wide config instead of project-local (required for ZCode lifecycle hooks; recommended for Nanobot: installs to `~/.nanobot/workspace/`; Pi installs to `~/.pi/agent/`; Hermes installs to `~/.hermes/`; QoderWork installs to `~/.qoderwork/`; Kimi Code installs to `~/.kimi-code/` or `$KIMI_CODE_HOME/`; OpenCode installs to `~/.config/opencode/`) |
+| `--target <name>` | (auto-detect) | Target environment: `claude-code`, `codex`, `cursor`, `zcode`, `trae`, `qoder`, `qoderwork`, `codebuddy`, `workbuddy`, `kimi`, `opencode`, `openclaw`, `nanobot`, `pi`, or `hermes` |
 | `--eject` | `false` | Remove mnemon integrations |
 | `--yes` | `false` | Auto-confirm all prompts |
 

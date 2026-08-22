@@ -127,6 +127,18 @@ One command deploys the mnemon skill, prompt files, and Cursor lifecycle hooks
 to `.cursor/`. The integration primes new agent sessions with Mnemon guidance
 and memory status, then nudges for durable-memory writeback after responses.
 
+### [ZCode](https://zcode.z.ai/)
+
+```bash
+mnemon setup --target zcode --global --yes
+```
+
+ZCode installs the Mnemon skill under `~/.zcode/skills/` and registers
+user-level lifecycle hooks in `~/.zcode/cli/config.json`. The hooks prime new
+sessions, add recall guidance before model calls, and prompt for durable-memory
+writeback at stop. Without `--global`, setup installs only the project skill;
+ZCode currently ignores project-level hook configuration.
+
 ### [TRAE](https://www.trae.ai/) (TRAE Work)
 
 ```bash
@@ -319,7 +331,7 @@ memory is useful.
 
 - **Zero user-side operation** — install once; supported runtimes can use hooks, minimal runtimes can use persistent rules
 - **LLM-supervised** — the host LLM decides what to remember, update, and forget; no embedded LLM, no API keys
-- **Multi-framework support** — Claude Code, Codex, Cursor, TRAE/TRAE Work, Qoder/QoderWork, CodeBuddy, WorkBuddy, Kimi Code, OpenCode, and Hermes Agent (hooks/plugins), OpenClaw (plugins), Pi (extensions), Nanobot (skills), DeepSeek Harness (via the dsh-mnemon plugin), and more
+- **Multi-framework support** — Claude Code, Codex, Cursor, ZCode, TRAE/TRAE Work, Qoder/QoderWork, CodeBuddy, WorkBuddy, Kimi Code, OpenCode, and Hermes Agent (hooks/plugins), OpenClaw (plugins), Pi (extensions), Nanobot (skills), DeepSeek Harness (via the dsh-mnemon plugin), and more
 - **Runtime-native integration** — runtime-specific `SKILL.md`, shared `guide.md`, and supported hooks or extensions
 - **Four-graph architecture** — temporal, entity, causal, and semantic edges, not just vector similarity
 - **Intent-native protocol** — three primitives (`remember`, `link`, `recall`) map to the LLM's cognitive vocabulary, not database syntax; structured JSON output with signal transparency
@@ -370,7 +382,7 @@ All your local agentic AIs — across sessions and frameworks — sharing one po
 ```
 
 The foundation is in place: a single `~/.mnemon` database that any agent can
-read and write. Claude Code, Codex, Cursor, TRAE/TRAE Work, Qoder/QoderWork,
+read and write. Claude Code, Codex, Cursor, ZCode, TRAE/TRAE Work, Qoder/QoderWork,
 CodeBuddy, WorkBuddy, Kimi Code, OpenCode, and Hermes Agent setup automate hook/plugin installation;
 OpenClaw can use plugin hooks; Pi integrates via native skills and TypeScript
 lifecycle extensions; Nanobot integrates via skill files; NanoClaw integrates

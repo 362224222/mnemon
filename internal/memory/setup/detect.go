@@ -9,8 +9,8 @@ import (
 
 // Environment describes a detected LLM CLI environment.
 type Environment struct {
-	Name      string // "claude-code", "codex", "cursor", "trae", "qoder", "qoderwork", "codebuddy", "workbuddy", "kimi", "opencode", "openclaw", "nanobot", "pi", "hermes"
-	Display   string // "Claude Code", "Codex", "Cursor", "Trae", "Qoder", "QoderWork", "CodeBuddy", "WorkBuddy", "Kimi Code", "OpenCode", "OpenClaw", "Nanobot", "Pi", "Hermes Agent"
+	Name      string // "claude-code", "codex", "cursor", "zcode", "trae", "qoder", "qoderwork", "codebuddy", "workbuddy", "kimi", "opencode", "openclaw", "nanobot", "pi", "hermes"
+	Display   string // "Claude Code", "Codex", "Cursor", "ZCode", "Trae", "Qoder", "QoderWork", "CodeBuddy", "WorkBuddy", "Kimi Code", "OpenCode", "OpenClaw", "Nanobot", "Pi", "Hermes Agent"
 	Detected  bool   // CLI binary or global config dir found
 	BinPath   string // exec.LookPath result
 	Installed bool   // mnemon integration present at ConfigDir
@@ -32,6 +32,7 @@ func DetectEnvironments(global bool) []Environment {
 		detectClaude(global),
 		detectCodex(global),
 		detectCursor(global),
+		detectZCode(global),
 		detectTrae(global),
 		detectQoder(global),
 		detectQoderWork(),
@@ -44,6 +45,47 @@ func DetectEnvironments(global bool) []Environment {
 		detectPi(global),
 		detectHermes(),
 	}
+}
+
+func detectZCode(global bool) Environment {
+	home := HomeDir()
+	globalDir := filepath.Join(home, ".zcode")
+	localDir := ".zcode"
+
+	configDir := localDir
+	if global {
+		configDir = globalDir
+	}
+
+	env := Environment{
+		Name:      "zcode",
+		Display:   "ZCode",
+		ConfigDir: configDir,
+	}
+
+	if binPath, err := exec.LookPath("zcode"); err == nil {
+		env.Detected = true
+		env.BinPath = binPath
+	}
+	if _, err := os.Stat(globalDir); err == nil {
+		env.Detected = true
+	}
+
+	skillPath := filepath.Join(configDir, "skills", "mnemon", "SKILL.md")
+	hooksPath := filepath.Join(configDir, "cli", "config.json")
+	if _, err := os.Stat(skillPath); err == nil {
+		env.Installed = true
+	} else if data, err := ReadJSONFile(hooksPath); err == nil && containsMnemon(data) {
+		env.Installed = true
+	}
+
+	if env.BinPath != "" {
+		if out, err := exec.Command(env.BinPath, "--version").Output(); err == nil {
+			env.Version = cleanVersion(strings.TrimSpace(string(out)))
+		}
+	}
+
+	return env
 }
 
 func detectClaude(global bool) Environment {

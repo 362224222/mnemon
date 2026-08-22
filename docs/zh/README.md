@@ -107,6 +107,17 @@ mnemon setup
 
 `mnemon setup` 自动检测 Claude Code，交互式部署技能文件、钩子和行为引导。启动新会话 — 记忆自动运作。
 
+### [ZCode](https://zcode.z.ai/)
+
+```bash
+mnemon setup --target zcode --global --yes
+```
+
+ZCode 会将 Mnemon skill 安装到 `~/.zcode/skills/`，并在
+`~/.zcode/cli/config.json` 中注册用户级生命周期 hooks。新会话会注入记忆状态，
+模型调用前会收到 recall 指引，停止时会评估 durable-memory 回写。不加
+`--global` 时只安装项目 skill，因为 ZCode 当前不会执行项目级 hooks 配置。
+
 ### [TRAE](https://www.trae.ai/) (TRAE Work)
 
 ```bash
@@ -283,7 +294,7 @@ store 可见。**Remind** 触发 recall 判断。**Nudge** 触发 writeback 判�
 
 - **零用户操作** — 安装一次；支持 hook 的 runtime 可用 hook，minimal runtime 可用持久规则
 - **LLM 监督式** — 宿主 LLM 主动决定记什么、更新什么、遗忘什么；无内嵌 LLM，无 API 密钥
-- **多框架支持** — Claude Code、Codex、Cursor、TRAE/TRAE Work、Qoder/QoderWork、CodeBuddy、WorkBuddy、Kimi Code、OpenCode 和 Hermes Agent（hooks/plugins）、OpenClaw（plugins）、Pi（extensions）、Nanobot（skills）、DeepSeek Harness（通过 dsh-mnemon 插件）等
+- **多框架支持** — Claude Code、Codex、Cursor、ZCode、TRAE/TRAE Work、Qoder/QoderWork、CodeBuddy、WorkBuddy、Kimi Code、OpenCode 和 Hermes Agent（hooks/plugins）、OpenClaw（plugins）、Pi（extensions）、Nanobot（skills）、DeepSeek Harness（通过 dsh-mnemon 插件）等
 - **Runtime 原生集成** — 各 runtime 的 `SKILL.md`、共享 `guide.md`，以及受支持的 hook 或 extension
 - **四图架构** — 时序、实体、因果、语义四种边，不仅仅是向量相似度
 - **意图原生协议** — 三个原语（`remember`、`link`、`recall`）映射到 LLM 的认知词汇而非数据库语法；结构化 JSON 输出，带信号透明度
