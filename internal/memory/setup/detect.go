@@ -9,8 +9,8 @@ import (
 
 // Environment describes a detected LLM CLI environment.
 type Environment struct {
-	Name      string // "claude-code", "codex", "cursor", "zcode", "trae", "qoder", "qoderwork", "codebuddy", "workbuddy", "kimi", "opencode", "openclaw", "nanobot", "pi", "hermes"
-	Display   string // "Claude Code", "Codex", "Cursor", "ZCode", "Trae", "Qoder", "QoderWork", "CodeBuddy", "WorkBuddy", "Kimi Code", "OpenCode", "OpenClaw", "Nanobot", "Pi", "Hermes Agent"
+	Name      string // "claude-code", "codex", "cursor", "zcode", "minimax-code", "trae", "qoder", "qoderwork", "codebuddy", "workbuddy", "kimi", "opencode", "openclaw", "nanobot", "pi", "hermes"
+	Display   string // "Claude Code", "Codex", "Cursor", "ZCode", "MiniMax Code", "Trae", "Qoder", "QoderWork", "CodeBuddy", "WorkBuddy", "Kimi Code", "OpenCode", "OpenClaw", "Nanobot", "Pi", "Hermes Agent"
 	Detected  bool   // CLI binary or global config dir found
 	BinPath   string // exec.LookPath result
 	Installed bool   // mnemon integration present at ConfigDir
@@ -33,6 +33,7 @@ func DetectEnvironments(global bool) []Environment {
 		detectCodex(global),
 		detectCursor(global),
 		detectZCode(global),
+		detectMiniMaxCode(global),
 		detectTrae(global),
 		detectQoder(global),
 		detectQoderWork(),
@@ -201,6 +202,47 @@ func detectCursor(global bool) Environment {
 		if out, err := exec.Command(env.BinPath, "--version").Output(); err == nil {
 			env.Version = cleanVersion(strings.TrimSpace(string(out)))
 		}
+	}
+
+	return env
+}
+
+func detectMiniMaxCode(global bool) Environment {
+	home := HomeDir()
+	globalDir := filepath.Join(home, ".minimax")
+	legacyDir := filepath.Join(home, ".mavis")
+	localDir := ".minimax"
+
+	configDir := localDir
+	if global {
+		configDir = globalDir
+	}
+
+	env := Environment{
+		Name:      "minimax-code",
+		Display:   "MiniMax Code",
+		ConfigDir: configDir,
+	}
+
+	// MiniMax Code is primarily a desktop app. New releases use ~/.minimax;
+	// ~/.mavis is the legacy data directory migrated by the app on startup.
+	for _, dir := range []string{globalDir, legacyDir} {
+		if _, err := os.Stat(dir); err == nil {
+			env.Detected = true
+			break
+		}
+	}
+	for _, name := range []string{"minimax-code", "minimax", "mavis"} {
+		if binPath, err := exec.LookPath(name); err == nil {
+			env.Detected = true
+			env.BinPath = binPath
+			break
+		}
+	}
+
+	skillPath := filepath.Join(configDir, "skills", "mnemon", "SKILL.md")
+	if _, err := os.Stat(skillPath); err == nil {
+		env.Installed = true
 	}
 
 	return env
