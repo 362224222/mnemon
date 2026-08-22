@@ -359,43 +359,45 @@ memory is useful.
 All your local agentic AIs — across sessions and frameworks — sharing one pool of live memory.
 
 ```
-  Claude Code ──┐
-                │
-  Codex ────────┤
-                │
-  Cursor ───────┤
-                │
-  ZCode ────────┤
-                │
-  MiniMax Code ─┤
-                │
-  TRAE ─────────┤
-                │
-  TRAE Work ────┤
-                │
-  Qoder ────────┤
-                │
-  QoderWork ────┤
-                │
-  CodeBuddy ────┤
-                │
-  WorkBuddy ────┤
-                │
-  Kimi Code ────┤
-                │
-  Hermes Agent ─┤
-                │
-  OpenClaw ─────┤
-                │
-  Pi ───────────┤
-                │
-  Nanobot ──────┤
-                │
-  NanoClaw ─────┤
-                ├──▶  ~/.mnemon  ◀── shared memory
-  OpenCode ─────┤
-                │
-  Gemini CLI ───┘
+  Claude Code ───────┐
+                     │
+  Codex ─────────────┤
+                     │
+  Cursor ────────────┤
+                     │
+  ZCode ─────────────┤
+                     │
+  MiniMax Code ──────┤
+                     │
+  TRAE ──────────────┤
+                     │
+  TRAE Work ─────────┤
+                     │
+  Qoder ─────────────┤
+                     │
+  QoderWork ─────────┤
+                     │
+  CodeBuddy ─────────┤
+                     │
+  WorkBuddy ─────────┤
+                     │
+  Kimi Code ─────────┤
+                     │
+  Hermes Agent ──────┤
+                     │
+  DeepSeek Harness ──┤
+                     │
+  OpenClaw ──────────┤
+                     │
+  Pi ────────────────┤
+                     │
+  Nanobot ───────────┤
+                     │
+  NanoClaw ──────────┤
+                     ├──▶  ~/.mnemon  ◀── shared memory
+  OpenCode ──────────┤
+                     │
+  Gemini CLI ────────┘
 ```
 
 The foundation is in place: a single `~/.mnemon` database that any agent can
