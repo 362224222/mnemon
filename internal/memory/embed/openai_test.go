@@ -56,6 +56,37 @@ func TestOpenAIAvailable(t *testing.T) {
 	}
 }
 
+func TestOpenAIEndpointWithTrailingSlash(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			w.WriteHeader(http.StatusOK)
+		case "/v1/embeddings":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"embedding":[1.0,2.0]}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	t.Setenv("MNEMON_EMBED_ENDPOINT", srv.URL+"/v1/")
+	c := NewClient()
+	if c.Protocol() != ProtocolOpenAI {
+		t.Fatalf("expected openai protocol for /v1/ endpoint, got %q", c.Protocol())
+	}
+	if !c.Available() {
+		t.Fatal("expected Available() true for trailing-slash endpoint")
+	}
+	vec, err := c.Embed("hello")
+	if err != nil {
+		t.Fatalf("Embed with trailing-slash endpoint: %v", err)
+	}
+	if len(vec) != 2 {
+		t.Fatalf("expected 2 dims, got %d", len(vec))
+	}
+}
+
 func TestOpenAIEmbed(t *testing.T) {
 	t.Setenv("MNEMON_EMBED_MODEL", "bge-m3-mlx-8bit")
 	t.Setenv("MNEMON_EMBED_API_KEY", "sk-test")

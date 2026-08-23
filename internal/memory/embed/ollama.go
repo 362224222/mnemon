@@ -121,20 +121,35 @@ func (c *Client) Protocol() Protocol {
 	return c.protocol
 }
 
-// Available returns true if the embedding server is reachable and the
-// model is loaded. Uses a 2s timeout to avoid blocking the CLI on
+// endpointURL resolves a provider route relative to the configured endpoint.
+// url.JoinPath keeps both /v1 and /v1/ endpoint forms equivalent while
+// preserving any path prefix used by an OpenAI-compatible server.
+func (c *Client) endpointURL(route string) (string, error) {
+	endpointURL, err := url.JoinPath(c.endpoint, route)
+	if err != nil {
+		return "", fmt.Errorf("join embedding endpoint: %w", err)
+	}
+	return endpointURL, nil
+}
+
+// Available returns true if the embedding server's discovery endpoint
+// responds successfully. Uses a 2s timeout to avoid blocking the CLI on
 // unresponsive servers.
 func (c *Client) Available() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	var path string
+	var route string
 	switch c.protocol {
 	case ProtocolOpenAI:
-		path = c.endpoint + "/models"
+		route = "models"
 	default:
-		path = c.endpoint + "/api/tags"
+		route = "api/tags"
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
+	endpointURL, err := c.endpointURL(route)
+	if err != nil {
+		return false
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpointURL, nil)
 	if err != nil {
 		return false
 	}
@@ -194,14 +209,18 @@ func (c *Client) Embed(text string) ([]float64, error) {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	var path string
+	var route string
 	switch c.protocol {
 	case ProtocolOpenAI:
-		path = c.endpoint + "/embeddings"
+		route = "embeddings"
 	default:
-		path = c.endpoint + "/api/embed"
+		route = "api/embed"
 	}
-	httpReq, err := http.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+	endpointURL, err := c.endpointURL(route)
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequest(http.MethodPost, endpointURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}

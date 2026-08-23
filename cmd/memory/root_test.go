@@ -75,7 +75,7 @@ func TestOpenDBRejectsInvalidStoreNameFromFlag(t *testing.T) {
 // TestResolveEmbedModelChain exercises the full cmd → embed pipeline for the
 // --embed-model flag and MNEMON_EMBED_MODEL env var, mirroring how cobra
 // will hand the value off at runtime. The test runs against
-// embed.NewClientWithModel directly so it does not require a live Ollama.
+// embed.NewClientWithModel directly so it does not require a live provider.
 func TestResolveEmbedModelChain(t *testing.T) {
 	oldEmbedModel := embedModel
 	t.Cleanup(func() { embedModel = oldEmbedModel })
