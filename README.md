@@ -446,12 +446,21 @@ Mnemon architecture.
 | `MNEMON_DATA_DIR` | `~/.mnemon` | Base data directory |
 | `MNEMON_STORE` | *(active file or `default`)* | Named memory store for data isolation |
 
-**Ollama-specific** (only relevant if using embeddings):
+**Embedding** (only relevant if using embeddings):
 
 | Environment Variable | Default | Description |
 |---|---|---|
-| `MNEMON_EMBED_ENDPOINT` | `http://localhost:11434` | Ollama API endpoint |
+| `MNEMON_EMBED_ENDPOINT` | `http://localhost:11434` | Embedding API endpoint |
 | `MNEMON_EMBED_MODEL` | `nomic-embed-text` | Embedding model name |
+| `MNEMON_EMBED_PROTOCOL` | *(auto-detect)* | `ollama` or `openai`; auto-detected from an endpoint ending in `/v1` |
+| `MNEMON_EMBED_API_KEY` | *(none)* | Bearer token for OpenAI-compatible servers (oMLX, vLLM, etc.) |
+| `MNEMON_EMBED_DIMENSIONS` | *(native)* | Optional Matryoshka dimension truncation |
+
+The embedding client speaks the Ollama API by default and the
+OpenAI-compatible embeddings API when the endpoint ends in `/v1` (or when
+`MNEMON_EMBED_PROTOCOL=openai` is set) — e.g. `MNEMON_EMBED_ENDPOINT=http://127.0.0.1:18000/v1
+MNEMON_EMBED_MODEL=bge-m3-mlx-8bit MNEMON_EMBED_API_KEY=sk-...` works with
+local OpenAI-compatible servers like [oMLX](https://omlx.dev).
 
 ## Development
 
