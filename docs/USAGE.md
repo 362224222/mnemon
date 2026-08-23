@@ -12,7 +12,7 @@ These root flags configure Memory commands:
 |---|---|---|
 | `--store <name>` | (auto) | Named memory store (overrides `MNEMON_STORE` and active file) |
 | `--data-dir <path>` | `~/.mnemon` | Base data directory |
-| `--embed-model <name>` | `nomic-embed-text` | Ollama embedding model (overrides `MNEMON_EMBED_MODEL`) |
+| `--embed-model <name>` | `nomic-embed-text` | Embedding model (overrides `MNEMON_EMBED_MODEL`) |
 | `--readonly` | `false` | Open the Memory database read-only, without creating WAL files |
 | `--version` | | Print version and exit |
 
@@ -242,8 +242,10 @@ Nodes are colored by category (decision, fact, insight, preference, context); ed
 |---|---|---|
 | `MNEMON_DATA_DIR` | `~/.mnemon` | Base data directory |
 | `MNEMON_STORE` | `default` | Active named store |
-| `MNEMON_EMBED_ENDPOINT` | `http://localhost:11434` | Ollama API endpoint |
-| `MNEMON_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model |
+| `MNEMON_EMBED_ENDPOINT` | `http://localhost:11434` | Embedding API endpoint |
+| `MNEMON_EMBED_MODEL` | `nomic-embed-text` | Embedding model |
+| `MNEMON_EMBED_PROTOCOL` | (auto-detect) | `ollama` or `openai`; endpoints ending in `/v1` select `openai` |
+| `MNEMON_EMBED_API_KEY` | (none) | Bearer token for OpenAI-compatible servers |
 | `MNEMON_EMBED_DIMENSIONS` | (native) | Embedding dimensions; set to truncate (e.g., `256` for Matryoshka models) |
 | `MNEMON_MAX_INSIGHTS` | `1000` | Active-insight ceiling before auto-pruning starts; `0` disables auto-pruning |
 
@@ -251,25 +253,40 @@ Nodes are colored by category (decision, fact, insight, preference, context); ed
 
 ## Embedding Support (Optional)
 
-Mnemon works fully without Ollama — all core features (remember, recall, link, graph traversal) function out of the box. Adding Ollama enhances recall precision through vector similarity, but is never required.
+Mnemon works fully without an embedding provider — all core features (remember, recall, link, graph traversal) function out of the box. Configuring Ollama or an OpenAI-compatible server enhances recall precision through vector similarity, but is never required.
 
 ### What changes with and without embeddings
 
-| Capability | Without Ollama | With Ollama |
+| Capability | Without embeddings | With embeddings |
 |---|---|---|
 | **Recall anchors** | Keyword + recency | Keyword + vector + recency (RRF hybrid) |
 | **Semantic edges** | Token overlap (coarser) | Cosine similarity ≥ 0.50 (precise) |
 | **Traversal scoring** | Pure structural | Structural + semantic |
 | **Rerank weights** | Keyword 45%, Entity 25%, Graph 30% | Keyword 30%, Entity 15%, Similarity 35%, Graph 20% |
 
-When Ollama is unavailable, the reranking system automatically redistributes similarity weight to keyword and graph signals — no configuration needed, no degraded mode flag. The system detects Ollama availability at runtime with a 2-second timeout.
+When the configured provider is unavailable, the reranking system automatically redistributes similarity weight to keyword and graph signals — no configuration or degraded-mode flag is needed. Mnemon checks provider availability at runtime with a 2-second timeout.
 
 ### Setup
+
+Ollama remains the default provider:
 
 ```bash
 brew install ollama              # or see https://ollama.ai
 ollama pull nomic-embed-text     # download the embedding model
 ```
+
+For an OpenAI-compatible server, point the endpoint at its `/v1` base URL and
+select the server's embedding model. The API key is optional for keyless local
+servers:
+
+```bash
+export MNEMON_EMBED_ENDPOINT=http://127.0.0.1:18000/v1
+export MNEMON_EMBED_MODEL=bge-m3-mlx-8bit
+export MNEMON_EMBED_API_KEY=sk-... # omit for keyless local servers
+```
+
+Set `MNEMON_EMBED_PROTOCOL=openai` explicitly only when the compatible endpoint
+does not end in `/v1`.
 
 Verify with:
 
@@ -282,14 +299,19 @@ mnemon embed --status
   "total_insights": 87,
   "embedded": 87,
   "coverage": "100%",
+  "embedding_available": true,
   "ollama_available": true,
+  "protocol": "ollama",
   "model": "nomic-embed-text"
 }
 ```
 
+`ollama_available` is retained as a compatibility alias for existing scripts;
+new integrations should use `embedding_available` and `protocol`.
+
 ### Backfilling existing insights
 
-If you install Ollama after already using mnemon, existing insights won't have embeddings. Backfill them in one command:
+If you configure an embedding provider after already using mnemon, existing insights won't have embeddings. Backfill them in one command:
 
 ```bash
 mnemon embed --all
@@ -316,8 +338,8 @@ This generates embeddings for all un-embedded insights and automatically creates
         retrieve.                          │  │ causal     │  │
                                            │  │ semantic   │  │
       ┌──────────────────┐                 │  ├────────────┤  │
-      │  Ollama          │  (optional)     │  │ Embeddings │  │
-      │  nomic-embed-text│ ◄───────────── │  └────────────┘  │
+      │ Embedding server │  (optional)     │  │ Embeddings │  │
+      │ configured model │ ◄───────────── │  └────────────┘  │
       └──────────────────┘                 └──────────────────┘
 ```
 

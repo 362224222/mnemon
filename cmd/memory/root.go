@@ -41,7 +41,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&storeName, "store", "", "named memory store (overrides MNEMON_STORE and active file)")
 	rootCmd.PersistentFlags().BoolVar(&readOnly, "readonly", false, "open database in read-only mode (no WAL files, safe for read-only mounts)")
 	rootCmd.PersistentFlags().StringVar(&embedModel, "embed-model", "",
-		fmt.Sprintf("Ollama embedding model (env: MNEMON_EMBED_MODEL; default: %s)", embed.DefaultModel))
+		fmt.Sprintf("embedding model (env: MNEMON_EMBED_MODEL; default: %s)", embed.DefaultModel))
 }
 
 // resolveEmbedModel returns the embedding model selector that should be

@@ -16,8 +16,8 @@ var (
 
 var embedCmd = &cobra.Command{
 	Use:   "embed [id]",
-	Short: "Generate embeddings for insights via Ollama",
-	Long: `Generate embedding vectors for insights using a local Ollama model.
+	Short: "Generate embeddings for insights",
+	Long: `Generate embedding vectors for insights using the configured provider.
 
 Modes:
   mnemon embed --status            Show embedding coverage statistics
@@ -40,19 +40,25 @@ Modes:
 			if err != nil {
 				return fmt.Errorf("embedding stats: %w", err)
 			}
+			available := ec.Available()
 			output := map[string]interface{}{
-				"total_insights":   total,
-				"embedded":         embedded,
-				"coverage":         fmt.Sprintf("%.0f%%", float64(embedded)/float64(max(total, 1))*100),
-				"ollama_available": ec.Available(),
-				"model":            ec.Model(),
+				"total_insights":      total,
+				"embedded":            embedded,
+				"coverage":            fmt.Sprintf("%.0f%%", float64(embedded)/float64(max(total, 1))*100),
+				"embedding_available": available,
+				"ollama_available":    available, // Backward-compatible alias.
+				"protocol":            ec.Protocol(),
+				"model":               ec.Model(),
 			}
 			return enc.Encode(output)
 		}
 
-		// Check Ollama availability
+		// Check embedding provider availability.
 		if !ec.Available() {
-			return fmt.Errorf("Ollama not available at %s — install with: brew install ollama && ollama pull %s", ec.Endpoint(), ec.Model())
+			if ec.Protocol() == embed.ProtocolOllama {
+				return fmt.Errorf("Ollama embedding provider not available at %s — install with: brew install ollama && ollama pull %s", ec.Endpoint(), ec.Model())
+			}
+			return fmt.Errorf("OpenAI-compatible embedding provider not available at %s", ec.Endpoint())
 		}
 
 		// Single insight mode

@@ -352,7 +352,7 @@ memory is useful.
 - **Built-in deduplication** — `remember` auto-detects duplicates and conflicts; skips or auto-replaces
 - **Retention lifecycle** — importance decay, access-count boosting, and garbage collection
 - **Privacy-safe receipts** — export hashed operation receipts for memory-boundary audits without raw memory contents or queries
-- **Optional embeddings** — works fully without Ollama; add local [Ollama](https://ollama.ai) for enhanced vector+keyword hybrid search
+- **Optional embeddings** — works fully without an embedding provider; add local [Ollama](https://ollama.ai) or an OpenAI-compatible server for enhanced vector+keyword hybrid search
 
 ## Vision
 
@@ -446,12 +446,27 @@ Mnemon architecture.
 | `MNEMON_DATA_DIR` | `~/.mnemon` | Base data directory |
 | `MNEMON_STORE` | *(active file or `default`)* | Named memory store for data isolation |
 
-**Ollama-specific** (only relevant if using embeddings):
+**Embedding** (only relevant if using embeddings):
 
 | Environment Variable | Default | Description |
 |---|---|---|
-| `MNEMON_EMBED_ENDPOINT` | `http://localhost:11434` | Ollama API endpoint |
+| `MNEMON_EMBED_ENDPOINT` | `http://localhost:11434` | Embedding API endpoint |
 | `MNEMON_EMBED_MODEL` | `nomic-embed-text` | Embedding model name |
+| `MNEMON_EMBED_PROTOCOL` | *(auto-detect)* | `ollama` or `openai`; auto-detected from an endpoint ending in `/v1` |
+| `MNEMON_EMBED_API_KEY` | *(none)* | Bearer token for OpenAI-compatible servers (oMLX, vLLM, etc.) |
+| `MNEMON_EMBED_DIMENSIONS` | *(native)* | Optional Matryoshka dimension truncation |
+
+The embedding client speaks the Ollama API by default and the
+OpenAI-compatible embeddings API when the endpoint ends in `/v1` (or when
+`MNEMON_EMBED_PROTOCOL=openai` is set). For example, a local server such as
+[oMLX](https://omlx.dev) can be configured with:
+
+```bash
+export MNEMON_EMBED_ENDPOINT=http://127.0.0.1:18000/v1
+export MNEMON_EMBED_MODEL=bge-m3-mlx-8bit
+export MNEMON_EMBED_API_KEY=sk-... # omit for keyless local servers
+mnemon embed --status
+```
 
 ## Development
 

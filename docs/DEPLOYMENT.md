@@ -75,7 +75,8 @@ make compose-down
 
 ## Optional Embeddings
 
-Mnemon works without embeddings. To use Ollama-backed vector search in the Compose environment:
+Mnemon works without embeddings. The Compose embeddings profile provides the
+default Ollama-backed vector search setup:
 
 ```bash
 docker compose --profile embeddings up -d ollama
@@ -87,8 +88,17 @@ The relevant environment variables are:
 
 - `MNEMON_EMBED_ENDPOINT`
 - `MNEMON_EMBED_MODEL`
+- `MNEMON_EMBED_PROTOCOL`
+- `MNEMON_EMBED_API_KEY`
+- `MNEMON_EMBED_DIMENSIONS`
 
 For host-based Ollama, set `MNEMON_EMBED_ENDPOINT=http://host.docker.internal:11434` on Docker Desktop, or use the host gateway address for Linux deployments.
+
+An external OpenAI-compatible server can be selected with an endpoint ending
+in `/v1`, for example `MNEMON_EMBED_ENDPOINT=http://host.docker.internal:18000/v1`.
+Set `MNEMON_EMBED_MODEL` to a model exposed by that server and
+`MNEMON_EMBED_API_KEY` when authentication is required. Use HTTPS whenever the
+server is not on a trusted local network.
 
 ## Release Deployment
 
