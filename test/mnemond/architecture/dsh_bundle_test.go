@@ -1,3 +1,5 @@
+//go:build !windows
+
 package architecture_test
 
 import (

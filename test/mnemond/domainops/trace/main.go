@@ -1,3 +1,5 @@
+//go:build !windows
+
 // Command trace converts the sanitized domain-operations live report and the
 // stopped R7 authority stores into a protocol-neutral mnemon.test.trace file.
 // It never reads a prompt, provider stream, transcript, or live daemon.
