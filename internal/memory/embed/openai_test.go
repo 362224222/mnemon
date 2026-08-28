@@ -8,36 +8,29 @@ import (
 )
 
 func TestProtocolAutoDetect(t *testing.T) {
-	t.Setenv("MNEMON_EMBED_ENDPOINT", "http://127.0.0.1:18000/v1")
-	c := NewClient()
+	c := newClientWithModel("", EmbedConfigFile{Endpoint: "http://127.0.0.1:18000/v1"})
 	if c.Protocol() != ProtocolOpenAI {
 		t.Fatalf("expected openai protocol for /v1 endpoint, got %q", c.Protocol())
 	}
 
-	t.Setenv("MNEMON_EMBED_ENDPOINT", "http://localhost:11434")
-	c = NewClient()
+	c = newClientWithModel("", EmbedConfigFile{Endpoint: "http://localhost:11434"})
 	if c.Protocol() != ProtocolOllama {
 		t.Fatalf("expected ollama protocol for default endpoint, got %q", c.Protocol())
 	}
 
 	// Explicit protocol override wins over auto-detection.
-	t.Setenv("MNEMON_EMBED_ENDPOINT", "http://127.0.0.1:18000/v1")
-	t.Setenv("MNEMON_EMBED_PROTOCOL", "ollama")
-	c = NewClient()
+	c = newClientWithModel("", EmbedConfigFile{Endpoint: "http://127.0.0.1:18000/v1", Provider: "ollama"})
 	if c.Protocol() != ProtocolOllama {
 		t.Fatalf("expected explicit protocol override to win, got %q", c.Protocol())
 	}
 
-	t.Setenv("MNEMON_EMBED_PROTOCOL", "openai")
-	t.Setenv("MNEMON_EMBED_ENDPOINT", "http://localhost:11434")
-	c = NewClient()
+	c = newClientWithModel("", EmbedConfigFile{Endpoint: "http://localhost:11434", Provider: "openai"})
 	if c.Protocol() != ProtocolOpenAI {
 		t.Fatalf("expected explicit openai protocol, got %q", c.Protocol())
 	}
 }
 
 func TestOpenAIAvailable(t *testing.T) {
-	t.Setenv("MNEMON_EMBED_API_KEY", "sk-test")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
 			t.Errorf("expected /v1/models, got %s", r.URL.Path)
@@ -49,8 +42,7 @@ func TestOpenAIAvailable(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MNEMON_EMBED_ENDPOINT", srv.URL+"/v1")
-	c := NewClient()
+	c := newClientWithModel("", EmbedConfigFile{Endpoint: srv.URL + "/v1", Provider: "openai", APIKey: "sk-test"})
 	if !c.Available() {
 		t.Fatal("expected Available() true for 200 /v1/models")
 	}
@@ -70,8 +62,7 @@ func TestOpenAIEndpointWithTrailingSlash(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MNEMON_EMBED_ENDPOINT", srv.URL+"/v1/")
-	c := NewClient()
+	c := newClientWithModel("", EmbedConfigFile{Endpoint: srv.URL + "/v1/", Provider: "openai"})
 	if c.Protocol() != ProtocolOpenAI {
 		t.Fatalf("expected openai protocol for /v1/ endpoint, got %q", c.Protocol())
 	}
@@ -88,8 +79,6 @@ func TestOpenAIEndpointWithTrailingSlash(t *testing.T) {
 }
 
 func TestOpenAIEmbed(t *testing.T) {
-	t.Setenv("MNEMON_EMBED_MODEL", "bge-m3-mlx-8bit")
-	t.Setenv("MNEMON_EMBED_API_KEY", "sk-test")
 	var gotAuth string
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,8 +97,7 @@ func TestOpenAIEmbed(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MNEMON_EMBED_ENDPOINT", srv.URL+"/v1")
-	c := NewClient()
+	c := newClientWithModel("", EmbedConfigFile{Endpoint: srv.URL + "/v1", Provider: "openai", APIKey: "sk-test", Model: "bge-m3-mlx-8bit"})
 	vec, err := c.Embed("跨会话记忆测试")
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -129,8 +117,6 @@ func TestOpenAIEmbed(t *testing.T) {
 }
 
 func TestOpenAIEmbedWithoutKey(t *testing.T) {
-	// Keyless OpenAI-compatible servers must still work: no Authorization
-	// header should be sent when MNEMON_EMBED_API_KEY is unset.
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
@@ -139,8 +125,7 @@ func TestOpenAIEmbedWithoutKey(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MNEMON_EMBED_ENDPOINT", srv.URL+"/v1")
-	c := NewClient()
+	c := newClientWithModel("", EmbedConfigFile{Endpoint: srv.URL + "/v1", Provider: "openai"})
 	vec, err := c.Embed("hello")
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -160,9 +145,34 @@ func TestOpenAIEmbedEmptyResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MNEMON_EMBED_ENDPOINT", srv.URL+"/v1")
-	c := NewClient()
+	c := newClientWithModel("", EmbedConfigFile{Endpoint: srv.URL + "/v1", Provider: "openai"})
 	if _, err := c.Embed("hello"); err == nil {
 		t.Fatal("expected error for empty embedding response")
+	}
+}
+
+// TestOpenAIProtocolDefaultsToSiliconFlow verifies this fork's behavior: when
+// embed.yml sets provider: openai without an explicit endpoint, the client
+// defaults to SiliconFlow so cloud embedding works out of the box.
+func TestOpenAIProtocolDefaultsToSiliconFlow(t *testing.T) {
+	c := newClientWithModel("", EmbedConfigFile{Provider: "openai"})
+	if c.endpoint != DefaultOpenAIEndpoint {
+		t.Fatalf("expected default SiliconFlow endpoint %q, got %q", DefaultOpenAIEndpoint, c.endpoint)
+	}
+	if c.Protocol() != ProtocolOpenAI {
+		t.Fatalf("expected openai protocol, got %q", c.Protocol())
+	}
+}
+
+// TestOllamaProtocolKeepsLocalDefault confirms the default does not change
+// Ollama behavior: with no provider and no endpoint, the local Ollama endpoint
+// remains the default.
+func TestOllamaProtocolKeepsLocalDefault(t *testing.T) {
+	c := newClientWithModel("", EmbedConfigFile{})
+	if c.endpoint != DefaultEndpoint {
+		t.Fatalf("expected default Ollama endpoint %q, got %q", DefaultEndpoint, c.endpoint)
+	}
+	if c.Protocol() != ProtocolOllama {
+		t.Fatalf("expected ollama protocol, got %q", c.Protocol())
 	}
 }

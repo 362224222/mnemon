@@ -6,84 +6,72 @@ import (
 	"testing"
 )
 
-func TestNewClient_DefaultModel(t *testing.T) {
-	t.Setenv("MNEMON_EMBED_MODEL", "")
-	c := NewClient()
+func TestNewClientWithModel_DefaultModel(t *testing.T) {
+	c := newClientWithModel("", EmbedConfigFile{})
 	if c.Model() != DefaultModel {
 		t.Errorf("default model: want %q, got %q", DefaultModel, c.Model())
 	}
 }
 
-func TestNewClient_EnvOverride(t *testing.T) {
-	t.Setenv("MNEMON_EMBED_MODEL", "env-model:latest")
-	c := NewClient()
-	if c.Model() != "env-model:latest" {
-		t.Errorf("env-derived model: want %q, got %q", "env-model:latest", c.Model())
+func TestNewClientWithModel_FileModel(t *testing.T) {
+	c := newClientWithModel("", EmbedConfigFile{Model: "file-model"})
+	if c.Model() != "file-model" {
+		t.Errorf("file model: want %q, got %q", "file-model", c.Model())
 	}
 }
 
 func TestNewClientWithModel_Explicit(t *testing.T) {
-	t.Setenv("MNEMON_EMBED_MODEL", "")
-	c := NewClientWithModel("explicit-model:v1")
+	c := newClientWithModel("explicit-model:v1", EmbedConfigFile{})
 	if c.Model() != "explicit-model:v1" {
 		t.Errorf("explicit model: want %q, got %q", "explicit-model:v1", c.Model())
 	}
 }
 
-func TestNewClientWithModel_ExplicitWinsOverEnv(t *testing.T) {
-	t.Setenv("MNEMON_EMBED_MODEL", "env-model")
-	c := NewClientWithModel("explicit-model")
+func TestNewClientWithModel_ExplicitWinsOverFile(t *testing.T) {
+	c := newClientWithModel("explicit-model", EmbedConfigFile{Model: "file-model"})
 	if c.Model() != "explicit-model" {
-		t.Errorf("explicit-over-env: want %q, got %q", "explicit-model", c.Model())
+		t.Errorf("explicit-over-file: want %q, got %q", "explicit-model", c.Model())
 	}
 }
 
-func TestNewClientWithModel_EmptyFallsBackToEnv(t *testing.T) {
-	t.Setenv("MNEMON_EMBED_MODEL", "env-model")
-	c := NewClientWithModel("")
-	if c.Model() != "env-model" {
-		t.Errorf("empty-falls-to-env: want %q, got %q", "env-model", c.Model())
+func TestNewClientWithModel_EmptyFallsBackToFile(t *testing.T) {
+	c := newClientWithModel("", EmbedConfigFile{Model: "file-model"})
+	if c.Model() != "file-model" {
+		t.Errorf("empty-falls-to-file: want %q, got %q", "file-model", c.Model())
 	}
 }
 
-func TestNewClientWithModel_EmptyAndNoEnvFallsBackToDefault(t *testing.T) {
-	t.Setenv("MNEMON_EMBED_MODEL", "")
-	c := NewClientWithModel("")
+func TestNewClientWithModel_EmptyAndNoFileFallsBackToDefault(t *testing.T) {
+	c := newClientWithModel("", EmbedConfigFile{})
 	if c.Model() != DefaultModel {
-		t.Errorf("empty-and-no-env: want %q, got %q", DefaultModel, c.Model())
+		t.Errorf("empty-and-no-file: want %q, got %q", DefaultModel, c.Model())
 	}
 }
 
 func TestNewClientWithModel_DefaultEndpoint(t *testing.T) {
-	t.Setenv("MNEMON_EMBED_ENDPOINT", "")
-	c := NewClientWithModel("any-model")
+	c := newClientWithModel("any-model", EmbedConfigFile{})
 	if c.Endpoint() != DefaultEndpoint {
 		t.Errorf("default endpoint: want %q, got %q", DefaultEndpoint, c.Endpoint())
 	}
 }
 
 // TestNewClientWithModel_ExplicitEmptyTreatedAsUnset documents the deliberate
-// choice that --embed-model "" falls through to env-var/default rather than
-// being rejected. This matches how the existing --data-dir flag handles empty
-// strings and avoids surprises when a user clears the flag via shell scripting
-// such as `mnemon --embed-model "$MAYBE_MODEL" ...`.
+// choice that --embed-model "" falls through to the file value (or built-in
+// default) rather than being rejected. This matches how the existing
+// --data-dir flag handles empty strings.
 func TestNewClientWithModel_ExplicitEmptyTreatedAsUnset(t *testing.T) {
-	t.Setenv("MNEMON_EMBED_MODEL", "env-model")
-	c := NewClientWithModel("")
-	if c.Model() != "env-model" {
-		t.Errorf("explicit empty should fall through to env: want %q, got %q", "env-model", c.Model())
+	c := newClientWithModel("", EmbedConfigFile{Model: "file-model"})
+	if c.Model() != "file-model" {
+		t.Errorf("explicit empty should fall through to file: want %q, got %q", "file-model", c.Model())
 	}
 
-	t.Setenv("MNEMON_EMBED_MODEL", "")
-	c = NewClientWithModel("")
+	c = newClientWithModel("", EmbedConfigFile{})
 	if c.Model() != DefaultModel {
-		t.Errorf("explicit empty + no env should fall through to default: want %q, got %q", DefaultModel, c.Model())
+		t.Errorf("explicit empty + no file should fall through to default: want %q, got %q", DefaultModel, c.Model())
 	}
 }
 
 func TestOllamaEndpointWithTrailingSlash(t *testing.T) {
-	t.Setenv("MNEMON_EMBED_PROTOCOL", "ollama")
-	t.Setenv("MNEMON_EMBED_API_KEY", "must-not-be-sent")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "" {
 			t.Errorf("expected Ollama request without Authorization header, got %q", got)
@@ -106,8 +94,7 @@ func TestOllamaEndpointWithTrailingSlash(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MNEMON_EMBED_ENDPOINT", srv.URL+"/")
-	c := NewClient()
+	c := newClientWithModel("", EmbedConfigFile{Provider: "ollama", Endpoint: srv.URL + "/", APIKey: "must-not-be-sent"})
 	if !c.Available() {
 		t.Fatal("expected Available() true for trailing-slash Ollama endpoint")
 	}

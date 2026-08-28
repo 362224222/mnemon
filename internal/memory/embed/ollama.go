@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // Protocol identifies the wire protocol used to reach the embedding server.
@@ -31,6 +33,82 @@ const DefaultModel = "nomic-embed-text"
 // DefaultEndpoint is the default Ollama API endpoint.
 const DefaultEndpoint = "http://localhost:11434"
 
+// DefaultOpenAIEndpoint is the default endpoint for the OpenAI-compatible
+// protocol in this fork. It points at SiliconFlow (https://siliconflow.cn),
+// which serves BAAI/bge-m3 and other embedding models without a local Ollama
+// instance, so cloud embedding works out of the box when embed.yml omits an
+// explicit endpoint. The resolution precedence is embed.yml > built-in default;
+// environment variables are not consulted.
+const DefaultOpenAIEndpoint = "https://api.siliconflow.cn/v1"
+
+// EmbedConfigFile mirrors the optional embed.yml file placed next to the
+// mnemon executable. It is the single external source of embedding
+// configuration; environment variables are not consulted. The documented
+// precedence is:
+//
+//	embed.yml > built-in default
+//
+// (the --embed-model CLI flag, when set, overrides the file model). A missing
+// or malformed file is ignored; built-in defaults remain the fallback.
+// Matching the file's own contract, the lookup first checks the executable's
+// directory, then the current working directory.
+type EmbedConfigFile struct {
+	Provider   string `yaml:"provider"`
+	Model      string `yaml:"model"`
+	Endpoint   string `yaml:"endpoint"`
+	APIKey     string `yaml:"api_key"`
+	Dimensions int    `yaml:"dimensions"`
+}
+
+// loadEmbedConfig reads embed.yml from the executable's directory, falling
+// back to the current working directory. Returns a zero value when no file is
+// found or it cannot be read.
+func loadEmbedConfig() EmbedConfigFile {
+	path := findEmbedConfig()
+	if path == "" {
+		return EmbedConfigFile{}
+	}
+	return loadEmbedConfigFromPath(path)
+}
+
+// loadEmbedConfigFromPath parses an embed.yml file at the given path. Parse
+// errors are swallowed: a malformed config must never break the CLI.
+func loadEmbedConfigFromPath(path string) EmbedConfigFile {
+	var cfg EmbedConfigFile
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return EmbedConfigFile{}
+	}
+	_ = yaml.Unmarshal(data, &cfg)
+	return cfg
+}
+
+// findEmbedConfig locates embed.yml: first next to the executable (matching
+// the documented "placed in the same directory as mnemon" contract), then in
+// the current working directory. Returns "" when neither exists.
+func findEmbedConfig() string {
+	if exe, err := os.Executable(); err == nil {
+		if p := filepath.Join(filepath.Dir(exe), "embed.yml"); fileExists(p) {
+			return p
+		}
+	}
+	if fileExists("embed.yml") {
+		return "embed.yml"
+	}
+	return ""
+}
+
+func fileExists(p string) bool {
+	info, err := os.Stat(p)
+	return err == nil && !info.IsDir()
+}
+
+// isOpenAI reports whether the OpenAI-compatible protocol is selected from the
+// embed.yml provider field.
+func isOpenAI(fileProvider string) bool {
+	return strings.EqualFold(fileProvider, string(ProtocolOpenAI))
+}
+
 // Client communicates with an embedding server (an Ollama instance or an
 // OpenAI-compatible server) for embedding generation.
 type Client struct {
@@ -43,47 +121,63 @@ type Client struct {
 }
 
 // NewClient creates an embedding client.
-// It checks MNEMON_EMBED_ENDPOINT, MNEMON_EMBED_MODEL,
-// MNEMON_EMBED_DIMENSIONS, MNEMON_EMBED_API_KEY, and
-// MNEMON_EMBED_PROTOCOL env vars.
+// It resolves configuration from an optional embed.yml file (see EmbedConfigFile
+// for precedence). Environment variables are not consulted.
 func NewClient() *Client {
 	return NewClientWithModel("")
 }
 
 // NewClientWithModel creates an embedding client with an explicit model
-// override. Resolution order for the model: explicit argument >
-// MNEMON_EMBED_MODEL env var > DefaultModel. The endpoint, dimensions,
-// API key, and protocol continue to be resolved from environment vars.
+// override (the --embed-model CLI flag). Values resolve with the precedence:
 //
-// Protocol resolution: MNEMON_EMBED_PROTOCOL ("ollama" | "openai") wins
-// when set; otherwise the protocol is auto-detected — an endpoint whose
-// URL path ends in /v1 is assumed to be an OpenAI-compatible server.
+//	explicit model argument > embed.yml model > DefaultModel
+//
+// for the model, and embed.yml > built-in default for the endpoint,
+// dimensions, API key, and protocol. embed.yml is the single external
+// configuration source; environment variables are not consulted.
+//
+// Protocol resolution: an explicit "ollama" | "openai" (from embed.yml) wins;
+// otherwise it is auto-detected — an endpoint whose URL path ends in /v1 is
+// assumed to be an OpenAI-compatible server.
 func NewClientWithModel(model string) *Client {
-	endpoint := os.Getenv("MNEMON_EMBED_ENDPOINT")
+	return newClientWithModel(model, loadEmbedConfig())
+}
+
+// newClientWithModel is the resolution core; the file config is injected so
+// the precedence logic stays unit-testable without touching the filesystem.
+func newClientWithModel(model string, f EmbedConfigFile) *Client {
+	endpoint := f.Endpoint
 	if endpoint == "" {
-		endpoint = DefaultEndpoint
+		// When the OpenAI-compatible protocol is selected (embed.yml), default
+		// to SiliconFlow so cloud embedding works without an explicit endpoint.
+		if isOpenAI(f.Provider) {
+			endpoint = DefaultOpenAIEndpoint
+		} else {
+			endpoint = DefaultEndpoint
+		}
 	}
+
 	if model == "" {
-		model = os.Getenv("MNEMON_EMBED_MODEL")
+		model = f.Model
 	}
 	if model == "" {
 		model = DefaultModel
 	}
+
 	dims := 0
-	if d := os.Getenv("MNEMON_EMBED_DIMENSIONS"); d != "" {
-		if v, err := strconv.Atoi(d); err == nil && v > 0 {
-			dims = v
-		}
+	if f.Dimensions > 0 {
+		dims = f.Dimensions
 	}
+
 	protocol := ProtocolOllama
 	explicit := false
-	if p := os.Getenv("MNEMON_EMBED_PROTOCOL"); p != "" {
+	if p := f.Provider; p != "" {
 		switch Protocol(strings.ToLower(p)) {
 		case ProtocolOllama, ProtocolOpenAI:
 			protocol = Protocol(strings.ToLower(p))
 			explicit = true
 		default:
-			fmt.Fprintf(os.Stderr, "warning: invalid MNEMON_EMBED_PROTOCOL %q, falling back to auto-detect\n", p)
+			fmt.Fprintf(os.Stderr, "warning: invalid embed protocol %q, falling back to auto-detect\n", p)
 		}
 	}
 	if !explicit {
@@ -96,11 +190,14 @@ func NewClientWithModel(model string) *Client {
 			}
 		}
 	}
+
+	apiKey := f.APIKey
+
 	return &Client{
 		endpoint: endpoint,
 		model:    model,
 		dims:     dims,
-		apiKey:   os.Getenv("MNEMON_EMBED_API_KEY"),
+		apiKey:   apiKey,
 		protocol: protocol,
 		http: &http.Client{
 			Timeout: 30 * time.Second,

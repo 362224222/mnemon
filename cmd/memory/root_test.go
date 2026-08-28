@@ -72,10 +72,11 @@ func TestOpenDBRejectsInvalidStoreNameFromFlag(t *testing.T) {
 	}
 }
 
-// TestResolveEmbedModelChain exercises the full cmd → embed pipeline for the
-// --embed-model flag and MNEMON_EMBED_MODEL env var, mirroring how cobra
-// will hand the value off at runtime. The test runs against
-// embed.NewClientWithModel directly so it does not require a live provider.
+// TestResolveEmbedModelChain exercises the cmd → embed pipeline for the
+// --embed-model flag, mirroring how cobra will hand the value off at runtime.
+// The test runs against embed.NewClientWithModel directly so it does not
+// require a live provider. Environment variables are not consulted; the
+// precedence is --embed-model flag > embed.yml model > built-in default.
 func TestResolveEmbedModelChain(t *testing.T) {
 	oldEmbedModel := embedModel
 	t.Cleanup(func() { embedModel = oldEmbedModel })
@@ -83,38 +84,27 @@ func TestResolveEmbedModelChain(t *testing.T) {
 	cases := []struct {
 		name      string
 		flagValue string
-		envValue  string
 		want      string
 	}{
 		{
-			name:      "flag wins over env",
+			name:      "flag wins over default",
 			flagValue: "flag-model",
-			envValue:  "env-model",
 			want:      "flag-model",
 		},
 		{
-			name:      "empty flag falls through to env",
+			name:      "empty flag falls through to built-in default",
 			flagValue: "",
-			envValue:  "env-model",
-			want:      "env-model",
-		},
-		{
-			name:      "empty flag and empty env falls through to built-in default",
-			flagValue: "",
-			envValue:  "",
 			want:      embed.DefaultModel,
 		},
 		{
 			name:      "flag value passes through verbatim",
 			flagValue: "nomic-embed-text-v2-moe:latest",
-			envValue:  "",
 			want:      "nomic-embed-text-v2-moe:latest",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("MNEMON_EMBED_MODEL", tc.envValue)
 			embedModel = tc.flagValue
 			client := embed.NewClientWithModel(resolveEmbedModel())
 			if got := client.Model(); got != tc.want {

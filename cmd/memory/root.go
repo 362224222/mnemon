@@ -41,22 +41,18 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&storeName, "store", "", "named memory store (overrides MNEMON_STORE and active file)")
 	rootCmd.PersistentFlags().BoolVar(&readOnly, "readonly", false, "open database in read-only mode (no WAL files, safe for read-only mounts)")
 	rootCmd.PersistentFlags().StringVar(&embedModel, "embed-model", "",
-		fmt.Sprintf("embedding model (env: MNEMON_EMBED_MODEL; default: %s)", embed.DefaultModel))
+		fmt.Sprintf("embedding model (default: %s; embed.yml model when flag unset)", embed.DefaultModel))
 }
 
 // resolveEmbedModel returns the embedding model selector that should be
-// passed to embed.NewClientWithModel.
+// passed to embed.NewClientWithModel. It is the --embed-model CLI flag value
+// (or "" when unset). The full resolution chain is delegated to
+// NewClientWithModel:
 //
-// Resolution chain (delegated to NewClientWithModel):
+//	non-empty --embed-model flag > embed.yml model > embed.DefaultModel
 //
-//	non-empty --embed-model flag > MNEMON_EMBED_MODEL env var > embed.DefaultModel
-//
-// An explicitly empty --embed-model is treated as "unset" and falls through
-// to the env var / built-in default; this matches how the existing --data-dir
-// flag behaves and avoids surprises when a user clears the flag via shell
-// scripting. Env-var resolution happens inside NewClientWithModel at command
-// execution time (not at cmd/init time), so test setups using t.Setenv after
-// package init still work as expected.
+// Environment variables are not consulted for embed configuration; embed.yml
+// is the single external source.
 func resolveEmbedModel() string {
 	return embedModel
 }

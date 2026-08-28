@@ -12,7 +12,7 @@ import (
 )
 
 func TestImportRepairsBackdatedTemporalBackbone(t *testing.T) {
-	t.Setenv("MNEMON_EMBED_ENDPOINT", "http://127.0.0.1:1")
+	writeUnreachableEmbed(t)
 
 	oldDataDir, oldStoreName, oldReadOnly := dataDir, storeName, readOnly
 	oldImportNoDiff, oldImportDryRun := importNoDiff, importDryRun
@@ -120,7 +120,7 @@ func TestImportRepairsBackdatedTemporalBackbone(t *testing.T) {
 }
 
 func TestImportRefreshesEffectiveImportanceAfterExplicitEdges(t *testing.T) {
-	t.Setenv("MNEMON_EMBED_ENDPOINT", "http://127.0.0.1:1")
+	writeUnreachableEmbed(t)
 
 	oldDataDir, oldStoreName, oldReadOnly := dataDir, storeName, readOnly
 	oldImportNoDiff, oldImportDryRun := importNoDiff, importDryRun
@@ -187,6 +187,18 @@ func TestImportRefreshesEffectiveImportanceAfterExplicitEdges(t *testing.T) {
 	if lowEI <= 0.5 {
 		t.Fatalf("effective_importance = %f, want refreshed value above no-edge baseline", lowEI)
 	}
+}
+
+// writeUnreachableEmbed points the embed client at a dead endpoint via an
+// embed.yml in the working directory, so import handles embedding failures
+// gracefully without hitting a real provider. Environment variables are no
+// longer consulted for embed configuration.
+func writeUnreachableEmbed(t *testing.T) {
+	t.Helper()
+	if err := os.WriteFile("embed.yml", []byte("provider: openai\nendpoint: http://127.0.0.1:1\n"), 0o600); err != nil {
+		t.Fatalf("write embed.yml: %v", err)
+	}
+	t.Cleanup(func() { os.Remove("embed.yml") })
 }
 
 func insertTestInsight(t *testing.T, db *store.DB, id, content, source, createdAt string) {
