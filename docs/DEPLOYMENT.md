@@ -84,21 +84,22 @@ docker compose exec ollama ollama pull nomic-embed-text
 docker compose run --rm mnemon embed "hello"
 ```
 
-The relevant environment variables are:
+Embedding is configured through an `embed.yml` file; environment variables are
+not used. The relevant fields are:
 
-- `MNEMON_EMBED_ENDPOINT`
-- `MNEMON_EMBED_MODEL`
-- `MNEMON_EMBED_PROTOCOL`
-- `MNEMON_EMBED_API_KEY`
-- `MNEMON_EMBED_DIMENSIONS`
+- `endpoint`
+- `model`
+- `provider`
+- `api_key`
+- `dimensions`
 
-For host-based Ollama, set `MNEMON_EMBED_ENDPOINT=http://host.docker.internal:11434` on Docker Desktop, or use the host gateway address for Linux deployments.
+For host-based Ollama, provide an `embed.yml` with `endpoint: http://host.docker.internal:11434` on Docker Desktop, or use the host gateway address for Linux deployments.
 
 An external OpenAI-compatible server can be selected with an endpoint ending
-in `/v1`, for example `MNEMON_EMBED_ENDPOINT=http://host.docker.internal:18000/v1`.
-Set `MNEMON_EMBED_MODEL` to a model exposed by that server and
-`MNEMON_EMBED_API_KEY` when authentication is required. Use HTTPS whenever the
-server is not on a trusted local network.
+in `/v1`, for example `endpoint: http://host.docker.internal:18000/v1`.
+Set `model` to a model exposed by that server and `api_key` when
+authentication is required. Use HTTPS whenever the server is not on a trusted
+local network.
 
 ## Release Deployment
 

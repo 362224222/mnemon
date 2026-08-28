@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `mnemon setup --eject --target minimax-code` removes only the Mnemon skill
   while preserving other MiniMax Code skills.
 
+### Changed
+
+- Embedding configuration now comes exclusively from an `embed.yml` file; the
+  `MNEMON_EMBED_*` environment variables are no longer read. The file is looked
+  up first in the `mnemon` executable's directory, then in the working
+  directory, and each field falls back to a built-in default. The
+  `--embed-model` flag still overrides the `model` field.
+
 ### Tests
 
 - Added ZCode coverage for embedded artifacts, POSIX and Windows hook

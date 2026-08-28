@@ -446,25 +446,32 @@ Mnemon architecture.
 | `MNEMON_DATA_DIR` | `~/.mnemon` | Base data directory |
 | `MNEMON_STORE` | *(active file or `default`)* | Named memory store for data isolation |
 
-**Embedding** (only relevant if using embeddings):
+**Embedding** (only relevant if using embeddings) — configured through an
+`embed.yml` file placed next to the `mnemon` executable, or in the working
+directory. Environment variables are not used:
 
-| Environment Variable | Default | Description |
+| Field | Default | Description |
 |---|---|---|
-| `MNEMON_EMBED_ENDPOINT` | `http://localhost:11434` | Embedding API endpoint |
-| `MNEMON_EMBED_MODEL` | `nomic-embed-text` | Embedding model name |
-| `MNEMON_EMBED_PROTOCOL` | *(auto-detect)* | `ollama` or `openai`; auto-detected from an endpoint ending in `/v1` |
-| `MNEMON_EMBED_API_KEY` | *(none)* | Bearer token for OpenAI-compatible servers (oMLX, vLLM, etc.) |
-| `MNEMON_EMBED_DIMENSIONS` | *(native)* | Optional Matryoshka dimension truncation |
+| `provider` | *(auto-detect)* | `ollama` or `openai`; auto-detected from an endpoint ending in `/v1` |
+| `model` | `nomic-embed-text` | Embedding model name; the `--embed-model` flag overrides it |
+| `endpoint` | `http://localhost:11434` | Embedding API endpoint |
+| `api_key` | *(none)* | Bearer token for OpenAI-compatible servers (oMLX, vLLM, etc.) |
+| `dimensions` | *(native)* | Optional Matryoshka dimension truncation |
 
 The embedding client speaks the Ollama API by default and the
 OpenAI-compatible embeddings API when the endpoint ends in `/v1` (or when
-`MNEMON_EMBED_PROTOCOL=openai` is set). For example, a local server such as
+`provider: openai` is set). For example, a local server such as
 [oMLX](https://omlx.dev) can be configured with:
 
+```yaml
+# embed.yml
+provider: openai
+model: bge-m3-mlx-8bit
+endpoint: http://127.0.0.1:18000/v1
+api_key: sk-...   # omit for keyless local servers
+```
+
 ```bash
-export MNEMON_EMBED_ENDPOINT=http://127.0.0.1:18000/v1
-export MNEMON_EMBED_MODEL=bge-m3-mlx-8bit
-export MNEMON_EMBED_API_KEY=sk-... # omit for keyless local servers
 mnemon embed --status
 ```
 

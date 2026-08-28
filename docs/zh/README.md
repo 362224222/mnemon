@@ -396,20 +396,29 @@ Sub-agent 委派是可选执行策略。当 runtime 支持时，主 agent 可以
 |---------|-------|------|
 | `MNEMON_DATA_DIR` | `~/.mnemon` | 基础数据目录 |
 | `MNEMON_STORE` | *（active 文件或 `default`）* | 命名记忆体，用于数据隔离 |
-| `MNEMON_EMBED_ENDPOINT` | `http://localhost:11434` | 嵌入 API 端点 |
-| `MNEMON_EMBED_MODEL` | `nomic-embed-text` | 嵌入模型名称 |
-| `MNEMON_EMBED_PROTOCOL` | *（自动探测）* | `ollama` 或 `openai`；端点以 `/v1` 结尾时自动切换 |
-| `MNEMON_EMBED_API_KEY` | *（无）* | OpenAI 兼容服务器（oMLX、vLLM 等）的 Bearer 令牌 |
-| `MNEMON_EMBED_DIMENSIONS` | *（原生维度）* | 可选的 Matryoshka 维度截断 |
+嵌入配置通过 `embed.yml` 文件提供（放在 `mnemon` 可执行文件旁或工作目录），不使用环境变量：
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `provider` | *（自动探测）* | `ollama` 或 `openai`；端点以 `/v1` 结尾时自动切换 |
+| `model` | `nomic-embed-text` | 嵌入模型名称；`--embed-model` 标志可覆盖 |
+| `endpoint` | `http://localhost:11434` | 嵌入 API 端点 |
+| `api_key` | *（无）* | OpenAI 兼容服务器（oMLX、vLLM 等）的 Bearer 令牌 |
+| `dimensions` | *（原生维度）* | 可选的 Matryoshka 维度截断 |
 
 嵌入客户端默认使用 Ollama API；当端点以 `/v1` 结尾（或显式设置
-`MNEMON_EMBED_PROTOCOL=openai`）时改用 OpenAI 兼容的 embeddings API。例如，
+`provider: openai`）时改用 OpenAI 兼容的 embeddings API。例如，
 可通过以下配置对接 [oMLX](https://omlx.dev) 等本地服务器：
 
+```yaml
+# embed.yml
+provider: openai
+model: bge-m3-mlx-8bit
+endpoint: http://127.0.0.1:18000/v1
+api_key: sk-...   # 无需认证的本地服务器可省略
+```
+
 ```bash
-export MNEMON_EMBED_ENDPOINT=http://127.0.0.1:18000/v1
-export MNEMON_EMBED_MODEL=bge-m3-mlx-8bit
-export MNEMON_EMBED_API_KEY=sk-... # 无需认证的本地服务器可省略
 mnemon embed --status
 ```
 

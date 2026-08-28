@@ -12,7 +12,7 @@ These root flags configure Memory commands:
 |---|---|---|
 | `--store <name>` | (auto) | Named memory store (overrides `MNEMON_STORE` and active file) |
 | `--data-dir <path>` | `~/.mnemon` | Base data directory |
-| `--embed-model <name>` | `nomic-embed-text` | Embedding model (overrides `MNEMON_EMBED_MODEL`) |
+| `--embed-model <name>` | `nomic-embed-text` | Embedding model (overrides the model in `embed.yml`) |
 | `--readonly` | `false` | Open the Memory database read-only, without creating WAL files |
 | `--version` | | Print version and exit |
 
@@ -242,11 +242,6 @@ Nodes are colored by category (decision, fact, insight, preference, context); ed
 |---|---|---|
 | `MNEMON_DATA_DIR` | `~/.mnemon` | Base data directory |
 | `MNEMON_STORE` | `default` | Active named store |
-| `MNEMON_EMBED_ENDPOINT` | `http://localhost:11434` | Embedding API endpoint |
-| `MNEMON_EMBED_MODEL` | `nomic-embed-text` | Embedding model |
-| `MNEMON_EMBED_PROTOCOL` | (auto-detect) | `ollama` or `openai`; endpoints ending in `/v1` select `openai` |
-| `MNEMON_EMBED_API_KEY` | (none) | Bearer token for OpenAI-compatible servers |
-| `MNEMON_EMBED_DIMENSIONS` | (native) | Embedding dimensions; set to truncate (e.g., `256` for Matryoshka models) |
 | `MNEMON_MAX_INSIGHTS` | `1000` | Active-insight ceiling before auto-pruning starts; `0` disables auto-pruning |
 
 ---
@@ -275,18 +270,43 @@ brew install ollama              # or see https://ollama.ai
 ollama pull nomic-embed-text     # download the embedding model
 ```
 
+Embedding is configured through an `embed.yml` file, not environment variables.
 For an OpenAI-compatible server, point the endpoint at its `/v1` base URL and
 select the server's embedding model. The API key is optional for keyless local
 servers:
 
-```bash
-export MNEMON_EMBED_ENDPOINT=http://127.0.0.1:18000/v1
-export MNEMON_EMBED_MODEL=bge-m3-mlx-8bit
-export MNEMON_EMBED_API_KEY=sk-... # omit for keyless local servers
+```yaml
+# embed.yml
+provider: openai
+model: bge-m3-mlx-8bit
+endpoint: http://127.0.0.1:18000/v1
+api_key: sk-...   # omit for keyless local servers
 ```
 
-Set `MNEMON_EMBED_PROTOCOL=openai` explicitly only when the compatible endpoint
-does not end in `/v1`.
+Set `provider: openai` explicitly only when the compatible endpoint does not end
+in `/v1` (endpoints ending in `/v1` select the OpenAI-compatible protocol
+automatically).
+
+### Configuration file (`embed.yml`)
+
+Embedding configuration comes exclusively from an `embed.yml` file; Mnemon no
+longer reads `MNEMON_EMBED_*` environment variables. The file is looked up first
+in the directory containing the `mnemon` executable, then in the current working
+directory. A missing file falls back to the built-in defaults.
+
+| Field | Default | Description |
+|---|---|---|
+| `provider` | (auto-detect) | `ollama` or `openai`; endpoints ending in `/v1` select `openai` |
+| `model` | `nomic-embed-text` | Embedding model; the `--embed-model` flag overrides it |
+| `endpoint` | `http://localhost:11434` | Embedding API endpoint (`https://api.siliconflow.cn/v1` for `provider: openai`) |
+| `api_key` | (none) | Bearer token for OpenAI-compatible servers |
+| `dimensions` | (native) | Embedding dimensions; set to truncate (e.g., `256` for Matryoshka models) |
+
+Resolution precedence:
+
+1. `--embed-model` CLI flag (model field only)
+2. `embed.yml`
+3. Built-in default
 
 Verify with:
 

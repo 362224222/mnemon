@@ -12,7 +12,7 @@
 |---|---|---|
 | `--store <name>` | (自动) | 命名记忆体（覆盖 `MNEMON_STORE` 和 active 文件） |
 | `--data-dir <path>` | `~/.mnemon` | 基础数据目录 |
-| `--embed-model <name>` | `nomic-embed-text` | 嵌入模型（覆盖 `MNEMON_EMBED_MODEL`） |
+| `--embed-model <name>` | `nomic-embed-text` | 嵌入模型（覆盖 `embed.yml` 中的 `model`） |
 | `--readonly` | `false` | 以只读模式打开 Memory 数据库，不创建 WAL 文件 |
 | `--version` | | 打印版本并退出 |
 
@@ -246,11 +246,6 @@ open graph.html
 |---|---|---|
 | `MNEMON_DATA_DIR` | `~/.mnemon` | 基础数据目录 |
 | `MNEMON_STORE` | `default` | 活跃命名记忆体 |
-| `MNEMON_EMBED_ENDPOINT` | `http://localhost:11434` | 嵌入 API 端点 |
-| `MNEMON_EMBED_MODEL` | `nomic-embed-text` | 嵌入模型 |
-| `MNEMON_EMBED_PROTOCOL` | （自动探测） | `ollama` 或 `openai`；以 `/v1` 结尾的端点自动选择 `openai` |
-| `MNEMON_EMBED_API_KEY` | （无） | OpenAI 兼容服务器的 Bearer 令牌 |
-| `MNEMON_EMBED_DIMENSIONS` | (原生维度) | 嵌入向量维度；可设置截断值（例如 Matryoshka 模型使用 `256`） |
 | `MNEMON_MAX_INSIGHTS` | `1000` | 触发自动清理的活跃洞察数量上限；设为 `0` 可关闭自动清理 |
 
 ---
@@ -279,15 +274,35 @@ brew install ollama              # 或参见 https://ollama.ai
 ollama pull nomic-embed-text     # 下载嵌入模型
 ```
 
-使用 OpenAI 兼容服务器时，将端点指向其 `/v1` 基础 URL，并选择服务器上的嵌入模型。无需认证的本地服务器可省略 API key：
+嵌入配置来自 `embed.yml` 文件，而非环境变量。使用 OpenAI 兼容服务器时，将端点指向其 `/v1` 基础 URL，并选择服务器上的嵌入模型。无需认证的本地服务器可省略 API key：
 
-```bash
-export MNEMON_EMBED_ENDPOINT=http://127.0.0.1:18000/v1
-export MNEMON_EMBED_MODEL=bge-m3-mlx-8bit
-export MNEMON_EMBED_API_KEY=sk-... # 无需认证的本地服务器可省略
+```yaml
+# embed.yml
+provider: openai
+model: bge-m3-mlx-8bit
+endpoint: http://127.0.0.1:18000/v1
+api_key: sk-...   # 无需认证的本地服务器可省略
 ```
 
-仅当兼容端点不以 `/v1` 结尾时，才需要显式设置 `MNEMON_EMBED_PROTOCOL=openai`。
+仅当兼容端点不以 `/v1` 结尾时，才需要显式设置 `provider: openai`（以 `/v1` 结尾的端点会自动选择 OpenAI 兼容协议）。
+
+### 配置文件（`embed.yml`）
+
+嵌入配置仅来自 `embed.yml` 文件；Mnemon 不再读取 `MNEMON_EMBED_*` 环境变量。查找顺序为：`mnemon` 可执行文件所在目录，然后是当前工作目录。文件缺失时回退到内置默认值。
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `provider` | （自动探测） | `ollama` 或 `openai`；以 `/v1` 结尾的端点自动选择 `openai` |
+| `model` | `nomic-embed-text` | 嵌入模型；`--embed-model` 标志可覆盖 |
+| `endpoint` | `http://localhost:11434` | 嵌入 API 端点（`provider: openai` 时为 `https://api.siliconflow.cn/v1`） |
+| `api_key` | （无） | OpenAI 兼容服务器的 Bearer 令牌 |
+| `dimensions` | （原生维度） | 嵌入向量维度；可设置截断值（例如 Matryoshka 模型使用 `256`） |
+
+解析优先级：
+
+1. `--embed-model` CLI 标志（仅 `model` 字段）
+2. `embed.yml`
+3. 内置默认值
 
 验证：
 
