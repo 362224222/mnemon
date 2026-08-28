@@ -1,3 +1,5 @@
+//go:build !windows
+
 // Package daemon composes one local authority, immutable Artifact store, and its
 // owner-only Unix control boundary.
 //
