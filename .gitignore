@@ -51,3 +51,8 @@ __pycache__/
 
 # GoReleaser
 dist/
+
+# Local secrets and workdir (avoid leaking embedding API keys / local paths)
+embed.yml
+.workbuddy/
+.reasonix/
