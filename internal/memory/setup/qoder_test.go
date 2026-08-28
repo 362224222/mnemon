@@ -3,6 +3,7 @@ package setup
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -55,7 +56,9 @@ func TestQoderWriteHook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat hook: %v", err)
 	}
-	if info.Mode().Perm() != 0755 {
+	// Windows does not expose POSIX permission bits (os.WriteFile mode is
+	// ignored there), so only assert the Unix mode on non-Windows hosts.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0755 {
 		t.Fatalf("hook permissions = %v, want 0755", info.Mode().Perm())
 	}
 }
@@ -94,7 +97,7 @@ func TestQoderRegisterHooksPreservesUnrelatedConfig(t *testing.T) {
 	if len(sessionStart) != 2 {
 		t.Fatalf("expected custom hook plus new prime hook: %#v", sessionStart)
 	}
-	if !strings.Contains(sessionStart[1].(map[string]any)["hooks"].([]any)[0].(map[string]any)["command"].(string), "hooks/mnemon/prime.sh") {
+	if !strings.Contains(filepath.ToSlash(sessionStart[1].(map[string]any)["hooks"].([]any)[0].(map[string]any)["command"].(string)), "hooks/mnemon/prime.sh") {
 		t.Fatalf("expected new prime hook, got %#v", sessionStart[1])
 	}
 	if _, ok := hooks["UserPromptSubmit"]; !ok {

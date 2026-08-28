@@ -69,7 +69,7 @@ func TestNestedSettingsHostsRegisterHooks(t *testing.T) {
 				t.Fatalf("expected custom hook plus new prime hook: %#v", sessionStart)
 			}
 			command := sessionStart[1].(map[string]any)["hooks"].([]any)[0].(map[string]any)["command"].(string)
-			if !strings.Contains(command, "hooks/mnemon/prime.sh") {
+			if !strings.Contains(filepath.ToSlash(command), "hooks/mnemon/prime.sh") {
 				t.Fatalf("expected new prime hook, got %#v", sessionStart[1])
 			}
 			if _, ok := hooks["UserPromptSubmit"]; !ok {

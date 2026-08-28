@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/internal/memory/setup/assets"
@@ -58,7 +59,8 @@ func TestHostSkillAndHookArtifacts(t *testing.T) {
 			if err != nil {
 				t.Fatalf("stat hook: %v", err)
 			}
-			if info.Mode().Perm() != 0o755 {
+			// Windows does not expose POSIX permission bits; only assert on Unix.
+			if runtime.GOOS != "windows" && info.Mode().Perm() != 0o755 {
 				t.Fatalf("hook permissions = %v, want 0755", info.Mode().Perm())
 			}
 			writtenHook, err := os.ReadFile(hookPath)

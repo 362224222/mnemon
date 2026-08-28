@@ -57,7 +57,7 @@ func TestZCodeRegisterHooksPreservesUnrelatedConfig(t *testing.T) {
 	}
 	newHook := sessionStart[1].(map[string]interface{})["hooks"].([]interface{})[0].(map[string]interface{})
 	args := newHook["args"].([]interface{})
-	if newHook["type"] != "process" || newHook["command"] != "bash" || len(args) != 1 || !strings.Contains(args[0].(string), "hooks/mnemon/prime.sh") {
+	if newHook["type"] != "process" || newHook["command"] != "bash" || len(args) != 1 || !strings.Contains(filepath.ToSlash(args[0].(string)), "hooks/mnemon/prime.sh") {
 		t.Fatalf("unexpected ZCode process hook: %#v", newHook)
 	}
 	for _, event := range []string{"UserPromptSubmit", "Stop"} {

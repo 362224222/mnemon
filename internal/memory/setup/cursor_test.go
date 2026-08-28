@@ -38,7 +38,7 @@ func TestCursorRegisterHooksPreservesUnrelatedConfig(t *testing.T) {
 	if len(sessionStart) != 2 {
 		t.Fatalf("expected custom hook plus new prime hook: %#v", sessionStart)
 	}
-	if !strings.Contains(sessionStart[1].(map[string]any)["command"].(string), "hooks/mnemon/prime.sh") {
+	if !strings.Contains(filepath.ToSlash(sessionStart[1].(map[string]any)["command"].(string)), "hooks/mnemon/prime.sh") {
 		t.Fatalf("expected new prime hook, got %#v", sessionStart[1])
 	}
 	stop := hooks["stop"].([]any)

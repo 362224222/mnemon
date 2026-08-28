@@ -3,6 +3,7 @@ package setup
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -27,6 +28,7 @@ func TestPromptDirFallsBackToHomeWhenEnvUnset(t *testing.T) {
 	t.Setenv("MNEMON_DATA_DIR", "")
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
+	t.Setenv("USERPROFILE", fakeHome) // os.UserHomeDir reads USERPROFILE on Windows
 
 	got, err := promptDir()
 	if err != nil {
@@ -112,6 +114,7 @@ func TestClaudeMemoryInstructionsKeepSubagentsLeafWriters(t *testing.T) {
 func TestCollidesWithUserConfigHomeInstall(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir reads USERPROFILE on Windows
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Chdir(home)
 
@@ -127,6 +130,9 @@ func TestCollidesWithUserConfigHomeInstall(t *testing.T) {
 }
 
 func TestCollidesWithUserConfigResolvesSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows symlinks require developer mode and differ in semantics")
+	}
 	base := t.TempDir()
 	real := filepath.Join(base, "realhome")
 	link := filepath.Join(base, "linkhome")
@@ -167,6 +173,7 @@ func TestCollidesWithUserConfigHonorsClaudeConfigDir(t *testing.T) {
 func TestClaudeRegisterHooksCollisionWritesAbsoluteCommands(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir reads USERPROFILE on Windows
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Chdir(home)
 

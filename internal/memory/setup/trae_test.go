@@ -38,7 +38,7 @@ func TestTraeRegisterHooksPreservesUnrelatedConfig(t *testing.T) {
 	if len(sessionStart) != 2 {
 		t.Fatalf("expected custom hook plus new prime hook: %#v", sessionStart)
 	}
-	if !strings.Contains(sessionStart[1].(map[string]any)["hooks"].([]any)[0].(map[string]any)["command"].(string), "hooks/mnemon/prime.sh") {
+	if !strings.Contains(filepath.ToSlash(sessionStart[1].(map[string]any)["hooks"].([]any)[0].(map[string]any)["command"].(string)), "hooks/mnemon/prime.sh") {
 		t.Fatalf("expected new prime hook, got %#v", sessionStart[1])
 	}
 	if _, ok := hooks["UserPromptSubmit"]; !ok {

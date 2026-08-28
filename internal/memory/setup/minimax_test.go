@@ -58,6 +58,7 @@ func TestDetectMiniMaxCodeRecognizesCurrentAndLegacyDataDirs(t *testing.T) {
 		t.Run(dataDir, func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home) // os.UserHomeDir reads USERPROFILE on Windows
 			if err := os.Mkdir(filepath.Join(home, dataDir), 0o755); err != nil {
 				t.Fatalf("create data dir: %v", err)
 			}

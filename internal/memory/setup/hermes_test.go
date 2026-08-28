@@ -3,6 +3,7 @@ package setup
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -36,7 +37,8 @@ func TestHermesWriteSkillAndHooks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat hook: %v", err)
 	}
-	if info.Mode().Perm() != 0755 {
+	// Windows does not expose POSIX permission bits; only assert on Unix.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0755 {
 		t.Fatalf("hook permissions = %v, want 0755", info.Mode().Perm())
 	}
 }
