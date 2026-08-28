@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
 )
@@ -269,9 +268,9 @@ func validateOwnerSocket(path string, ownerUID uint32) (os.FileInfo, error) {
 }
 
 func ownerUIDOf(info os.FileInfo) (uint32, error) {
-	stat, ok := info.Sys().(*syscall.Stat_t)
+	stat, ok := fsStatOf(info)
 	if !ok {
 		return 0, errors.New("R7 Agency filesystem owner metadata is unavailable")
 	}
-	return stat.Uid, nil
+	return uint32(stat.Uid), nil
 }

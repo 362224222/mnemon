@@ -12,7 +12,6 @@ import (
 	"syscall"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
-	"golang.org/x/sys/unix"
 )
 
 func (directory *lockedJournalDirectory) load() (clientJournal, error) {
@@ -58,14 +57,13 @@ func (directory *lockedJournalDirectory) load() (clientJournal, error) {
 }
 
 func (directory *lockedJournalDirectory) entryNames() ([]string, error) {
-	fd, err := unix.Openat(int(directory.dir.Fd()), ".",
-		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	fd, err := openAtReadOnly(int(directory.dir.Fd()), ".")
 	if err != nil {
 		return nil, err
 	}
 	copyDir := os.NewFile(uintptr(fd), directory.path)
 	if copyDir == nil {
-		_ = unix.Close(fd)
+		_ = closeFD(fd)
 		return nil, errors.New("duplicate R7 client journal directory returned no file")
 	}
 	defer copyDir.Close()
@@ -84,14 +82,13 @@ func (directory *lockedJournalDirectory) readOwnerFile(name string, maximum int)
 	if filepath.Base(name) != name || maximum <= 0 {
 		return nil, errors.New("R7 client journal file name is invalid")
 	}
-	fd, err := unix.Openat(int(directory.dir.Fd()), name,
-		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	fd, err := openAtReadOnlyName(int(directory.dir.Fd()), name)
 	if err != nil {
 		return nil, fmt.Errorf("open R7 client journal: %w", err)
 	}
 	file := os.NewFile(uintptr(fd), name)
 	if file == nil {
-		_ = unix.Close(fd)
+		_ = closeFD(fd)
 		return nil, errors.New("open R7 client journal returned no file")
 	}
 	defer file.Close()
@@ -100,7 +97,7 @@ func (directory *lockedJournalDirectory) readOwnerFile(name string, maximum int)
 		return nil, err
 	}
 	uid, err := validateOwnerInfo(info, ownerFileMode, false)
-	stat, ok := info.Sys().(*syscall.Stat_t)
+	stat, ok := fsStatOf(info)
 	if err != nil || !ok || uid != directory.ownerUID || stat.Nlink != 1 {
 		return nil, errors.New("R7 client journal file identity is unsafe")
 	}
@@ -109,9 +106,8 @@ func (directory *lockedJournalDirectory) readOwnerFile(name string, maximum int)
 		clear(raw)
 		return nil, errors.New("R7 client journal exceeds its closed byte bound")
 	}
-	var current unix.Stat_t
-	if err := unix.Fstatat(int(directory.dir.Fd()), name, &current,
-		unix.AT_SYMLINK_NOFOLLOW); err != nil || !sameUnixIdentity(info.Sys(), &current) {
+	current, err := fsStatAt(int(directory.dir.Fd()), name)
+	if err != nil || !sameUnixIdentity(info, current) {
 		clear(raw)
 		return nil, errors.New("R7 client journal identity changed while reading")
 	}
@@ -139,22 +135,20 @@ func (directory *lockedJournalDirectory) publishJournal(journal clientJournal,
 	if err := directory.recoverStage(); err != nil {
 		return err
 	}
-	fd, err := unix.Openat(int(directory.dir.Fd()), journalStageName,
-		unix.O_WRONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_CREAT|unix.O_EXCL,
-		uint32(ownerFileMode))
+	fd, err := openAtWriteStage(int(directory.dir.Fd()), journalStageName)
 	if err != nil {
 		return fmt.Errorf("create R7 client journal stage: %w", err)
 	}
 	stage := os.NewFile(uintptr(fd), journalStageName)
 	if stage == nil {
-		_ = unix.Close(fd)
+		_ = closeFD(fd)
 		return errors.New("create R7 client journal stage returned no file")
 	}
 	cleanup := true
 	defer func() {
 		_ = stage.Close()
 		if cleanup {
-			_ = unix.Unlinkat(int(directory.dir.Fd()), journalStageName, 0)
+			_ = unlinkAt(int(directory.dir.Fd()), journalStageName)
 		}
 	}()
 	if _, err := stage.Write(payload); err != nil {
@@ -166,7 +160,7 @@ func (directory *lockedJournalDirectory) publishJournal(journal clientJournal,
 	if err := stage.Close(); err != nil {
 		return fmt.Errorf("close R7 client journal stage: %w", err)
 	}
-	if err := unix.Renameat(int(directory.dir.Fd()), journalStageName,
+	if err := renameAt(int(directory.dir.Fd()), journalStageName,
 		int(directory.dir.Fd()), target); err != nil {
 		return fmt.Errorf("publish R7 client journal: %w", err)
 	}
@@ -189,14 +183,12 @@ func (directory *lockedJournalDirectory) markTerminal(expected clientJournal,
 		return clientJournal{}, errors.New("R7 client journal changed before terminal transition")
 	}
 	name := terminalName(operation)
-	var stat unix.Stat_t
-	if err := unix.Fstatat(int(directory.dir.Fd()), name, &stat,
-		unix.AT_SYMLINK_NOFOLLOW); err == nil {
+	if _, err := fsStatAt(int(directory.dir.Fd()), name); err == nil {
 		return clientJournal{}, errors.New("R7 terminal journal already exists")
 	} else if !errors.Is(err, syscall.ENOENT) {
 		return clientJournal{}, err
 	}
-	if err := unix.Renameat(int(directory.dir.Fd()), journalActiveName,
+	if err := renameAt(int(directory.dir.Fd()), journalActiveName,
 		int(directory.dir.Fd()), name); err != nil {
 		return clientJournal{}, fmt.Errorf("publish R7 terminal journal: %w", err)
 	}
@@ -261,7 +253,7 @@ func (directory *lockedJournalDirectory) remove(expected clientJournal) error {
 	if current.fileName != expected.fileName || current.fileDigest != expected.fileDigest {
 		return errors.New("R7 client journal changed before removal")
 	}
-	if err := unix.Unlinkat(int(directory.dir.Fd()), current.fileName, 0); err != nil {
+	if err := unlinkAt(int(directory.dir.Fd()), current.fileName); err != nil {
 		return fmt.Errorf("remove R7 client journal: %w", err)
 	}
 	return directory.dir.Sync()

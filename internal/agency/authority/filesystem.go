@@ -6,9 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
-
-	"golang.org/x/sys/unix"
 )
 
 type privateFileSnapshot struct {
@@ -150,7 +147,7 @@ func validatePrivateFileInfo(info os.FileInfo, name string) error {
 	if err := validateCurrentOwner(info); err != nil {
 		return fmt.Errorf("open authority store: %s: %w", name, err)
 	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
+	stat, ok := fsStatOf(info)
 	if !ok || stat.Nlink != 1 {
 		return fmt.Errorf("open authority store: %s must have exactly one filesystem link", name)
 	}
@@ -158,11 +155,11 @@ func validatePrivateFileInfo(info os.FileInfo, name string) error {
 }
 
 func validateCurrentOwner(info os.FileInfo) error {
-	stat, ok := info.Sys().(*syscall.Stat_t)
+	stat, ok := fsStatOf(info)
 	if !ok {
 		return errors.New("filesystem owner is unavailable")
 	}
-	if uint32(stat.Uid) != uint32(os.Geteuid()) {
+	if stat.Uid != uint32(os.Geteuid()) {
 		return errors.New("path is not owned by the current effective user")
 	}
 	return nil
@@ -171,15 +168,14 @@ func validateCurrentOwner(info os.FileInfo) error {
 func (plan *authorityPathPlan) acquireWriterLock() (*os.File, error) {
 	path := plan.databasePath + ".writer.lock"
 	expected := plan.files[path]
-	flags := unix.O_RDWR | unix.O_CLOEXEC | unix.O_NOFOLLOW
 	if expected.exists {
-		fd, err := unix.Open(path, flags, uint32(privateFileMode))
+		fd, err := openLockGuard(path, false)
 		if err != nil {
 			return nil, fmt.Errorf("open authority store: open writer guard: %w", err)
 		}
 		return plan.finishWriterLock(os.NewFile(uintptr(fd), path), expected, false)
 	}
-	fd, err := unix.Open(path, flags|unix.O_CREAT|unix.O_EXCL, uint32(privateFileMode))
+	fd, err := openLockGuard(path, true)
 	if err != nil {
 		return nil, fmt.Errorf("open authority store: create writer guard: %w", err)
 	}
@@ -215,9 +211,9 @@ func (plan *authorityPathPlan) finishWriterLock(file *os.File, expected privateF
 		_ = file.Close()
 		return nil, err
 	}
-	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+	if err := flockExNB(int(file.Fd())); err != nil {
 		_ = file.Close()
-		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
+		if isLockBusy(err) {
 			return nil, ErrWriterActive
 		}
 		return nil, fmt.Errorf("open authority store: lock writer guard: %w", err)
@@ -235,15 +231,13 @@ func (plan *authorityPathPlan) prepareDatabaseFile() error {
 	if expected.exists {
 		return verifyPrivateFileIdentity(plan.databasePath, expected.info)
 	}
-	fd, err := unix.Open(plan.databasePath,
-		unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW,
-		uint32(privateFileMode))
+	fd, err := openDBFile(plan.databasePath)
 	if err != nil {
 		return fmt.Errorf("open authority store: create database: %w", err)
 	}
 	file := os.NewFile(uintptr(fd), plan.databasePath)
 	if file == nil {
-		_ = unix.Close(fd)
+		_ = closeFD(fd)
 		return errors.New("open authority store: create database returned no file")
 	}
 	if err := file.Chmod(privateFileMode); err != nil {
@@ -340,5 +334,5 @@ func releaseWriterLock(file *os.File) error {
 	if file == nil {
 		return nil
 	}
-	return errors.Join(unix.Flock(int(file.Fd()), unix.LOCK_UN), file.Close())
+	return errors.Join(flockUn(int(file.Fd())), file.Close())
 }

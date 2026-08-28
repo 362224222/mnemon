@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/mnemon-dev/mnemon/internal/agency"
 )
@@ -283,15 +282,15 @@ func sameSnapshot(left, right os.FileInfo) bool {
 }
 
 func linkCount(info os.FileInfo) uint64 {
-	stat, ok := info.Sys().(*syscall.Stat_t)
+	stat, ok := fsStatOf(info)
 	if !ok {
 		return 0
 	}
-	return uint64(stat.Nlink)
+	return stat.Nlink
 }
 
 func ownedByCurrentUser(info os.FileInfo) bool {
-	stat, ok := info.Sys().(*syscall.Stat_t)
+	stat, ok := fsStatOf(info)
 	return ok && int(stat.Uid) == os.Geteuid()
 }
 

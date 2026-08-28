@@ -7,8 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
-
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -81,10 +79,10 @@ func (store *journalStore) withLock(create bool,
 		return err
 	}
 	defer directory.close()
-	if err := unix.Flock(int(directory.lock.Fd()), unix.LOCK_EX); err != nil {
+	if err := flockEx(int(directory.lock.Fd())); err != nil {
 		return fmt.Errorf("lock R7 client journal: %w", err)
 	}
-	defer unix.Flock(int(directory.lock.Fd()), unix.LOCK_UN) //nolint:errcheck // close also releases it.
+	defer flockUn(int(directory.lock.Fd())) //nolint:errcheck // close also releases it.
 	if err := directory.validate(); err != nil {
 		return err
 	}
@@ -106,14 +104,13 @@ func openJournalDirectory(nodeState string, create bool) (*lockedJournalDirector
 	if err != nil {
 		return nil, fmt.Errorf("inspect R7 Node state: %w", err)
 	}
-	nodeFD, err := unix.Open(nodeState,
-		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	nodeFD, err := openDirReadOnly(nodeState)
 	if err != nil {
 		return nil, fmt.Errorf("open R7 Node state: %w", err)
 	}
 	node := os.NewFile(uintptr(nodeFD), nodeState)
 	if node == nil {
-		_ = unix.Close(nodeFD)
+		_ = closeFD(nodeFD)
 		return nil, errors.New("open R7 Node state returned no directory")
 	}
 	defer node.Close()
@@ -123,8 +120,7 @@ func openJournalDirectory(nodeState string, create bool) (*lockedJournalDirector
 	if err := ensureJournalDirectoryEntry(node, ownerUID, create); err != nil {
 		return nil, err
 	}
-	dirFD, err := unix.Openat(int(node.Fd()), journalDirectoryName,
-		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	dirFD, err := openAtReadOnly(int(node.Fd()), journalDirectoryName)
 	if errors.Is(err, syscall.ENOENT) && !create {
 		return nil, errJournalAbsent
 	}
@@ -134,23 +130,22 @@ func openJournalDirectory(nodeState string, create bool) (*lockedJournalDirector
 	dirPath := filepath.Join(nodeState, journalDirectoryName)
 	dir := os.NewFile(uintptr(dirFD), dirPath)
 	if dir == nil {
-		_ = unix.Close(dirFD)
+		_ = closeFD(dirFD)
 		return nil, errors.New("open R7 client journal returned no directory")
 	}
 	fail := func(err error) (*lockedJournalDirectory, error) {
 		_ = dir.Close()
 		return nil, err
 	}
-	var entry unix.Stat_t
-	if err := unix.Fstatat(int(node.Fd()), journalDirectoryName, &entry,
-		unix.AT_SYMLINK_NOFOLLOW); err != nil {
+	entry, err := fsStatAt(int(node.Fd()), journalDirectoryName)
+	if err != nil {
 		return fail(fmt.Errorf("inspect R7 client journal directory: %w", err))
 	}
-	if err := validateUnixOwner(&entry, ownerDirectoryMode, true, ownerUID); err != nil {
+	if err := validateUnixOwner(entry, ownerDirectoryMode, true, ownerUID); err != nil {
 		return fail(err)
 	}
 	opened, err := dir.Stat()
-	if err != nil || !sameUnixIdentity(opened.Sys(), &entry) {
+	if err != nil || !sameUnixIdentity(opened, entry) {
 		if err == nil {
 			err = errors.New("R7 client journal directory identity changed")
 		}
@@ -164,35 +159,33 @@ func openJournalDirectory(nodeState string, create bool) (*lockedJournalDirector
 }
 
 func ensureJournalDirectoryEntry(node *os.File, ownerUID uint32, create bool) error {
-	var entry unix.Stat_t
-	err := unix.Fstatat(int(node.Fd()), journalDirectoryName, &entry, unix.AT_SYMLINK_NOFOLLOW)
+	entry, err := fsStatAt(int(node.Fd()), journalDirectoryName)
 	if errors.Is(err, syscall.ENOENT) && !create {
 		return errJournalAbsent
 	}
 	if errors.Is(err, syscall.ENOENT) {
-		if err := unix.Mkdirat(int(node.Fd()), journalDirectoryName, uint32(ownerDirectoryMode)); err != nil {
+		if err := mkdirAt(int(node.Fd()), journalDirectoryName); err != nil {
 			return fmt.Errorf("create R7 client journal directory: %w", err)
 		}
 		if err := node.Sync(); err != nil {
 			return fmt.Errorf("persist R7 client journal directory: %w", err)
 		}
-		err = unix.Fstatat(int(node.Fd()), journalDirectoryName, &entry, unix.AT_SYMLINK_NOFOLLOW)
+		entry, err = fsStatAt(int(node.Fd()), journalDirectoryName)
 	}
 	if err != nil {
 		return fmt.Errorf("inspect R7 client journal directory: %w", err)
 	}
-	return validateUnixOwner(&entry, ownerDirectoryMode, true, ownerUID)
+	return validateUnixOwner(entry, ownerDirectoryMode, true, ownerUID)
 }
 
 func openJournalLock(dir *os.File, ownerUID uint32) (*os.File, error) {
-	fd, err := unix.Openat(int(dir.Fd()), journalLockName,
-		unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_CREAT, uint32(ownerFileMode))
+	fd, err := openAtLock(int(dir.Fd()), journalLockName, true)
 	if err != nil {
 		return nil, fmt.Errorf("open R7 client journal lock: %w", err)
 	}
 	lock := os.NewFile(uintptr(fd), journalLockName)
 	if lock == nil {
-		_ = unix.Close(fd)
+		_ = closeFD(fd)
 		return nil, errors.New("open R7 client journal lock returned no file")
 	}
 	info, err := lock.Stat()
@@ -204,7 +197,7 @@ func openJournalLock(dir *os.File, ownerUID uint32) (*os.File, error) {
 		_ = lock.Close()
 		return nil, fmt.Errorf("inspect R7 client journal lock: %w", err)
 	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
+	stat, ok := fsStatOf(info)
 	if !ok || stat.Uid != ownerUID || stat.Nlink != 1 {
 		_ = lock.Close()
 		return nil, errors.New("R7 client journal lock identity is unsafe")
@@ -249,19 +242,17 @@ func (directory *lockedJournalDirectory) close() {
 }
 
 func (directory *lockedJournalDirectory) recoverStage() error {
-	var stage unix.Stat_t
-	err := unix.Fstatat(int(directory.dir.Fd()), journalStageName, &stage,
-		unix.AT_SYMLINK_NOFOLLOW)
+	stage, err := fsStatAt(int(directory.dir.Fd()), journalStageName)
 	if errors.Is(err, syscall.ENOENT) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("inspect R7 client journal stage: %w", err)
 	}
-	if err := validateUnixOwner(&stage, ownerFileMode, false, directory.ownerUID); err != nil || stage.Nlink != 1 {
+	if err := validateUnixOwner(stage, ownerFileMode, false, directory.ownerUID); err != nil || stage.Nlink != 1 {
 		return errors.New("R7 client journal stage is unsafe")
 	}
-	if err := unix.Unlinkat(int(directory.dir.Fd()), journalStageName, 0); err != nil {
+	if err := unlinkAt(int(directory.dir.Fd()), journalStageName); err != nil {
 		return fmt.Errorf("remove interrupted R7 client journal stage: %w", err)
 	}
 	return directory.dir.Sync()
@@ -294,28 +285,10 @@ func validateOwnerInfo(info os.FileInfo, mode os.FileMode, directory bool) (uint
 	if directory && !info.IsDir() || !directory && !info.Mode().IsRegular() {
 		return 0, errors.New("owner path has the wrong type")
 	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
+	stat, ok := fsStatOf(info)
 	if !ok || stat.Uid != uint32(os.Geteuid()) {
 		return 0, errors.New("owner path has the wrong owner")
 	}
 	return stat.Uid, nil
 }
 
-func validateUnixOwner(stat *unix.Stat_t, mode os.FileMode, directory bool,
-	ownerUID uint32,
-) error {
-	if stat == nil || stat.Uid != ownerUID || os.FileMode(stat.Mode).Perm() != mode {
-		return errors.New("R7 client journal entry has unsafe ownership or mode")
-	}
-	fileType := stat.Mode & unix.S_IFMT
-	if directory && fileType != unix.S_IFDIR || !directory && fileType != unix.S_IFREG {
-		return errors.New("R7 client journal entry has the wrong type")
-	}
-	return nil
-}
-
-func sameUnixIdentity(info any, stat *unix.Stat_t) bool {
-	opened, ok := info.(*syscall.Stat_t)
-	return ok && stat != nil && uint64(opened.Dev) == uint64(stat.Dev) &&
-		uint64(opened.Ino) == uint64(stat.Ino)
-}

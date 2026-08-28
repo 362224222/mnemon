@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 )
 
 const maxProjectedFileBytes = 8 << 10
@@ -327,7 +326,7 @@ func sameFileSnapshot(left, right os.FileInfo) bool {
 }
 
 func ownedByCurrentUser(info os.FileInfo) bool {
-	stat, ok := info.Sys().(*syscall.Stat_t)
+	stat, ok := fsStatOf(info)
 	return ok && int(stat.Uid) == os.Geteuid()
 }
 
