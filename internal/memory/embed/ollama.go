@@ -105,8 +105,11 @@ func NewClientWithModel(model string) *Client {
 		http: &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
-				// Bypass system proxy for localhost connections.
-				Proxy: nil,
+				// Honor proxy env for remote endpoints (credential
+				// gateways inject auth at the proxy boundary); bypass
+				// it for localhost/loopback servers, where a stray
+				// HTTPS_PROXY would only get in the way.
+				Proxy: proxyFunc(endpoint),
 				DialContext: (&net.Dialer{
 					Timeout:   5 * time.Second,
 					KeepAlive: 30 * time.Second,
@@ -114,6 +117,20 @@ func NewClientWithModel(model string) *Client {
 			},
 		},
 	}
+}
+
+// proxyFunc returns an HTTP proxy resolver for the embedding endpoint.
+// Loopback endpoints never use a proxy; everything else follows the
+// standard HTTPS_PROXY/HTTP_PROXY/NO_PROXY environment resolution.
+func proxyFunc(endpoint string) func(*http.Request) (*url.URL, error) {
+	if u, err := url.Parse(endpoint); err == nil {
+		if host := u.Hostname(); host == "localhost" || net.ParseIP(host).IsLoopback() {
+			// Never proxy the loopback: return an explicit no-proxy
+			// resolver rather than nil (a nil Proxy panics when invoked).
+			return func(*http.Request) (*url.URL, error) { return nil, nil }
+		}
+	}
+	return http.ProxyFromEnvironment
 }
 
 // Protocol returns the active wire protocol.
