@@ -228,6 +228,25 @@ assert_jq "importance is 4"        "$OUT" '.importance' '4'
 assert_contains "tags include tool" "$OUT" '"tool"'
 assert_contains "entities has Qdrant" "$OUT" '"Qdrant"'
 
+step "readonly recall — absolute and relative data paths preserve the database"
+cp "$TESTDIR/data/default/mnemon.db" "$TESTDATA/readonly-before.db"
+OUT=$("$M" --data-dir "$TESTDIR" --store default --readonly recall "" --basic --limit 100000)
+assert_jq "readonly absolute path finds the seed" "$OUT" '.[0].id' "$ID1"
+OUT=$(cd "$TESTDATA" && "$M" --data-dir "m1" --store default --readonly recall "Qdrant" --basic --limit 6)
+assert_jq "readonly relative path finds the seed" "$OUT" '.[0].id' "$ID1"
+if cmp -s "$TESTDATA/readonly-before.db" "$TESTDIR/data/default/mnemon.db"; then
+  pass "readonly recall preserves database bytes" "(including counters and oplog)"
+else
+  fail "readonly recall preserves database bytes" "(database changed)"
+fi
+for suffix in -wal -shm -journal; do
+  if [ -e "$TESTDIR/data/default/mnemon.db$suffix" ]; then
+    fail "readonly recall creates no $suffix sidecar" "(sidecar exists)"
+  else
+    pass "readonly recall creates no $suffix sidecar" "(absent)"
+  fi
+done
+
 step "recall — keyword search (compact default)"
 OUT=$($M --data-dir "$TESTDIR" recall "Qdrant")
 show_json "$OUT" 10
@@ -235,6 +254,19 @@ assert_contains "found Qdrant insight" "$OUT" "User prefers Qdrant"
 assert_contains "compact has confidence" "$OUT" '"confidence"'
 assert_not_contains "compact omits signals" "$OUT" '"signals"'
 assert_not_contains "compact omits anchor_count" "$OUT" '"anchor_count"'
+
+step "recall --brief → show — bounded discovery then full content"
+OUT=$($M --data-dir "$TESTDIR" recall "Qdrant" --brief --excerpt-chars 20)
+assert_jq "brief excerpt is bounded" "$OUT" '.results[0].excerpt | length <= 20' 'true'
+assert_not_contains "brief omits full content field" "$OUT" '"content"'
+assert_contains "brief points to full lookup" "$OUT" 'mnemon show <id>'
+SHOW_OUT=$($M --data-dir "$TESTDIR" show "$ID1")
+assert_contains "show restores full content" "$SHOW_OUT" 'User prefers Qdrant for vector DB'
+assert_jq "show returns requested id" "$SHOW_OUT" '.id' "$ID1"
+OUT=$($M --data-dir "$TESTDIR" recall "Qdrant" --basic --brief --excerpt-chars 20)
+assert_jq "basic brief uses the same bounded projection" "$OUT" '.results[0].excerpt | length <= 20' 'true'
+OUT=$($M --data-dir "$TESTDIR" recall "Qdrant" --brief --verbose 2>&1 || true)
+assert_contains "brief and verbose are mutually exclusive" "$OUT" 'cannot be used together'
 
 step "recall — no match returns sparse hint (compact)"
 OUT=$($M --data-dir "$TESTDIR" recall "nonexistent_xyz")
@@ -343,6 +375,11 @@ OUT=$($M --data-dir "$TESTDIR2" search "Rust performance")
 show_json "$OUT" 15
 assert_contains "finds decision insight" "$OUT" "Chose Qdrant"
 assert_contains "has score field"        "$OUT" '"score"'
+
+step "search --brief — bounded discovery projection"
+OUT=$($M --data-dir "$TESTDIR2" search "Rust performance" --brief --excerpt-chars 18)
+assert_jq "search brief excerpt is bounded" "$OUT" '.results[0].excerpt | length <= 18' 'true'
+assert_contains "search brief points to full lookup" "$OUT" 'mnemon show <id>'
 
 step "search — no match returns []"
 OUT=$($M --data-dir "$TESTDIR2" search "zzz_no_match_zzz")
@@ -764,14 +801,21 @@ banner "Milestone 10: Auto-Prune Lifecycle"
 TESTDIR10="$TESTDATA/m10"
 mkdir -p "$TESTDIR10"
 
-step "auto-prune — insert 5 low-imp + 2 high-imp insights (cap=4 for test)"
-# We'll use a small cap to test pruning. The cap is hardcoded at 1000 in production,
-# so here we test that the mechanism WORKS by checking auto_pruned=0 under cap.
+step "auto-prune — default grace protects a same-second write burst"
 for i in 1 2 3; do
-  $M --data-dir "$TESTDIR10" remember --no-diff "Low importance note $i" --cat general --imp 1 > /dev/null
+  OUT=$(MNEMON_MAX_INSIGHTS=2 $M --data-dir "$TESTDIR10" remember --no-diff "Low importance note $i" --cat general --imp 1)
 done
-OUT=$($M --data-dir "$TESTDIR10" remember --no-diff "High importance decision" --cat decision --imp 5)
-assert_jq "auto_pruned is 0 under cap" "$OUT" '.auto_pruned' '0'
+assert_jq "newborn memories are not pruned" "$OUT" '.auto_pruned' '0'
+assert_jq "newborn prune id list is empty" "$OUT" '.auto_pruned_ids | length' '0'
+
+step "auto-prune — explicit zero grace returns ids and durable audit rows"
+OUT=$(MNEMON_MAX_INSIGHTS=2 MNEMON_AUTO_PRUNE_MIN_AGE=0 $M --data-dir "$TESTDIR10" remember --no-diff "High importance decision" --cat decision --imp 5)
+assert_jq "two excess memories are pruned" "$OUT" '.auto_pruned' '2'
+assert_jq "pruned ids match count" "$OUT" '.auto_pruned_ids | length' '2'
+PRUNED_PREFIX=$(echo "$OUT" | jq -r '.auto_pruned_ids[0][0:8]')
+LOG_OUT=$($M --data-dir "$TESTDIR10" log --limit 20)
+assert_contains "auto-prune operation is visible" "$LOG_OUT" "auto-prune"
+assert_contains "auto-prune log names returned id" "$LOG_OUT" "$PRUNED_PREFIX"
 
 step "auto-prune — effective_importance varies by importance level"
 # imp=5 should have much higher EI than imp=1

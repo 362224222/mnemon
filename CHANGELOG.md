@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `npm install --global @mnemon-dev/mnemon` is now the canonical CLI install
+  path. Tagged releases publish pinned native artifacts for macOS, Linux, and
+  Windows before advancing the npm `latest` or `next` channel.
+- `mnemon update` upgrades an npm-managed installation through its owning npm
+  prefix. The npm launcher performs replacement without keeping the native
+  process running, including on Windows. Installations from another source fail
+  closed with a one-time npm migration command instead of silently creating a
+  shadowed executable.
+- `mnemon recall --brief` and `mnemon search --brief` now provide a bounded,
+  unindented JSON discovery projection. `--excerpt-chars` controls the per-item
+  excerpt limit, and `mnemon show <id>` retrieves one selected insight in full.
 - `mnemon setup --target zcode` now installs a ZCode-compatible Mnemon skill.
   With `--global`, setup also registers user-level `SessionStart`,
   `UserPromptSubmit`, and `Stop` process hooks in
@@ -35,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Tests
 
+- Added unit and CLI end-to-end coverage for Unicode-safe excerpt bounds,
+  compact encoding, basic and smart recall, search, full-result lookup, and
+  incompatible output flags.
 - Added ZCode coverage for embedded artifacts, POSIX and Windows hook
   registration, unrelated configuration preservation, and scoped eject
   cleanup.
@@ -46,6 +60,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - The integration intentionally stays skill-only. MiniMax Code 3.0.65 ships a
   hook registry, but its current local Agent V2 turn path does not dispatch the
   user-prompt lifecycle event needed for reliable automatic recall.
+
+## [0.2.7] - 2026-09-01
+
+### Fixed
+
+- `--readonly recall` now resolves and encodes SQLite file URI paths correctly
+  on Windows and when `--data-dir` is relative to the current directory. This
+  fixes the misleading `SQL logic error: out of memory (1)` failure reported
+  in #123.
+- Readonly queries retain `mode=ro` and `immutable=1`: they reject database
+  writes, preserve recall counters and oplog, and create no WAL/SHM sidecars.
+
+### Tests
+
+- Added real SQLite and CLI regressions for absolute, relative, and Windows
+  drive-relative paths, including spaces, Unicode, `#`, and `%`.
+- Native Windows CI now runs the Memory command and storage tests in addition
+  to the product build and command-boundary tests.
 
 ## [0.1.15] - 2026-06-18
 

@@ -97,7 +97,7 @@ func TestOpenAIEmbed(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := newClientWithModel("", EmbedConfigFile{Endpoint: srv.URL + "/v1", Provider: "openai", APIKey: "sk-test", Model: "bge-m3-mlx-8bit"})
+	c := newClientWithModel("", EmbedConfigFile{Endpoint: srv.URL + "/v1", Provider: "openai", APIKey: "sk-test", Model: "bge-m3-mlx-8bit", Dimensions: 1024})
 	vec, err := c.Embed("跨会话记忆测试")
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -110,6 +110,9 @@ func TestOpenAIEmbed(t *testing.T) {
 	}
 	if gotBody["model"] != "bge-m3-mlx-8bit" {
 		t.Errorf("expected model in body, got %v", gotBody["model"])
+	}
+	if gotBody["dimensions"] != float64(1024) {
+		t.Errorf("expected dimensions in body, got %v", gotBody["dimensions"])
 	}
 	if input, _ := gotBody["input"].(string); input != "跨会话记忆测试" {
 		t.Errorf("expected input text, got %v", gotBody["input"])
@@ -174,5 +177,123 @@ func TestOllamaProtocolKeepsLocalDefault(t *testing.T) {
 	}
 	if c.Protocol() != ProtocolOllama {
 		t.Fatalf("expected ollama protocol, got %q", c.Protocol())
+	}
+}
+
+func TestOpenAIAvailableFallsBackWithoutModelsRoute(t *testing.T) {
+	// OpenAI-compatible servers without a models route (e.g. Voyage AI)
+	// must still be reported available via an embeddings round-trip.
+	var embedRequests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			http.NotFound(w, r)
+		case "/v1/embeddings":
+			if r.Method != http.MethodPost {
+				t.Errorf("expected POST /v1/embeddings, got %s", r.Method)
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer sk-test" {
+				t.Errorf("expected Bearer sk-test on fallback probe, got %q", got)
+			}
+			embedRequests++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"embedding":[1.0,2.0]}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := newClientWithModel("", EmbedConfigFile{Endpoint: srv.URL + "/v1", Provider: "openai", APIKey: "sk-test"})
+	if !c.Available() {
+		t.Fatal("expected Available() true when /v1/models is 404 but /v1/embeddings works")
+	}
+	if embedRequests != 1 {
+		t.Fatalf("expected exactly one embedding probe, got %d", embedRequests)
+	}
+}
+
+func TestOpenAIAvailableFallbackRejectsAuthFailure(t *testing.T) {
+	// A 404 models route plus a 401 embeddings route must report
+	// unavailable: availability follows the endpoint that matters.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			http.NotFound(w, r)
+		case "/v1/embeddings":
+			w.WriteHeader(http.StatusUnauthorized)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := newClientWithModel("", EmbedConfigFile{Endpoint: srv.URL + "/v1", Provider: "openai", APIKey: "sk-bad"})
+	if c.Available() {
+		t.Fatal("expected Available() false when fallback probe returns 401")
+	}
+}
+
+func TestOpenAIAvailableNoFallbackOnServerError(t *testing.T) {
+	// Only a missing models route (404/405/501) triggers the fallback.
+	// A 500 models route must report unavailable without an embeddings call.
+	var embedRequests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			w.WriteHeader(http.StatusInternalServerError)
+		case "/v1/embeddings":
+			embedRequests++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"embedding":[1.0]}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := newClientWithModel("", EmbedConfigFile{Endpoint: srv.URL + "/v1", Provider: "openai"})
+	if c.Available() {
+		t.Fatal("expected Available() false for 500 models route")
+	}
+	if embedRequests != 0 {
+		t.Fatalf("expected no embedding probe after 500 models route, got %d", embedRequests)
+	}
+}
+
+func TestOpenAIProxyEnvHonoredForRemoteEndpoints(t *testing.T) {
+	// Remote endpoints must resolve their proxy from the environment:
+	// credential gateways inject auth at the proxy boundary.
+	t.Setenv("HTTPS_PROXY", "http://proxy.example.test:3128")
+	c := newClientWithModel("", EmbedConfigFile{Endpoint: "http://remote.example.test:18000/v1", Provider: "openai"})
+	req, err := http.NewRequest(http.MethodGet, "https://api.example.test/v1/models", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyURL, err := c.http.Transport.(*http.Transport).Proxy(req)
+	if err != nil {
+		t.Fatalf("resolve proxy: %v", err)
+	}
+	if proxyURL == nil || proxyURL.Host != "proxy.example.test:3128" {
+		t.Fatalf("expected env proxy for remote endpoint, got %v", proxyURL)
+	}
+}
+
+func TestOllamaLoopbackBypassesProxyEnv(t *testing.T) {
+	// A loopback endpoint must not be routed through an environment
+	// proxy, even when HTTPS_PROXY is set (local Ollama behind a stray
+	// corporate proxy would otherwise break).
+	t.Setenv("HTTPS_PROXY", "http://proxy.example.test:3128")
+	c := newClientWithModel("", EmbedConfigFile{Endpoint: "http://127.0.0.1:11434"})
+	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:11434/api/tags", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyURL, err := c.http.Transport.(*http.Transport).Proxy(req)
+	if err != nil {
+		t.Fatalf("resolve proxy: %v", err)
+	}
+	if proxyURL != nil {
+		t.Fatalf("expected no proxy for loopback endpoint, got %v", proxyURL)
 	}
 }

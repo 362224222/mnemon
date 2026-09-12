@@ -13,8 +13,38 @@ These root flags configure Memory commands:
 | `--store <name>` | (auto) | Named memory store (overrides `MNEMON_STORE` and active file) |
 | `--data-dir <path>` | `~/.mnemon` | Base data directory |
 | `--embed-model <name>` | `nomic-embed-text` | Embedding model (overrides the model in `embed.yml`) |
-| `--readonly` | `false` | Open the Memory database read-only, without creating WAL files |
+| `--readonly` | `false` | Open an immutable Memory database snapshot; reject write commands and create no WAL files |
 | `--version` | | Print version and exit |
+
+`--readonly` is intended for a static database snapshot on a read-only mount.
+It rejects commands that mutate Memory data and suppresses incidental recall
+counters/oplog writes. Do not use it to follow a database another process is
+actively changing; immutable snapshots deliberately ignore concurrent WAL
+updates. Pass a filesystem path to `--data-dir`, including Windows drive-letter
+paths or paths relative to the current directory. Mnemon resolves and encodes
+the read-only SQLite file URI internally; do not prepend `file:` yourself.
+
+---
+
+## CLI Updates
+
+The canonical npm installation can update itself to the package tagged
+`latest`:
+
+```bash
+mnemon update
+```
+
+The npm launcher proves that the active package belongs to the same global npm
+prefix before invoking npm. It fails closed when `mnemon` came from Homebrew,
+`go install`, a source build, another Node package manager, or a different npm
+prefix, preventing a second installation from being created silently. Migrate
+once with `npm install --global @mnemon-dev/mnemon@latest`, then make sure that
+npm's global bin directory is the first `mnemon` on `PATH`.
+
+Updating replaces only the CLI package. It does not modify Memory data or
+silently rewrite installed host integrations. Review release notes and rerun
+`mnemon setup` when an integration release explicitly requires a refresh.
 
 ---
 
@@ -79,6 +109,10 @@ mnemon remember "Raw note" --no-diff
 # Recall — intent-aware graph-enhanced retrieval (default: compact output)
 mnemon recall "vector database" --limit 10
 
+# Discovery-only recall — short excerpts, then fetch one full result by ID
+mnemon recall "vector database" --brief --excerpt-chars 160
+mnemon show <id>
+
 # Recall with full verbose output (signals, meta, timestamps)
 mnemon recall "vector database" --verbose
 
@@ -93,6 +127,7 @@ mnemon recall "auth" --basic
 
 # Search — token-scored keyword search
 mnemon search "authentication" --limit 10
+mnemon search "authentication" --brief --excerpt-chars 160
 
 # Import — bulk-import a memory draft file (see docs/IMPORT.md for schema and LLM prompt)
 mnemon import memory_draft.json
@@ -124,6 +159,8 @@ mnemon forget <id>
 | `--cat` | | Filter by category |
 | `--source` | | Filter by source |
 | `--basic` | `false` | Use simple SQL LIKE matching instead of smart recall |
+| `--brief` | `false` | Emit compact JSON with short excerpts for discovery; fetch selected full content with `mnemon show <id>` |
+| `--excerpt-chars` | `240` | Maximum Unicode characters per `--brief` excerpt |
 | `--verbose` | `false` | Output full recall response (signals, meta, timestamps) |
 
 The default compact output is optimized for LLM/agent consumption. It includes
@@ -131,6 +168,11 @@ The default compact output is optimized for LLM/agent consumption. It includes
 and `score`. Use `--verbose` to restore the full payload with signals, traversal
 metadata, and timestamps. The confidence label is only emitted in compact mode;
 verbose payloads return the raw score for callers that prefer their own thresholds.
+For large memories, `--brief` is a smaller discovery projection: it flattens
+whitespace, caps each excerpt, emits unindented JSON, and includes one
+`detail_command` hint. `search` supports the same two flags. JSON remains the
+machine-readable interchange format; the opt-in projection avoids changing
+existing parsers or adopting a draft serialization format.
 
 ### Graph Operations
 
@@ -243,6 +285,13 @@ Nodes are colored by category (decision, fact, insight, preference, context); ed
 | `MNEMON_DATA_DIR` | `~/.mnemon` | Base data directory |
 | `MNEMON_STORE` | `default` | Active named store |
 | `MNEMON_MAX_INSIGHTS` | `1000` | Active-insight ceiling before auto-pruning starts; `0` disables auto-pruning |
+| `MNEMON_AUTO_PRUNE_MIN_AGE` | `24h` | Minimum age before automatic pruning; accepts durations such as `24h`, integer days such as `7d`, or `0` to disable the grace period |
+
+Auto-prune may temporarily leave the active count above the ceiling when every
+eligible insight is still inside the grace period. Age is measured from local
+store insertion, so newly imported historical memories are protected too. Each deletion is soft,
+commits atomically with a `prune` oplog entry, and is returned by ID in
+`auto_pruned_ids` alongside the existing `auto_pruned` count.
 
 ---
 

@@ -2,16 +2,20 @@
   <img src="docs/logo/logo.svg" width="160" height="160" alt="Mnemon Logo" />
 </p>
 
-# Mnemon
+<h1 align="center">Mnemon</h1>
 
-**English** | [中文](docs/zh/README.md)
+<p align="center"><strong>English</strong> · <a href="docs/zh/README.md">中文</a></p>
 
-**LLM-supervised persistent memory for AI agents.**
+<p align="center">
+  <a href="https://www.npmjs.com/package/@mnemon-dev/mnemon"><img alt="npm version" src="https://img.shields.io/npm/v/@mnemon-dev/mnemon?label=npm" /></a>
+  <a href="https://github.com/mnemon-dev/mnemon/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/mnemon-dev/mnemon" /></a>
+  <a href="https://github.com/mnemon-dev/mnemon/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/mnemon-dev/mnemon?label=stars" /></a>
+  <a href="https://go.dev/"><img alt="Go 1.24+" src="https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&amp;logoColor=white" /></a>
+  <a href="https://github.com/mnemon-dev/mnemon/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/mnemon-dev/mnemon/actions/workflows/ci.yml/badge.svg" /></a>
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg" /></a>
+</p>
 
-[![Go 1.24+](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![CI](https://github.com/mnemon-dev/mnemon/actions/workflows/ci.yml/badge.svg)](https://github.com/mnemon-dev/mnemon/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/mnemon-dev/mnemon)](https://goreportcard.com/report/github.com/mnemon-dev/mnemon)
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+<p align="center"><strong>LLM-supervised persistent memory for AI agents.</strong></p>
 
 ---
 
@@ -59,17 +63,34 @@ See [Design & Architecture](docs/DESIGN.md) for details.
 
 ### Install
 
-**Homebrew Cask** (macOS):
+**npm** (recommended; macOS / Linux / Windows, Node.js 22+):
+
+```bash
+npm install --global @mnemon-dev/mnemon
+```
+
+Upgrade the npm-managed CLI at any time:
+
+```bash
+mnemon update
+```
+
+The npm package installs the matching native Go executable for the host OS and
+CPU. Mnemon's engine remains a single native binary; Node.js is used only by
+the npm launcher and package manager.
+
+**Alternative installers**:
 
 ```bash
 brew install --cask mnemon-dev/tap/mnemon
-```
-
-**Go install** (macOS / Linux / Windows):
-
-```bash
 go install github.com/mnemon-dev/mnemon@latest
 ```
+
+Homebrew, `go install`, source builds, and other Node package managers must
+continue to use their original installation method. To migrate one of these
+installations, run the npm install command once and ensure the npm global bin
+directory precedes the old executable on `PATH`; subsequent `mnemon update`
+calls are npm-managed.
 
 Windows supports the core Memory commands. Agency remains unavailable on
 Windows until its local authority boundary has native Windows security.
@@ -446,6 +467,16 @@ Mnemon architecture.
 | `MNEMON_DATA_DIR` | `~/.mnemon` | Base data directory |
 | `MNEMON_STORE` | *(active file or `default`)* | Named memory store for data isolation |
 
+**Retention**:
+
+| Environment Variable | Default | Description |
+|---|---|---|
+| `MNEMON_MAX_INSIGHTS` | `1000` | Active-insight ceiling; `0` disables automatic pruning |
+| `MNEMON_AUTO_PRUNE_MIN_AGE` | `24h` | Grace period before an insight can be auto-pruned; accepts `24h`, `7d`, or `0` |
+
+Each automatic deletion is soft, appears in the oplog as a `prune` operation, and is
+reported by ID in the triggering command's `auto_pruned_ids` field.
+
 **Embedding** (only relevant if using embeddings) — configured through an
 `embed.yml` file placed next to the `mnemon` executable, or in the working
 directory. Environment variables are not used:
@@ -460,7 +491,10 @@ directory. Environment variables are not used:
 
 The embedding client speaks the Ollama API by default and the
 OpenAI-compatible embeddings API when the endpoint ends in `/v1` (or when
-`provider: openai` is set). For example, a local server such as
+`provider: openai` is set). OpenAI-compatible servers are
+normally probed via their `models` route; servers that do not serve that
+route (e.g. [Voyage AI](https://docs.voyageai.com)) are detected via an
+embeddings round-trip instead. For example, a local server such as
 [oMLX](https://omlx.dev) can be configured with:
 
 ```yaml
@@ -472,6 +506,15 @@ api_key: sk-...   # omit for keyless local servers
 ```
 
 ```bash
+mnemon embed --status
+```
+
+A hosted provider such as Voyage AI needs only the endpoint, model, and key:
+
+```bash
+export MNEMON_EMBED_ENDPOINT=https://api.voyageai.com/v1
+export MNEMON_EMBED_MODEL=voyage-3.5
+export MNEMON_EMBED_API_KEY=pa-...
 mnemon embed --status
 ```
 
@@ -500,6 +543,16 @@ See [Development and Deployment](docs/DEPLOYMENT.md) for Docker, Compose, Ollama
 - [Memory Import Guide](docs/IMPORT.md) — schema and LLM prompt for importing historical chats
 - [Architecture Diagrams](docs/diagrams/) — system architecture, pipelines, lifecycle management
 
+## Star History
+
+<a href="https://star-history.dera.page/#mnemon-dev/mnemon">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=mnemon-dev/mnemon&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=mnemon-dev/mnemon" />
+   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=mnemon-dev/mnemon" />
+ </picture>
+</a>
+
 ## References
 
 Mnemon combines the paradigm of one paper with the methodology of another, grounded in the structural insight that graph memory is isomorphic to LLM attention. See [Theoretical Foundations](docs/DESIGN.md#25-theoretical-foundations) for details.
@@ -513,3 +566,7 @@ Mnemon combines the paradigm of one paper with the methodology of another, groun
 Copyright 2026 Grivn and Mnemon contributors.
 
 [Apache-2.0](LICENSE)
+
+The bracketed copyright example near the end of `LICENSE` is part of Apache
+2.0's standard application appendix; this section carries the project's actual
+copyright notice.

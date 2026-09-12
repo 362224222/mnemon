@@ -13,7 +13,7 @@ MNEMON_LDFLAGS := -s -w -X github.com/mnemon-dev/mnemon/cmd.version=$(VERSION)
 # Regular CI deliberately excludes real daemon readiness, process, TCP, Docker,
 # JavaScript runtime, and paid-provider tests. Those belong to the explicit
 # integration and live tiers below.
-DETERMINISTIC_PKGS := \
+BASE_DETERMINISTIC_PKGS := \
 	. \
 	./cmd \
 	./cmd/agency \
@@ -34,6 +34,22 @@ DETERMINISTIC_PKGS := \
 	./test/mnemond/architecture \
 	./test/mnemond/observer \
 	./test/mnemond/domainops/trace
+
+# These suites are Unix-only: every file carries a `//go:build !windows` tag, so
+# naming them explicitly under GOOS=windows makes `go test` abort with
+# "build constraints exclude all Go files". Drop them from the deterministic
+# tier on Windows instead of weakening the gate with `|| true`.
+UNIX_ONLY_TEST_PKGS := \
+	./test/mnemond/architecture \
+	./test/mnemond/observer \
+	./test/mnemond/domainops/trace
+
+LOCAL_GOOS := $(shell go env GOOS)
+ifeq ($(LOCAL_GOOS),windows)
+DETERMINISTIC_PKGS := $(filter-out $(UNIX_ONLY_TEST_PKGS),$(BASE_DETERMINISTIC_PKGS))
+else
+DETERMINISTIC_PKGS := $(BASE_DETERMINISTIC_PKGS)
+endif
 
 TESTDATA_PKGS := \
 	./testdata/mnemond/domainops/cmd/domain-load \

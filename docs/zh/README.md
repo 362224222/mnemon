@@ -2,16 +2,20 @@
   <img src="../logo/logo.svg" width="160" height="160" alt="Mnemon Logo" />
 </p>
 
-# Mnemon
+<h1 align="center">Mnemon</h1>
 
-[English](../../README.md) | **中文**
+<p align="center"><a href="../../README.md">English</a> · <strong>中文</strong></p>
 
-**LLM 智能体的持久记忆系统** — LLM 监督式、钩子集成、四图架构。
+<p align="center">
+  <a href="https://www.npmjs.com/package/@mnemon-dev/mnemon"><img alt="npm 版本" src="https://img.shields.io/npm/v/@mnemon-dev/mnemon?label=npm" /></a>
+  <a href="https://github.com/mnemon-dev/mnemon/releases/latest"><img alt="GitHub 发布版本" src="https://img.shields.io/github/v/release/mnemon-dev/mnemon" /></a>
+  <a href="https://github.com/mnemon-dev/mnemon/stargazers"><img alt="GitHub 收藏数" src="https://img.shields.io/github/stars/mnemon-dev/mnemon?label=stars" /></a>
+  <a href="https://go.dev/"><img alt="Go 1.24+" src="https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&amp;logoColor=white" /></a>
+  <a href="https://github.com/mnemon-dev/mnemon/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/mnemon-dev/mnemon/actions/workflows/ci.yml/badge.svg" /></a>
+  <a href="../../LICENSE"><img alt="许可证：Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg" /></a>
+</p>
 
-[![Go 1.24+](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![CI](https://github.com/mnemon-dev/mnemon/actions/workflows/ci.yml/badge.svg)](https://github.com/mnemon-dev/mnemon/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/mnemon-dev/mnemon)](https://goreportcard.com/report/github.com/mnemon-dev/mnemon)
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](../../LICENSE)
+<p align="center"><strong>LLM 智能体的持久记忆系统</strong> — LLM 监督式、钩子集成、四图架构。</p>
 
 ---
 
@@ -59,17 +63,31 @@ Mnemon 同时填补了协议栈中的空白。MCP 标准化了 LLM 如何发现�
 
 ### 安装
 
-**Homebrew Cask**（macOS）：
+**npm**（推荐；macOS / Linux / Windows，需要 Node.js 22+）：
+
+```bash
+npm install --global @mnemon-dev/mnemon
+```
+
+之后可随时升级 npm 管理的 CLI：
+
+```bash
+mnemon update
+```
+
+npm 包会按宿主操作系统和 CPU 安装对应的原生 Go 可执行文件。Mnemon 引擎
+仍然是单一原生二进制；Node.js 只用于 npm 启动器和包管理。
+
+**其他安装方式**：
 
 ```bash
 brew install --cask mnemon-dev/tap/mnemon
-```
-
-**Go install**（macOS / Linux / Windows）：
-
-```bash
 go install github.com/mnemon-dev/mnemon@latest
 ```
+
+Homebrew、`go install`、源码构建及其他 Node 包管理器安装的版本，必须继续使用
+各自原来的安装方式。迁移时请先执行一次 npm 安装命令，并确保 npm 全局 bin 目录
+在 `PATH` 中排在旧可执行文件之前；此后的 `mnemon update` 将由 npm 管理。
 
 Windows 支持核心 Memory 命令。Agency 的本地权威边界完成原生 Windows
 安全实现前，在 Windows 上保持不可用。
@@ -396,6 +414,9 @@ Sub-agent 委派是可选执行策略。当 runtime 支持时，主 agent 可以
 |---------|-------|------|
 | `MNEMON_DATA_DIR` | `~/.mnemon` | 基础数据目录 |
 | `MNEMON_STORE` | *（active 文件或 `default`）* | 命名记忆体，用于数据隔离 |
+| `MNEMON_MAX_INSIGHTS` | `1000` | 活跃 insight 上限；设为 `0` 可关闭自动清理 |
+| `MNEMON_AUTO_PRUNE_MIN_AGE` | `24h` | 自动清理前的保护期；支持 `24h`、`7d` 或 `0` |
+
 嵌入配置通过 `embed.yml` 文件提供（放在 `mnemon` 可执行文件旁或工作目录），不使用环境变量：
 
 | 字段 | 默认值 | 说明 |
@@ -405,6 +426,9 @@ Sub-agent 委派是可选执行策略。当 runtime 支持时，主 agent 可以
 | `endpoint` | `http://localhost:11434` | 嵌入 API 端点 |
 | `api_key` | *（无）* | OpenAI 兼容服务器（oMLX、vLLM 等）的 Bearer 令牌 |
 | `dimensions` | *（原生维度）* | 可选的 Matryoshka 维度截断 |
+
+每次自动删除均为软删除，以 `prune` 操作记录到 oplog，并通过触发命令的
+`auto_pruned_ids` 字段返回具体 ID。
 
 嵌入客户端默认使用 Ollama API；当端点以 `/v1` 结尾（或显式设置
 `provider: openai`）时改用 OpenAI 兼容的 embeddings API。例如，
@@ -462,3 +486,6 @@ Mnemon 取用了一篇论文的范式和另一篇论文的方法论，并基于�
 Copyright 2026 Grivn and Mnemon contributors.
 
 [Apache-2.0](../../LICENSE)
+
+`LICENSE` 末尾带方括号的版权示例属于 Apache 2.0 标准许可证的应用附录；
+本节所列内容才是本项目的实际版权声明。

@@ -202,8 +202,11 @@ func newClientWithModel(model string, f EmbedConfigFile) *Client {
 		http: &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
-				// Bypass system proxy for localhost connections.
-				Proxy: nil,
+				// Honor proxy env for remote endpoints (credential
+				// gateways inject auth at the proxy boundary); bypass
+				// it for localhost/loopback servers, where a stray
+				// HTTPS_PROXY would only get in the way.
+				Proxy: proxyFunc(endpoint),
 				DialContext: (&net.Dialer{
 					Timeout:   5 * time.Second,
 					KeepAlive: 30 * time.Second,
@@ -211,6 +214,20 @@ func newClientWithModel(model string, f EmbedConfigFile) *Client {
 			},
 		},
 	}
+}
+
+// proxyFunc returns an HTTP proxy resolver for the embedding endpoint.
+// Loopback endpoints never use a proxy; everything else follows the
+// standard HTTPS_PROXY/HTTP_PROXY/NO_PROXY environment resolution.
+func proxyFunc(endpoint string) func(*http.Request) (*url.URL, error) {
+	if u, err := url.Parse(endpoint); err == nil {
+		if host := u.Hostname(); host == "localhost" || net.ParseIP(host).IsLoopback() {
+			// Never proxy the loopback: return an explicit no-proxy
+			// resolver rather than nil (a nil Proxy panics when invoked).
+			return func(*http.Request) (*url.URL, error) { return nil, nil }
+		}
+	}
+	return http.ProxyFromEnvironment
 }
 
 // Protocol returns the active wire protocol.
@@ -229,9 +246,15 @@ func (c *Client) endpointURL(route string) (string, error) {
 	return endpointURL, nil
 }
 
-// Available returns true if the embedding server's discovery endpoint
-// responds successfully. Uses a 2s timeout to avoid blocking the CLI on
-// unresponsive servers.
+// Available returns true if the embedding server responds successfully.
+// Uses a 2s timeout to avoid blocking the CLI on unresponsive servers.
+//
+// OpenAI-compatible servers are probed via GET <endpoint>/models, the
+// conventional discovery route. Some compatible providers do not serve
+// that route at all (e.g. Voyage AI returns 404 while /embeddings works);
+// when the models route is missing (404/405/501) the probe falls back to
+// a single embedding round-trip, so availability reflects the endpoint
+// the client actually depends on.
 func (c *Client) Available() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -242,21 +265,81 @@ func (c *Client) Available() bool {
 	default:
 		route = "api/tags"
 	}
+	status, ok := c.probeStatus(ctx, route)
+	if ok {
+		return true
+	}
+	if c.protocol == ProtocolOpenAI && (status == 404 || status == 405 || status == 501) {
+		return c.probeEmbed(ctx)
+	}
+	return false
+}
+
+// probeStatus issues a GET against a discovery route and reports the
+// HTTP status code. Transport errors yield status 0, ok false.
+func (c *Client) probeStatus(ctx context.Context, route string) (status int, ok bool) {
 	endpointURL, err := c.endpointURL(route)
 	if err != nil {
-		return false
+		return 0, false
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpointURL, nil)
 	if err != nil {
-		return false
+		return 0, false
 	}
 	c.applyAuth(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return false
+		return 0, false
 	}
 	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+	return resp.StatusCode, resp.StatusCode == http.StatusOK
+}
+
+// probeEmbed verifies availability with a real embedding round-trip and
+// discards the vector. Only reached when the OpenAI models route does not
+// exist, so auth or quota failures still report unavailable.
+func (c *Client) probeEmbed(ctx context.Context) bool {
+	vec, err := c.embedWithContext(ctx, "availability probe")
+	if err != nil {
+		return false
+	}
+	return len(vec) > 0
+}
+
+// embedWithContext is Embed with a caller-supplied context so the
+// availability probe can enforce its 2s deadline.
+func (c *Client) embedWithContext(ctx context.Context, text string) ([]float64, error) {
+	req := embedRequest{Model: c.model, Input: text}
+	if c.dims > 0 {
+		req.Dimensions = c.dims
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	endpointURL, err := c.endpointURL(c.embedRequestRoute())
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	c.applyAuth(httpReq)
+
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("embed request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("embedding provider returned status %d", resp.StatusCode)
+	}
+
+	return c.decodeEmbedResponse(resp)
 }
 
 // Model returns the configured model name.
@@ -293,47 +376,25 @@ type openaiEmbedResponse struct {
 	} `json:"data"`
 }
 
+// embedRequestRoute returns the protocol-specific embeddings route.
+func (c *Client) embedRequestRoute() string {
+	if c.protocol == ProtocolOpenAI {
+		return "embeddings"
+	}
+	return "api/embed"
+}
+
 // Embed generates an embedding vector for the given text.
 // The request body is identical for both protocols; only the endpoint
 // path and the response shape differ.
 func (c *Client) Embed(text string) ([]float64, error) {
-	req := embedRequest{Model: c.model, Input: text}
-	if c.dims > 0 {
-		req.Dimensions = c.dims
-	}
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
+	return c.embedWithContext(context.Background(), text)
+}
 
-	var route string
-	switch c.protocol {
-	case ProtocolOpenAI:
-		route = "embeddings"
-	default:
-		route = "api/embed"
-	}
-	endpointURL, err := c.endpointURL(route)
-	if err != nil {
-		return nil, err
-	}
-	httpReq, err := http.NewRequest(http.MethodPost, endpointURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	c.applyAuth(httpReq)
-
-	resp, err := c.http.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("embed request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("embedding provider returned status %d", resp.StatusCode)
-	}
-
+// decodeEmbedResponse parses a successful embeddings response under the
+// active protocol. Shared between Embed and the OpenAI availability
+// fallback so the probe and the real call cannot drift apart.
+func (c *Client) decodeEmbedResponse(resp *http.Response) ([]float64, error) {
 	switch c.protocol {
 	case ProtocolOpenAI:
 		var result openaiEmbedResponse
