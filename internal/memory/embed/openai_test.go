@@ -256,3 +256,42 @@ func TestOpenAIAvailableNoFallbackOnServerError(t *testing.T) {
 		t.Fatalf("expected no embedding probe after 500 models route, got %d", embedRequests)
 	}
 }
+
+func TestOpenAIProxyEnvHonoredForRemoteEndpoints(t *testing.T) {
+	// Remote endpoints must resolve their proxy from the environment:
+	// credential gateways inject auth at the proxy boundary.
+	t.Setenv("MNEMON_EMBED_ENDPOINT", "http://remote.example.test:18000/v1")
+	t.Setenv("HTTPS_PROXY", "http://proxy.example.test:3128")
+	c := NewClient()
+	req, err := http.NewRequest(http.MethodGet, "https://api.example.test/v1/models", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyURL, err := c.http.Transport.(*http.Transport).Proxy(req)
+	if err != nil {
+		t.Fatalf("resolve proxy: %v", err)
+	}
+	if proxyURL == nil || proxyURL.Host != "proxy.example.test:3128" {
+		t.Fatalf("expected env proxy for remote endpoint, got %v", proxyURL)
+	}
+}
+
+func TestOllamaLoopbackBypassesProxyEnv(t *testing.T) {
+	// A loopback endpoint must not be routed through an environment
+	// proxy, even when HTTPS_PROXY is set (local Ollama behind a stray
+	// corporate proxy would otherwise break).
+	t.Setenv("MNEMON_EMBED_ENDPOINT", "http://127.0.0.1:11434")
+	t.Setenv("HTTPS_PROXY", "http://proxy.example.test:3128")
+	c := NewClient()
+	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:11434/api/tags", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyURL, err := c.http.Transport.(*http.Transport).Proxy(req)
+	if err != nil {
+		t.Fatalf("resolve proxy: %v", err)
+	}
+	if proxyURL != nil {
+		t.Fatalf("expected no proxy for loopback endpoint, got %v", proxyURL)
+	}
+}
