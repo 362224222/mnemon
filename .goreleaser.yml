@@ -65,12 +65,24 @@ homebrew_casks:
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: "https://github.com/mnemon-dev/mnemon"
     description: "Persistent memory and durable agency for LLM agents"
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/mnemon"]
-          end
+    # The binary is ad hoc/linker-signed only (not notarized), so the cask
+    # download carries com.apple.quarantine and Gatekeeper kills the first
+    # launch. Strip the attribute from the staged binary so the user needs no
+    # manual step.
+    #
+    # `hooks.post.install` renders a `postflight do ... end` block, which
+    # Homebrew deprecates in favor of the declarative `postflight_steps` DSL
+    # (goreleaser/goreleaser#6870). Until GoReleaser ships a steps-aware hook
+    # (goreleaser/goreleaser#6873), emit the stanza through `custom_block`.
+    # The `{{ "{{staged_path}}" }}` quoting escapes GoReleaser's own template
+    # pass so Homebrew's `{{staged_path}}` install-steps token survives into
+    # the generated cask.
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ "{{staged_path}}" }}/mnemon"]
+        end
+      end
 
 release:
   github:
