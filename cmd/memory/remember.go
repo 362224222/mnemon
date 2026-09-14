@@ -118,9 +118,9 @@ var rememberCmd = &cobra.Command{
 		}
 
 		// 2. Built-in diff: check for duplicates/conflicts (read-only, before transaction)
-		var diffAction string // "added", "updated", "skipped"
-		var replacedID string
-		var diffSuggestion search.DiffSuggestion
+		diffAction := "added"
+		diffSuggestion := search.DiffAdd
+		var duplicateID string
 
 		// Build embed cache once — reused by diff, engine, and semantic candidates.
 		var embedCache graph.EmbedCache
@@ -136,10 +136,7 @@ var rememberCmd = &cobra.Command{
 			}
 		}
 
-		if remNoDiff {
-			diffAction = "added"
-			diffSuggestion = search.DiffAdd
-		} else {
+		if !remNoDiff {
 			allInsights, err := db.GetAllActiveInsights()
 			if err != nil {
 				return fmt.Errorf("load insights for diff: %w", err)
@@ -159,45 +156,25 @@ var rememberCmd = &cobra.Command{
 			result := search.Diff(allInsights, content, opts)
 			diffSuggestion = result.Suggestion
 
-			switch result.Suggestion {
-			case search.DiffDuplicate:
+			// Similarity cannot establish whether two facts have the same
+			// subject, value, or relationship. Keep diff suggestions advisory;
+			// only byte-identical content permits skipping a write.
+			duplicateID = search.FindExactDuplicateID(allInsights, content)
+			if duplicateID != "" {
 				diffAction = "skipped"
-				if len(result.Matches) > 0 {
-					replacedID = result.Matches[0].ID
-				}
-			case search.DiffConflict:
-				// A CONFLICT means the two texts appear to disagree. Silently
-				// soft-deleting one side is destructive and has repeatedly
-				// clobbered unrelated same-domain memories (long technical
-				// notes share vocabulary at >=0.7 similarity, and change-log
-				// words like "replaced"/"no longer" appear in almost all of
-				// them). Keep both; the caller sees diff_suggestion=CONFLICT
-				// and can merge or delete deliberately.
-				diffAction = "added"
-			case search.DiffUpdate:
-				// Only auto-replace when the texts overlap heavily by TOKENS.
-				// Cosine similarity alone (same-domain embeddings cluster at
-				// 0.85+) is not enough evidence to destroy an existing memory.
-				if len(result.Matches) > 0 && result.Matches[0].TokenSimilarity >= 0.6 {
-					diffAction = "updated"
-					replacedID = result.Matches[0].ID
-				} else {
-					diffAction = "added"
-				}
-			default:
-				diffAction = "added"
+				diffSuggestion = search.DiffDuplicate
 			}
 		}
 
 		// If duplicate, skip insert entirely
 		if diffAction == "skipped" {
-			db.LogOp("diff-skip", insight.ID, fmt.Sprintf("duplicate of %s", replacedID))
+			db.LogOp("diff-skip", insight.ID, fmt.Sprintf("duplicate of %s", duplicateID))
 			output := map[string]interface{}{
 				"id":              insight.ID,
 				"content":         content,
 				"action":          "skipped",
 				"diff_suggestion": string(diffSuggestion),
-				"replaced_id":     replacedID,
+				"replaced_id":     duplicateID,
 			}
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetIndent("", "  ")
@@ -212,18 +189,6 @@ var rememberCmd = &cobra.Command{
 			embedded  bool
 		)
 		err = db.InTransaction(func() error {
-			// Soft-delete old insight if updating
-			if diffAction == "updated" && replacedID != "" {
-				if err := db.SoftDeleteInsight(replacedID); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: soft-delete %s: %v\n", replacedID, err)
-				} else {
-					db.LogOp("diff-replace", replacedID, fmt.Sprintf("replaced by %s", insight.ID))
-					// Remove deleted insight from embed cache to prevent
-					// creating edges to a soft-deleted node.
-					delete(embedCache, replacedID)
-				}
-			}
-
 			if err := db.InsertInsight(insight); err != nil {
 				return fmt.Errorf("insert insight: %w", err)
 			}
@@ -268,7 +233,7 @@ var rememberCmd = &cobra.Command{
 			return nil
 		})
 		if err != nil {
-			// Cache was mutated inside the transaction closure (delete/add entries).
+			// Cache was mutated inside the transaction closure (added entries).
 			// On rollback those mutations don't match DB state, so discard the cache
 			// to prevent any future code from accidentally using stale data.
 			embedCache = nil
@@ -305,9 +270,6 @@ var rememberCmd = &cobra.Command{
 			"effective_importance": ei,
 			"auto_pruned":          len(prunedIDs),
 			"auto_pruned_ids":      prunedIDs,
-		}
-		if replacedID != "" {
-			output["replaced_id"] = replacedID
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")

@@ -99,7 +99,7 @@ mnemon setup --eject --target claude-code
 ### Core
 
 ```bash
-# Remember — store a new insight (built-in diff: duplicates skipped, conflicts auto-replaced)
+# Remember — store a new insight (exact repeats skipped; distinct content preserved)
 mnemon remember "Chose Qdrant over Milvus for vector search" \
   --cat decision --imp 5 --entities "Qdrant,Milvus" --tags "architecture,search" --source agent
 
@@ -137,6 +137,18 @@ mnemon import --no-diff memory_draft.json   # skip deduplication
 # Forget — soft-delete an insight
 mnemon forget <id>
 ```
+
+`remember` and `import` skip only byte-identical content already present in an
+active memory. Different subjects, changed values, reordered statements, and
+near-duplicates are stored as new memories. `remember` still reports advisory
+`diff_suggestion` values (`UPDATE`, `CONFLICT`, or `DUPLICATE`); read `action` to
+see whether the write was `added` or `skipped`. On an exact repeat, the legacy
+`replaced_id` field identifies the existing memory, which remains unchanged.
+`--no-diff` also inserts exact repeats.
+
+To retire a superseded memory, store the new fact, verify it with `mnemon show
+<new-id>`, then explicitly run `mnemon forget <old-id>`. Similarity alone never
+authorizes replacement. Capacity-based auto-pruning still applies separately.
 
 **Remember flags:**
 

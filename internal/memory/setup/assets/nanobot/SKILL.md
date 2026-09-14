@@ -8,8 +8,9 @@ description: Persistent memory CLI for LLM agents. Store facts, recall past know
 ## Workflow
 
 1. **Remember**: `mnemon remember "<fact>" --cat <cat> --imp <1-5> --entities "e1,e2" --source agent`
-   - Diff is built-in: duplicates skipped, conflicts auto-replaced.
-   - Output includes `action` (added/updated/skipped), `semantic_candidates`, `causal_candidates`.
+   - Only exact content repeats are skipped; distinct content is stored and diff suggestions are advisory.
+   - To retire a superseded memory, store and verify the new fact, then explicitly run `mnemon forget <old-id>`.
+   - Output includes `action` (added/skipped), `semantic_candidates`, `causal_candidates`.
 2. **Link** (evaluate candidates from step 1 — use judgment, not mechanical rules):
    - Review `causal_candidates`: does a genuine cause-effect relationship exist? `causal_signal` is regex-based and prone to false positives — only link if the memories are truly causally related.
    - Review `semantic_candidates`: are these memories meaningfully related? High `similarity` alone is not sufficient — skip candidates that share keywords but discuss unrelated topics.

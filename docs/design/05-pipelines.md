@@ -8,8 +8,6 @@
 
 `mnemon remember` is the core command for writing memories. It includes a built-in diff step that automatically detects duplicates and conflicts before storage. The write transaction executes atomically within a single SQLite transaction.
 
-![Remember Pipeline](../diagrams/02-remember-pipeline.jpg)
-
 ### Detailed Flow
 
 ```
@@ -29,18 +27,19 @@ mnemon remember "Chose Qdrant as the vector database" \
 
 **Step 2.5: Built-in Diff (outside transaction, read-only)**
 
-Compute similarity against all active insights:
-- **DUPLICATE** (sim > 0.90) → skip insert entirely, return `action="skipped"`
-- **CONFLICT/UPDATE** (sim 0.50–0.90) → soft-delete old insight, insert new as replacement
-- **ADD** (sim < 0.50) → normal insert
+Compute advisory similarity suggestions and check exact content against all active insights:
+- **Byte-identical content** → skip insert, return `action="skipped"` and `diff_suggestion="DUPLICATE"`
+- **Different content** → normal insert with `action="added"`, preserving the heuristic `diff_suggestion` for review
 
-This step uses embedding cosine similarity when available, falling back to token overlap. The `--no-diff` flag disables this check.
+Similarity uses embedding cosine when available, falling back to token overlap.
+Neither similarity nor extracted entities establish that one fact supersedes
+another. Exact-content lookup is independent of similarity candidate limits.
+The `--no-diff` flag disables both checks and inserts even exact repeats.
 
 **Step 3: Atomic Transaction**
 
 ```
 BEGIN TRANSACTION
-  ⓪ Soft-delete replaced insight (if diff found CONFLICT/UPDATE)
   ① INSERT insight (UUID, content, category, importance, tags, entities, source)
   ② UPDATE embedding (if vector is available)
   ③ Graph Engine: OnInsightCreated
@@ -65,7 +64,6 @@ COMMIT
   "id": "abc-123",
   "action": "added",
   "diff_suggestion": "ADD",
-  "replaced_id": null,
   "edges_created": {"temporal": 2, "entity": 3, "causal": 1, "semantic": 1},
   "semantic_candidates": [
     {"id": "def-456", "content": "...", "cosine": 0.72, "auto_linked": false}
@@ -80,7 +78,10 @@ COMMIT
 }
 ```
 
-The `action` field indicates what the built-in diff decided: `"added"` (new entry), `"replaced"` (conflict auto-replaced, `replaced_id` contains the old insight ID), or `"skipped"` (duplicate detected, no insert).
+The `action` field is `"added"` (new entry) or `"skipped"` (byte-identical active
+content, no insert). On a skipped repeat, the legacy `replaced_id` field names
+the existing memory; it is not deleted or changed. A heuristic `UPDATE`,
+`CONFLICT`, or near-`DUPLICATE` suggestion still produces `action="added"`.
 
 After receiving this output, the LLM can evaluate candidates and establish edges it considers appropriate via the `mnemon link` command.
 
@@ -206,33 +207,45 @@ This is a unique innovation in Mnemon: **exposing the retrieval pipeline's inter
 
 ## 5.3 Deduplication & Conflict Detection: Diff
 
-![Diff & Dedup Pipeline](../diagrams/07-diff-dedup-pipeline.jpg)
+```mermaid
+flowchart TD
+    Write[remember / import] --> Bypass{"--no-diff?"}
+    Bypass -->|Yes| Add[Insert new memory; preserve existing facts]
+    Bypass -->|No| Exact{Byte-identical active content?}
+    Exact -->|Yes| Skip[Skip insert; identify existing memory]
+    Exact -->|No| Add
+    Write -. remember only .-> Advisory[Similarity suggestions for review]
+```
 
 Diff is **built into `remember`** — no separate call needed. When `mnemon remember` is invoked, it automatically runs a diff check before inserting.
 
 When `remember` is called, the built-in diff runs before the transaction:
 
 1. Compute similarity against all active insights (embedding cosine when available, token overlap as fallback)
-2. Determine the action based on similarity thresholds:
+2. Independently scan all active insights for byte-identical content. Similarity
+   suggestions describe possible relationships; exact equality alone permits a skip:
 
-| Similarity | Action | Behavior |
-|------------|--------|----------|
-| > 0.90 | **DUPLICATE** | Skip insert entirely, return `action="skipped"` |
-| 0.50 ~ 0.90 | **CONFLICT/UPDATE** | Soft-delete old insight, insert new as replacement |
-| < 0.50 | **ADD** | Normal insert |
+| Content | Diff suggestion | Behavior |
+|---------|-----------------|----------|
+| Byte-identical to an active memory | **DUPLICATE** | Skip insert, return `action="skipped"` |
+| Different at any similarity | **ADD**, **UPDATE**, **CONFLICT**, or **DUPLICATE** | Insert with `action="added"`; retain the existing memory |
 
-The `--no-diff` flag disables this check for cases where the caller wants unconditional insertion.
+`import` uses the same exact-content lookup and preserves distinct content.
+The `--no-diff` flag allows unconditional insertion on either command.
+Capacity-based auto-pruning remains a separate lifecycle policy.
 
 ### Typical Workflow
 
-A single `remember` call handles everything:
+Store new content, then retire a specific old fact only when appropriate:
 
 ```bash
-# Single command — diff is automatic
+# Diff suggestions are automatic and advisory
 mnemon remember "Chose PostgreSQL to replace SQLite as the primary database" \
   --cat decision --imp 5 --source agent
-# → If conflict with existing "Chose SQLite as storage":
-#   auto-replaces old insight, returns action="replaced", replaced_id="<old_id>"
-# → If duplicate: returns action="skipped"
-# → If new: returns action="added"
+# → Exact repeat: action="skipped"; existing memory unchanged
+# → Different content: action="added"; existing memories retained
+
+# If the new fact supersedes a specific old memory, verify before retiring it
+mnemon show <new-id>
+mnemon forget <old-id>
 ```
