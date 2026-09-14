@@ -56,7 +56,7 @@ exports are documented in docs/IMPORT.md.`,
 
 		ec := embed.NewClientWithModel(resolveEmbedModel())
 
-		// Build embed cache once for all diff and graph operations.
+		// Build embed cache once for all graph operations.
 		var embedCache graph.EmbedCache
 		if ec.Available() {
 			dbEmbeds, err := db.GetAllEmbeddings()
@@ -127,66 +127,30 @@ exports are documented in docs/IMPORT.md.`,
 				}
 			}
 
-			var action string
-			var replacedID string
+			action := "added"
+			var duplicateID string
 
-			if importNoDiff {
-				action = "added"
-			} else {
+			if !importNoDiff {
 				allInsights, err := db.GetAllActiveInsights()
 				if err != nil {
 					results = append(results, importResult{Index: idx, ID: insight.ID, Content: insight.Content, Error: err.Error()})
 					continue
 				}
-				opts := search.DiffOptions{Limit: 5, NewEmbedding: embeddingVec}
-				if embedCache != nil {
-					opts.ExistingEmbed = make([]search.EmbeddedItem, 0, len(embedCache))
-					for id, v := range embedCache {
-						opts.ExistingEmbed = append(opts.ExistingEmbed, search.EmbeddedItem{ID: id, Embedding: v})
-					}
-				}
-				result := search.Diff(allInsights, insight.Content, opts)
-				switch result.Suggestion {
-				case search.DiffDuplicate:
+				duplicateID = search.FindExactDuplicateID(allInsights, insight.Content)
+				if duplicateID != "" {
 					action = "skipped"
-					if len(result.Matches) > 0 {
-						replacedID = result.Matches[0].ID
-					}
-				case search.DiffConflict:
-					// Match remember: a possible contradiction must preserve both
-					// records for review, not silently delete the existing one.
-					action = "added"
-				case search.DiffUpdate:
-					action = "updated"
-					if len(result.Matches) > 0 {
-						replacedID = result.Matches[0].ID
-					}
-				default:
-					action = "added"
 				}
 			}
 
 			if action == "skipped" {
-				db.LogOp("import-skip", insight.ID, fmt.Sprintf("duplicate of %s", replacedID))
-				if replacedID != "" {
-					imported[idx] = replacedID
-				} else {
-					imported[idx] = insight.ID
-				}
+				db.LogOp("import-skip", insight.ID, fmt.Sprintf("duplicate of %s", duplicateID))
+				imported[idx] = duplicateID
 				results = append(results, importResult{Index: idx, ID: imported[idx], Content: insight.Content, Action: action})
 				continue
 			}
 
 			var writeErr error
 			err = db.InTransaction(func() error {
-				if action == "updated" && replacedID != "" {
-					if err := db.SoftDeleteInsight(replacedID); err != nil {
-						fmt.Fprintf(os.Stderr, "warning: soft-delete %s: %v\n", replacedID, err)
-					} else {
-						db.LogOp("import-replace", replacedID, fmt.Sprintf("replaced by %s", insight.ID))
-						delete(embedCache, replacedID)
-					}
-				}
 				if err := db.InsertInsight(insight); err != nil {
 					return fmt.Errorf("insert insight: %w", err)
 				}

@@ -138,18 +138,18 @@ mnemon import --no-diff memory_draft.json
 mnemon import --store project-alpha memory_draft.json
 ```
 
-检测到冲突时，导入会与 `remember` 一样新增记录，保留双方供后续判断。例如，已有
-"Production deployment is allowed" 时导入 "Production deployment is not allowed"，
-两条记录都会保留。旧版本遇到冲突会自动替换已有记录；现在只有被判定为更新的条目
-仍会替换已有记录，完全重复的内容仍会跳过。确定需要移除其中一条冲突记录时，可使用
-`mnemon forget <id>`。
-
 ### 输出示例
+
+导入与 `remember` 使用相同的精确内容去重规则：仅跳过与活跃记忆逐字节
+完全相同的内容。不同事实、近似重复、冲突和变化后的属性值都会新增。
+被跳过的草稿索引映射到已有 insight ID，显式边仍可引用该记忆。
+如需淘汰已被取代的事实，请验证新记忆后显式执行 `mnemon forget <old-id>`。
+基于容量的自动清理仍独立生效。
 
 ```json
 {
   "imported": 8,
-  "updated": 1,
+  "updated": 0,
   "skipped": 2,
   "errors": 0,
   "edges_inserted": 3,
@@ -164,9 +164,9 @@ mnemon import --store project-alpha memory_draft.json
 
 | 字段 | 说明 |
 |---|---|
-| `imported` | 新增的记忆数量，包括保留供判断的冲突记录 |
-| `updated` | 因更新而替换已有记忆的数量 |
-| `skipped` | 检测为重复而跳过的数量 |
+| `imported` | 新增的记忆数量 |
+| `updated` | 固定为 `0`，保留此字段以兼容已有输出；相似度不会触发替换 |
+| `skipped` | 因内容逐字节完全相同而跳过的数量 |
 | `errors` | 写入失败的数量；导入允许部分成功，脚本调用方应检查此字段是否为 0 |
 | `edges_inserted` | 成功插入的显式边数量 |
 | `auto_pruned` | 超出容量限制后自动删除的记忆数量 |
