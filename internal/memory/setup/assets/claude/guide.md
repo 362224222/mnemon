@@ -10,6 +10,13 @@
 To recall: `mnemon recall "<query>" --limit 5`.
 Craft a focused, keyword-rich query — do not pass the raw user prompt.
 
+Keep the query and memories in their original language. If intent is clear from
+meaning, pass `--intent WHY` (reasons), `WHEN` (timing), `ENTITY` (what/who), or
+`GENERAL` (neutral). Automatic detection recognizes only bounded question forms;
+unrecognized forms and conflicting additional-language cues use GENERAL.
+English/Chinese-only scoring is preserved. `--verbose` reports the selected intent
+and its source. See [supported languages, scripts, and limits](https://github.com/mnemon-dev/mnemon/blob/master/docs/USAGE.md#recall-intent-detection).
+
 ### Remember — after responding
 
 Run this decision tree after every substantive response.

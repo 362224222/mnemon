@@ -186,6 +186,65 @@ whitespace, caps each excerpt, emits unindented JSON, and includes one
 machine-readable interchange format; the opt-in projection avoids changing
 existing parsers or adopting a draft serialization format.
 
+#### Recall intent detection
+
+Automatic intent selection uses a fixed set of lexical cues. It runs locally,
+without an LLM or provider. Intent changes graph traversal and ranking; it does
+not translate the query or the stored memories. The recognized question forms
+include the following (examples use `PostgreSQL` as the subject):
+
+| Language / script | WHY | WHEN | ENTITY |
+|---|---|---|---|
+| English | Why PostgreSQL? | When did we choose PostgreSQL? | What is PostgreSQL? |
+| Mandarin Chinese, simplified | 为什么选择 PostgreSQL？ | 什么时候选择 PostgreSQL？ | PostgreSQL 是什么？ |
+| Mandarin Chinese, traditional | 為什麼選擇 PostgreSQL？ | 什麼時候選擇 PostgreSQL？ | PostgreSQL 是什麼？ |
+| Hindi, Devanagari | PostgreSQL क्यों? | PostgreSQL कब? | PostgreSQL क्या है? |
+| Spanish | ¿Por qué PostgreSQL? | ¿Cuándo elegimos PostgreSQL? | ¿Qué es PostgreSQL? |
+| Modern Standard Arabic | لماذا PostgreSQL؟ | متى اخترنا PostgreSQL؟ | ما هو PostgreSQL؟ |
+| French | Pourquoi PostgreSQL ? | Quand avons-nous choisi PostgreSQL ? | Qu'est-ce que PostgreSQL ? |
+| Bengali, Bengali script | PostgreSQL কেন? | PostgreSQL কখন? | PostgreSQL কী? |
+| Portuguese | Por que PostgreSQL? | Quando escolhemos PostgreSQL? | O que é PostgreSQL? |
+| Indonesian, Latin script | Mengapa PostgreSQL? | Kapan memilih PostgreSQL? | Apa itu PostgreSQL? |
+| Russian, Cyrillic | Почему PostgreSQL? | Когда выбрали PostgreSQL? | Что такое PostgreSQL? |
+| German | Warum PostgreSQL? | Wann wurde PostgreSQL gewählt? | Was ist PostgreSQL? |
+
+Matching is case-insensitive and uses Unicode word boundaries for spaced scripts;
+Chinese cues also match without spaces. The additional-language forms accept
+Unicode whitespace, straight/curly French apostrophes, and composed/decomposed
+accents in the listed Spanish/Portuguese cues. Accents are not generally removed.
+Arabic accepts ordinary Arabic letters with or without common vowel marks
+(harakat and superscript alif) and tatweel. A few explicit variants are included,
+such as `為甚麼`, `क्यूँ`, `por quê`, `kenapa`, `зачем`, and `wieso`. Bengali
+`কী`/`কি`/`কে` must end the question for ENTITY; bare Hindi `क्या` does not imply
+ENTITY. Other dialects, spellings, Arabic presentation forms, and Latin
+transliterations of non-Latin scripts are not covered systematically.
+
+Unrecognized queries use `GENERAL`. Additional-language cues that disagree with
+one another or with an English/Chinese cue also use `GENERAL`, regardless of
+keyword counts. Same-intent mixed-language cues can agree. For compatibility,
+English/Chinese-only queries retain their keyword scoring and ENTITY tie-break;
+for example, `what is the reason` selects ENTITY. Paired quoted/code spans are
+ignored for additional-language cues, while legacy quoted keywords retain their
+old behavior. This is a lexical heuristic: it does not resolve negation,
+incidental word mentions, nested quotations, or the meaning of mixed questions.
+These examples test intent selection, not retrieval accuracy across languages.
+
+The supervising agent can choose an intent from the user's meaning and retain
+the original-language query and memories:
+
+```bash
+mnemon recall '¿Por qué elegimos PostgreSQL?' --intent WHY --verbose
+mnemon recall 'हमने PostgreSQL कब चुना?' --intent WHEN --verbose
+mnemon recall 'Was ist PostgreSQL?' --intent ENTITY --verbose
+mnemon recall 'PostgreSQL index tuning' --intent GENERAL --verbose
+```
+
+The override is language-independent: WHY selects reasons, WHEN timing, ENTITY
+what/who, and GENERAL neutral traversal. It takes precedence over detection.
+Verbose output reports `meta.intent` and `meta.intent_source` (`auto` or
+`override`), including when there are no results. `--basic` bypasses intent
+selection entirely.
+
 ### Graph Operations
 
 ```bash

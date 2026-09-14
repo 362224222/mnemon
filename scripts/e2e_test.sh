@@ -921,6 +921,41 @@ step "smart recall — auto-detected intent source"
 OUT=$($M --data-dir "$TESTDIR3" recall "why Alpha service routing" --smart --verbose)
 assert_jq "intent_source is auto" "$OUT" '.meta.intent_source' 'auto'
 
+step "smart recall — multilingual intent and language-independent override"
+while IFS='|' read -r language expected query; do
+  OUT=$($M --data-dir "$TESTDIR3" recall "$query" --verbose)
+  assert_jq "$language automatic intent" "$OUT" '.meta.intent' "$expected"
+  assert_jq "$language automatic source" "$OUT" '.meta.intent_source' 'auto'
+  OUT=$($M --data-dir "$TESTDIR3" recall "$query" --intent GENERAL --verbose)
+  assert_jq "$language override wins" "$OUT" '.meta.intent' 'GENERAL'
+  assert_jq "$language override source" "$OUT" '.meta.intent_source' 'override'
+done <<'INTENT_CASES'
+Traditional Chinese|WHY|為什麼選擇 Alpha？
+Hindi|WHY|हमने Alpha क्यों चुना?
+Spanish|WHEN|¿Cuándo elegimos Alpha?
+Arabic|ENTITY|ما هو Alpha؟
+French|ENTITY|Qu’est-ce que Alpha ?
+Bengali|ENTITY|Alpha কী?
+Portuguese|WHY|Alpha por quê?
+Indonesian|WHEN|Kapan memilih Alpha?
+Russian|WHY|Почему выбрали Alpha?
+German|ENTITY|Was ist Alpha?
+General|GENERAL|Alpha index tuning
+Unicode boundary|GENERAL|Alpha কখনো कब्ज যখন
+Ambiguous|GENERAL|¿Por qué y cuándo elegimos Alpha?
+Mixed conflict|GENERAL|Why Alpha, wann gewählt?
+Mixed agreement|WHY|Pourquoi Alpha, why?
+INTENT_CASES
+
+step "smart recall — multilingual intent is reported even with no results"
+OUT=$($M --data-dir "$TESTDATA/intent-empty" recall "हमने PostgreSQL कब चुना?" --verbose)
+assert_jq "empty store temporal intent" "$OUT" '.meta.intent' 'WHEN'
+assert_jq "empty store automatic source" "$OUT" '.meta.intent_source' 'auto'
+assert_jq "empty store results" "$OUT" '.results | length' '0'
+OUT=$($M --data-dir "$TESTDATA/intent-empty" recall "PostgreSQL いつ?" --intent WHEN --verbose)
+assert_jq "unsupported form override" "$OUT" '.meta.intent' 'WHEN'
+assert_jq "unsupported form override source" "$OUT" '.meta.intent_source' 'override'
+
 step "smart recall — signals metadata present"
 OUT=$($M --data-dir "$TESTDIR3" recall "Alpha service routing" --smart --verbose)
 FIRST=$(echo "$OUT" | jq '.results[0]')

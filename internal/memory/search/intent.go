@@ -49,16 +49,16 @@ var intentWeightsMap = map[Intent]IntentWeights{
 }
 
 var whyPatterns = regexp.MustCompile(
-	`(?i)\b(why|reason|because|cause|motivation|rationale)\b|` +
-		`(为什么|原因|理由)`)
+	`(?i)(why|reason|because|cause|motivation|rationale)|` +
+		`(为什么|為什麼|為甚麼|原因|理由)`)
 
 var whenPatterns = regexp.MustCompile(
-	`(?i)\b(when|time|date|before|after|during|timeline|history|sequence)\b|` +
-		`(什么时候|何时|时间|之前|之后)`)
+	`(?i)(when|timeline|time|date|before|after|during|history|sequence)|` +
+		`(什么时候|什麼時候|甚麼時候|何时|何時|时间|時間|之前|之后|之後)`)
 
 var entityPatterns = regexp.MustCompile(
-	`(?i)\b(what is|who is|tell me about|describe|about)\b|` +
-		`(是什么|谁是|关于|介绍)`)
+	`(?i)(what is|who is|tell me about|describe|about)|` +
+		`(是什么|是什麼|是甚麼|谁是|誰是|关于|關於|介绍|介紹)`)
 
 // IntentFromString parses a user-provided intent string into an Intent value.
 func IntentFromString(s string) (Intent, error) {
@@ -76,12 +76,28 @@ func IntentFromString(s string) (Intent, error) {
 	}
 }
 
-// DetectIntent analyzes a query string and returns the detected intent.
+// DetectIntent selects an intent using bounded, language-specific lexical cues.
+// It preserves English/Chinese scoring; conflicting cues involving the additional
+// languages fall back to GENERAL. This is not semantic language understanding.
 func DetectIntent(query string) Intent {
-	q := strings.ToLower(query)
-	whyScore := len(whyPatterns.FindAllString(q, -1))
-	whenScore := len(whenPatterns.FindAllString(q, -1))
-	entityScore := len(entityPatterns.FindAllString(q, -1))
+	whyScore := legacyIntentScore(whyPatterns, query)
+	whenScore := legacyIntentScore(whenPatterns, query)
+	entityScore := legacyIntentScore(entityPatterns, query)
+
+	questionIntent, conflict := multilingualQuestionIntent(query)
+	if conflict {
+		return IntentGeneral
+	}
+	if questionIntent != IntentGeneral {
+		// A strong cue in another language must not override conflicting legacy
+		// cues, even when one legacy intent has a higher keyword count.
+		if (whyScore > 0 && questionIntent != IntentWhy) ||
+			(whenScore > 0 && questionIntent != IntentWhen) ||
+			(entityScore > 0 && questionIntent != IntentEntity) {
+			return IntentGeneral
+		}
+		return questionIntent
+	}
 
 	if whyScore > whenScore && whyScore > entityScore && whyScore > 0 {
 		return IntentWhy

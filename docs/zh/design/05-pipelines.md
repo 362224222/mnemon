@@ -101,7 +101,15 @@ LLM 收到这个输出后，可以评估候选并通过 `mnemon link` 命令建�
 | ENTITY | `what is`, `who is`, `tell me about`, `是什么`, `谁是`, `关于` |
 | GENERAL | 以上都不匹配 |
 
-支持 `--intent` 标志手动覆盖自动检测。
+另有印地语、西班牙语、现代标准阿拉伯语、法语、孟加拉语、葡萄牙语、
+印度尼西亚语、俄语和德语的部分疑问句模式，详见
+[Recall 意图检测](../USAGE.md#recall-意图检测)。词边界使用 Unicode 规则；
+新增语言的线索互相冲突或与英/中文冲突时回退到 GENERAL。仅含英/中文线索
+时保留原有计数及 ENTITY 平分规则。这是有限的词语启发式，不是语义理解。
+
+`--intent WHY|WHEN|ENTITY|GENERAL` 可对任意语言查询覆盖自动检测。宿主可从
+用户含义选择意图，无需翻译查询或调用另一个服务。`--verbose` 显示
+`meta.intent` 和 `meta.intent_source`（`auto` 或 `override`）。
 
 ### Step 2：多信号锚点选择（RRF 融合）
 

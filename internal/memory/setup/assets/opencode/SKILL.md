@@ -17,6 +17,23 @@ description: Persistent memory CLI for OpenCode. Store facts, recall past knowle
    - Syntax: `mnemon link <id> <candidate> --type <causal|semantic> --weight <0-1> [--meta '<json>']`
 3. **Recall**: `mnemon recall "<query>" --limit 10`
 
+## Recall Intent
+
+Keep focused queries and memories in their original language. When the user's
+meaning is clear, choose `--intent WHY` (reasons), `--intent WHEN` (timing),
+`--intent ENTITY` (what/who), or `--intent GENERAL` (neutral retrieval).
+For example: `mnemon recall "<query>" --intent WHY`. The override works in any
+language; `--verbose` reports
+`meta.intent` and `meta.intent_source` (`auto` or `override`).
+
+Automatic cues cover some forms in English, Mandarin Chinese (simplified and
+traditional), Hindi (Devanagari), Spanish, Modern Standard Arabic, French,
+Bengali (Bengali script), Portuguese, Indonesian (Latin script), Russian
+(Cyrillic), and German. Unrecognized forms use GENERAL; conflicting cues involving
+additional languages also use GENERAL. English/Chinese-only scoring is preserved.
+This is a lexical heuristic, not full language understanding. See
+[the supported forms, script variants, and limits](https://github.com/mnemon-dev/mnemon/blob/master/docs/USAGE.md#recall-intent-detection).
+
 ## Commands
 
 ```bash
