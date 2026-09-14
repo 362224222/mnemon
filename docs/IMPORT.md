@@ -139,6 +139,13 @@ mnemon import --no-diff memory_draft.json
 mnemon import --store project-alpha memory_draft.json
 ```
 
+Conflicting memories are added as separate records, preserving both sides for
+review, as with `remember`. For example, importing "Production deployment is not
+allowed" after "Production deployment is allowed" keeps both. Earlier versions
+automatically replaced the existing record on a conflict. Only entries classified
+as updates still replace an existing record; exact duplicates are skipped. Use
+`mnemon forget <id>` when you decide one of the conflicting records should be removed.
+
 ### Output Example
 
 ```json
@@ -159,8 +166,8 @@ mnemon import --store project-alpha memory_draft.json
 
 | Field | Description |
 |---|---|
-| `imported` | Number of newly added memories |
-| `updated` | Number of existing conflicting memories replaced |
+| `imported` | Number of newly added memories, including conflicts kept for review |
+| `updated` | Number of existing memories replaced by an update |
 | `skipped` | Number of duplicate memories skipped |
 | `errors` | Number of failed writes. Import allows partial success; script callers should check this is `0` |
 | `edges_inserted` | Number of explicit edges inserted |

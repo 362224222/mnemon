@@ -138,6 +138,12 @@ mnemon import --no-diff memory_draft.json
 mnemon import --store project-alpha memory_draft.json
 ```
 
+检测到冲突时，导入会与 `remember` 一样新增记录，保留双方供后续判断。例如，已有
+"Production deployment is allowed" 时导入 "Production deployment is not allowed"，
+两条记录都会保留。旧版本遇到冲突会自动替换已有记录；现在只有被判定为更新的条目
+仍会替换已有记录，完全重复的内容仍会跳过。确定需要移除其中一条冲突记录时，可使用
+`mnemon forget <id>`。
+
 ### 输出示例
 
 ```json
@@ -158,8 +164,8 @@ mnemon import --store project-alpha memory_draft.json
 
 | 字段 | 说明 |
 |---|---|
-| `imported` | 新增的记忆数量 |
-| `updated` | 替换了已有冲突记忆的数量 |
+| `imported` | 新增的记忆数量，包括保留供判断的冲突记录 |
+| `updated` | 因更新而替换已有记忆的数量 |
 | `skipped` | 检测为重复而跳过的数量 |
 | `errors` | 写入失败的数量；导入允许部分成功，脚本调用方应检查此字段是否为 0 |
 | `edges_inserted` | 成功插入的显式边数量 |

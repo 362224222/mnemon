@@ -152,7 +152,11 @@ exports are documented in docs/IMPORT.md.`,
 					if len(result.Matches) > 0 {
 						replacedID = result.Matches[0].ID
 					}
-				case search.DiffConflict, search.DiffUpdate:
+				case search.DiffConflict:
+					// Match remember: a possible contradiction must preserve both
+					// records for review, not silently delete the existing one.
+					action = "added"
+				case search.DiffUpdate:
 					action = "updated"
 					if len(result.Matches) > 0 {
 						replacedID = result.Matches[0].ID
