@@ -94,7 +94,8 @@ After receiving this output, the LLM can evaluate candidates and establish edges
 
 ### Step 1: Intent Detection
 
-Query intent is automatically identified via regex matching:
+Query intent is selected with a fixed set of local lexical patterns. The original
+English/Chinese cues include:
 
 | Intent | Trigger Patterns |
 |--------|-----------------|
@@ -103,7 +104,18 @@ Query intent is automatically identified via regex matching:
 | ENTITY | `what is`, `who is`, `tell me about`, `是什么`, `谁是`, `关于` |
 | GENERAL | None of the above match |
 
-Supports the `--intent` flag to manually override automatic detection.
+Question forms also cover Hindi, Spanish, Modern Standard Arabic, French,
+Bengali, Portuguese, Indonesian, Russian, and German. See
+[recall intent detection](../USAGE.md#recall-intent-detection) for supported
+scripts, examples, and limits. Matching uses Unicode word boundaries for spaced
+scripts. Conflicting cues involving an additional language fall back to GENERAL;
+legacy English/Chinese-only queries retain keyword scoring and the ENTITY
+tie-break. This is a bounded heuristic, not semantic language understanding.
+
+`--intent WHY|WHEN|ENTITY|GENERAL` overrides detection in any query language.
+The host can supply intent from the user's meaning without translating the query
+or invoking another provider. `--verbose` exposes `meta.intent` and
+`meta.intent_source` (`auto` or `override`).
 
 ### Step 2: Multi-Signal Anchor Selection (RRF Fusion)
 

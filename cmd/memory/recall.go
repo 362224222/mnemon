@@ -101,8 +101,19 @@ func toCompact(resp search.RecallResponse) compactResponse {
 var recallCmd = &cobra.Command{
 	Use:   "recall [keyword]",
 	Short: "Retrieve insights by keyword",
-	Long:  "Search for insights using intent-aware graph-enhanced retrieval. Use --basic for simple SQL LIKE matching.",
-	Args:  cobra.MinimumNArgs(1),
+	Long: `Search for insights using intent-aware graph-enhanced retrieval. Use --basic for simple SQL LIKE matching.
+
+Automatic intent uses a limited set of question cues in English, Mandarin Chinese
+(simplified/traditional), Hindi (Devanagari), Spanish, Modern Standard Arabic,
+French, Bengali (Bengali script), Portuguese, Indonesian, Russian (Cyrillic), and
+German. It does not infer meaning or recognize every phrasing or transliteration.
+Unrecognized cues fall back to GENERAL. Conflicting cues involving the additional
+languages also use GENERAL; English/Chinese-only queries retain legacy scoring.
+
+Use --intent WHY (reasons), WHEN (timing), ENTITY (what/who), or GENERAL to select
+the strategy in any language while keeping the original query. --verbose reports
+meta.intent and meta.intent_source (auto or override). --basic bypasses intent.`,
+	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		keyword := strings.Join(args, " ")
 		if err := requirePositiveLimit("--limit", recLimit); err != nil {
