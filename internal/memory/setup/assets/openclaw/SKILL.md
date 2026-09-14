@@ -84,13 +84,31 @@ mnemon setup --eject --target openclaw --yes
 ## Workflow
 
 1. **Remember**: `mnemon remember "<fact>" --cat <cat> --imp <1-5> --entities "e1,e2" --source agent`
-   - Diff is built-in: duplicates skipped, conflicts auto-replaced.
-   - Output includes `action` (added/updated/skipped), `semantic_candidates`, `causal_candidates`.
+   - Only exact content repeats are skipped; distinct content is stored and diff suggestions are advisory.
+   - To retire a superseded memory, store and verify the new fact, then explicitly run `mnemon forget <old-id>`.
+   - Output includes `action` (added/skipped), `semantic_candidates`, `causal_candidates`.
 2. **Link** (evaluate candidates from step 1 — use judgment, not mechanical rules):
    - Review `causal_candidates`: does a genuine cause-effect relationship exist? `causal_signal` is regex-based and prone to false positives — only link if the memories are truly causally related.
    - Review `semantic_candidates`: are these memories meaningfully related? High `similarity` alone is not sufficient — skip candidates that share keywords but discuss unrelated topics.
    - Syntax: `mnemon link <id> <candidate> --type <causal|semantic> --weight <0-1> [--meta '<json>']`
 3. **Recall**: `mnemon recall "<query>" --limit 10`
+
+## Recall Intent
+
+Keep focused queries and memories in their original language. When the user's
+meaning is clear, choose `--intent WHY` (reasons), `--intent WHEN` (timing),
+`--intent ENTITY` (what/who), or `--intent GENERAL` (neutral retrieval).
+For example: `mnemon recall "<query>" --intent WHY`. The override works in any
+language; `--verbose` reports
+`meta.intent` and `meta.intent_source` (`auto` or `override`).
+
+Automatic cues cover some forms in English, Mandarin Chinese (simplified and
+traditional), Hindi (Devanagari), Spanish, Modern Standard Arabic, French,
+Bengali (Bengali script), Portuguese, Indonesian (Latin script), Russian
+(Cyrillic), and German. Unrecognized forms use GENERAL; conflicting cues involving
+additional languages also use GENERAL. English/Chinese-only scoring is preserved.
+This is a lexical heuristic, not full language understanding. See
+[the supported forms, script variants, and limits](https://github.com/mnemon-dev/mnemon/blob/master/docs/USAGE.md#recall-intent-detection).
 
 ## Commands
 
