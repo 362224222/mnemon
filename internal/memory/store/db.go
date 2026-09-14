@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
@@ -12,7 +13,8 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/internal/memory/embed"
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // DefaultStoreName is the fallback store when none is specified.
@@ -624,6 +626,10 @@ func (db *DB) migrateAddSupersedesEdgeType() error {
 	}
 	if probeErr == nil {
 		return nil // already migrated
+	}
+	var sqliteErr *sqlite.Error
+	if !errors.As(probeErr, &sqliteErr) || sqliteErr.Code() != sqlite3.SQLITE_CONSTRAINT_CHECK {
+		return fmt.Errorf("probe supersedes edge type: %w", probeErr)
 	}
 
 	tx, err := db.conn.Begin()
