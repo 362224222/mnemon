@@ -140,10 +140,16 @@ mnemon import --store project-alpha memory_draft.json
 
 ### 输出示例
 
+导入与 `remember` 使用相同的精确内容去重规则：仅跳过与活跃记忆逐字节
+完全相同的内容。不同事实、近似重复、冲突和变化后的属性值都会新增。
+被跳过的草稿索引映射到已有 insight ID，显式边仍可引用该记忆。
+如需淘汰已被取代的事实，请验证新记忆后显式执行 `mnemon forget <old-id>`。
+基于容量的自动清理仍独立生效。
+
 ```json
 {
   "imported": 8,
-  "updated": 1,
+  "updated": 0,
   "skipped": 2,
   "errors": 0,
   "edges_inserted": 3,
@@ -159,8 +165,8 @@ mnemon import --store project-alpha memory_draft.json
 | 字段 | 说明 |
 |---|---|
 | `imported` | 新增的记忆数量 |
-| `updated` | 替换了已有冲突记忆的数量 |
-| `skipped` | 检测为重复而跳过的数量 |
+| `updated` | 固定为 `0`，保留此字段以兼容已有输出；相似度不会触发替换 |
+| `skipped` | 因内容逐字节完全相同而跳过的数量 |
 | `errors` | 写入失败的数量；导入允许部分成功，脚本调用方应检查此字段是否为 0 |
 | `edges_inserted` | 成功插入的显式边数量 |
 | `auto_pruned` | 超出容量限制后自动删除的记忆数量 |

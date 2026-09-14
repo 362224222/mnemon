@@ -6,8 +6,6 @@
 
 `mnemon remember` 是写入记忆的核心命令。它包含内置的 diff 步骤，在存储前自动检测重复和冲突。写入事务在一个 SQLite 事务中原子执行。
 
-![Remember Pipeline](../../diagrams/02-remember-pipeline.jpg)
-
 ### 流程详解
 
 ```
@@ -27,18 +25,19 @@ mnemon remember "选择 Qdrant 作为向量数据库" \
 
 **第 2.5 步：内置 Diff（事务外，只读）**
 
-对所有活跃 insight 计算相似度：
-- **DUPLICATE**（sim > 0.90）→ 跳过插入，返回 `action="skipped"`
-- **CONFLICT/UPDATE**（sim 0.50–0.90）→ 软删除旧 insight，插入新的替换
-- **ADD**（sim < 0.50）→ 正常插入
+生成相似度建议，并与所有活跃 insight 进行精确内容比较：
+- **内容逐字节完全相同** → 跳过插入，返回 `action="skipped"` 和 `diff_suggestion="DUPLICATE"`
+- **内容不同** → 正常插入，返回 `action="added"`，保留启发式 `diff_suggestion` 供复核
 
-此步骤在有嵌入时使用余弦相似度，否则降级为 token 重叠。`--no-diff` 标志可禁用此检查。
+相似度在有嵌入时使用余弦计算，否则使用 token 重叠。
+相似度与自动抽取的实体都无法确定一个事实是否取代另一个。
+精确内容查找不受相似度候选数量限制。
+`--no-diff` 会禁用两项检查，连完全重复的内容也会插入。
 
 **第三步：原子事务**
 
 ```
 BEGIN TRANSACTION
-  ⓪ 软删除被替换的 insight（如果 diff 检测到 CONFLICT/UPDATE）
   ① INSERT insight（UUID, content, category, importance, tags, entities, source）
   ② UPDATE embedding（如果有向量）
   ③ Graph Engine: OnInsightCreated
@@ -63,7 +62,6 @@ COMMIT
   "id": "abc-123",
   "action": "added",
   "diff_suggestion": "ADD",
-  "replaced_id": null,
   "edges_created": {"temporal": 2, "entity": 3, "causal": 1, "semantic": 1},
   "semantic_candidates": [
     {"id": "def-456", "content": "...", "cosine": 0.72, "auto_linked": false}
@@ -78,7 +76,9 @@ COMMIT
 }
 ```
 
-`action` 字段表示内置 diff 的决定：`"added"`（新增）、`"replaced"`（冲突自动替换，`replaced_id` 包含旧 insight ID）或 `"skipped"`（检测到重复，未插入）。
+`action` 为 `"added"`（新增）或 `"skipped"`（与活跃记忆内容逐字节完全相同，
+未插入）。跳过时，兼容字段 `replaced_id` 指向保持不变的已有记忆。
+启发式 `UPDATE`、`CONFLICT` 或近似 `DUPLICATE` 建议仍会返回 `action="added"`。
 
 LLM 收到这个输出后，可以评估候选并通过 `mnemon link` 命令建立它认为合理的边。
 
@@ -204,33 +204,45 @@ final = w_kw·keyword + w_ent·entity + w_sim·similarity + w_gr·graph
 
 ## 5.3 去重与冲突检测：Diff
 
-![Diff & Dedup Pipeline](../../diagrams/07-diff-dedup-pipeline.jpg)
+```mermaid
+flowchart TD
+    Write[remember / import] --> Bypass{"--no-diff?"}
+    Bypass -->|是| Add[插入新记忆，保留已有事实]
+    Bypass -->|否| Exact{与活跃记忆逐字节完全相同？}
+    Exact -->|是| Skip[跳过插入，返回已有记忆的标识]
+    Exact -->|否| Add
+    Write -. 仅 remember .-> Advisory[相似度建议供复核参考]
+```
 
 Diff 已**内置于 `remember`** — 无需单独调用。当调用 `mnemon remember` 时，它会自动在插入前运行 diff 检查。
 
 调用 `remember` 时，内置 diff 在事务之前运行：
 
 1. 对所有活跃 insight 计算相似度（有嵌入时使用余弦相似度，否则使用 token 重叠）
-2. 根据相似度阈值判断动作：
+2. 独立扫描所有活跃 insight，检查逐字节相同的内容。相似度仅提示潜在关系，
+   只有精确相等才允许跳过写入：
 
-| 相似度 | 动作 | 行为 |
-|--------|------|------|
-| > 0.90 | **DUPLICATE** | 跳过插入，返回 `action="skipped"` |
-| 0.50 ~ 0.90 | **CONFLICT/UPDATE** | 软删除旧 insight，插入新的替换 |
-| < 0.50 | **ADD** | 正常插入 |
+| 内容 | Diff 建议 | 行为 |
+|------|-----------|------|
+| 与活跃记忆逐字节完全相同 | **DUPLICATE** | 跳过插入，返回 `action="skipped"` |
+| 内容不同，任意相似度 | **ADD**、**UPDATE**、**CONFLICT** 或 **DUPLICATE** | 返回 `action="added"`，保留已有记忆 |
 
-`--no-diff` 标志可禁用此检查，用于需要无条件插入的场景。
+`import` 使用相同的精确内容查找规则，保留不同内容。
+两条命令均可通过 `--no-diff` 无条件插入。
+基于容量的自动清理仍是独立的生命周期策略。
 
 ### 典型工作流
 
-一条 `remember` 命令即可处理一切：
+先保存新内容，仅在确有需要时淘汰指定的旧事实：
 
 ```bash
-# 单条命令 — diff 自动执行
+# Diff 自动执行，结果仅供参考
 mnemon remember "选择 PostgreSQL 替代 SQLite 作为主数据库" \
   --cat decision --imp 5 --source agent
-# → 如果与已有的 "选择 SQLite 作为存储" 冲突：
-#   自动替换旧 insight，返回 action="replaced", replaced_id="<old_id>"
-# → 如果重复：返回 action="skipped"
-# → 如果是新内容：返回 action="added"
+# → 完全重复：action="skipped"，已有记忆保持不变
+# → 内容不同：action="added"，保留已有记忆
+
+# 如果新事实取代了指定旧记忆，先验证，再淘汰
+mnemon show <new-id>
+mnemon forget <old-id>
 ```

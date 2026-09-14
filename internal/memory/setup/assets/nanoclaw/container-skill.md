@@ -37,8 +37,8 @@ Run this decision tree after every substantive response:
   → No to all → STOP.
 
 **Step 2 — Does a highly overlapping memory already exist?**
-  → Yes, incremental new info → UPDATE (merge into existing)
-  → Yes, but contradicts/supersedes → REPLACE
+  → Yes, incremental new info → STORE the new content; review the existing memory separately
+  → Yes, but contradicts/supersedes → STORE and verify the new fact; explicitly forget the old ID only if superseded
   → No significant overlap → CREATE
 
 **Step 3 — Is it worth storing?**
@@ -53,8 +53,9 @@ Run this decision tree after every substantive response:
 ## Workflow
 
 1. **Remember**: `mnemon remember "<fact>" --cat <cat> --imp <1-5> --entities "e1,e2" --source agent`
-   - Diff is built-in: duplicates skipped, conflicts auto-replaced.
-   - Output includes `action` (added/updated/skipped), `semantic_candidates`, `causal_candidates`.
+   - Only exact content repeats are skipped; distinct content is stored and diff suggestions are advisory.
+   - To retire a superseded memory, store and verify the new fact, then explicitly run `mnemon forget <old-id>`.
+   - Output includes `action` (added/skipped), `semantic_candidates`, `causal_candidates`.
 2. **Link** (evaluate candidates from step 1 — use judgment, not mechanical rules):
    - Review `causal_candidates`: does a genuine cause-effect relationship exist? `causal_signal` is regex-based and prone to false positives — only link if the memories are truly causally related.
    - Review `semantic_candidates`: are these memories meaningfully related? High `similarity` alone is not sufficient — skip candidates that share keywords but discuss unrelated topics.

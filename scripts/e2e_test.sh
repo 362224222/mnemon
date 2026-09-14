@@ -294,6 +294,67 @@ OUT=$($M --data-dir "$TESTDIR" status)
 assert_jq "total now 0"    "$OUT" '.total_insights'   '0'
 assert_jq "deleted now 1"  "$OUT" '.deleted_insights'  '1'
 
+step "remember diff — distinct subjects retain independent facts without embeddings"
+DIFF_DIR="$TESTDATA/distinct-facts"
+diff_cli() {
+  MNEMON_EMBED_ENDPOINT="http://127.0.0.1:1" MNEMON_MAX_INSIGHTS=1000 \
+    "$M" --data-dir "$DIFF_DIR" --store default "$@"
+}
+FACT_ALPHA="Project Alpha uses PostgreSQL database for persistent application storage"
+FACT_BETA="Project Beta uses PostgreSQL database for persistent application storage"
+ALPHA_OUT=$(diff_cli remember "$FACT_ALPHA" --cat fact --imp 5)
+BETA_OUT=$(diff_cli remember "$FACT_BETA" --cat fact --imp 5)
+ALPHA_ID=$(extract_id "$ALPHA_OUT")
+BETA_ID=$(extract_id "$BETA_OUT")
+assert_jq "first fact is added" "$ALPHA_OUT" '.action' 'added'
+assert_jq "distinct subject is added" "$BETA_OUT" '.action' 'added'
+assert_jq "UPDATE remains advisory" "$BETA_OUT" '.diff_suggestion' 'UPDATE'
+assert_jq "distinct fact has no replaced id" "$BETA_OUT" 'has("replaced_id")' 'false'
+assert_jq "embedding endpoint is unavailable" "$BETA_OUT" '.embedded' 'false'
+assert_jq "Alpha remains addressable" "$(diff_cli show "$ALPHA_ID")" '.content' "$FACT_ALPHA"
+assert_jq "Beta remains addressable" "$(diff_cli show "$BETA_ID")" '.content' "$FACT_BETA"
+OUT=$(diff_cli recall "Project Alpha storage")
+assert_contains "recall retains Alpha" "$OUT" "$FACT_ALPHA"
+assert_contains "recall retains Beta" "$OUT" "$FACT_BETA"
+OUT=$(diff_cli status)
+assert_jq "both facts are active" "$OUT" '.total_insights' '2'
+assert_jq "no fact was soft-deleted" "$OUT" '.deleted_insights' '0'
+
+step "remember diff — exact repeats skip, changed values need deliberate forgetting"
+OUT=$(diff_cli remember "$FACT_BETA" --cat fact --imp 5)
+assert_jq "exact repeat skips" "$OUT" '.action' 'skipped'
+assert_jq "repeat identifies existing Beta" "$OUT" '.replaced_id' "$BETA_ID"
+OUT=$(diff_cli remember "Project Alpha uses SQLite database for persistent application storage" --cat fact --imp 5)
+CORRECTED_ID=$(extract_id "$OUT")
+assert_jq "changed value is added" "$OUT" '.action' 'added'
+assert_jq "all three facts are active" "$(diff_cli status)" '.total_insights' '3'
+assert_jq "explicit forget deletes selected Alpha" "$(diff_cli forget "$ALPHA_ID")" '.status' 'deleted'
+assert_jq "corrected fact remains addressable" "$(diff_cli show "$CORRECTED_ID")" '.id' "$CORRECTED_ID"
+assert_jq "unrelated Beta remains addressable" "$(diff_cli show "$BETA_ID")" '.id' "$BETA_ID"
+
+step "remember diff — near duplicate subjects are both stored"
+DIFF_DIR="$TESTDATA/distinct-long-facts"
+FACT_DETAILS=" with indexed customer records, transaction history, audit events, replication, backups, failover, monitoring, access controls, migrations, connection pooling, and disaster recovery"
+diff_cli remember "$FACT_ALPHA$FACT_DETAILS" --cat fact --imp 5 > /dev/null
+OUT=$(diff_cli remember "$FACT_BETA$FACT_DETAILS" --cat fact --imp 5)
+assert_jq "near duplicate is added" "$OUT" '.action' 'added'
+assert_jq "heuristic duplicate remains advisory" "$OUT" '.diff_suggestion' 'DUPLICATE'
+assert_jq "both long facts are active" "$(diff_cli status)" '.total_insights' '2'
+
+step "import diff — retain distinct subjects and reuse exact duplicate ids"
+DIFF_DIR="$TESTDATA/distinct-import-facts"
+jq -n --arg alpha "$FACT_ALPHA" --arg beta "$FACT_BETA" '{schema_version: "1", insights: [
+  {content: $alpha, category: "fact", importance: 5},
+  {content: $beta, category: "fact", importance: 5},
+  {content: $alpha, category: "fact", importance: 5}
+]}' > "$TESTDATA/distinct-import.json"
+OUT=$(diff_cli import "$TESTDATA/distinct-import.json")
+assert_jq "import adds both subjects" "$OUT" '.imported' '2'
+assert_jq "import never auto-replaces" "$OUT" '.updated' '0'
+assert_jq "import skips one exact repeat" "$OUT" '.skipped' '1'
+assert_jq "import preserves exact duplicate index mapping" "$OUT" '.results[0].id == .results[2].id' 'true'
+assert_jq "both imported facts remain active" "$(diff_cli status)" '.total_insights' '2'
+
 # ══════════════════════════════════════════════════════════════════════
 banner "Milestone 2: Graph Edge Auto-Generation"
 # ══════════════════════════════════════════════════════════════════════

@@ -8,8 +8,9 @@ description: Persistent memory CLI for CodeBuddy. Store facts, recall past knowl
 ## Workflow
 
 1. **Remember**: `mnemon remember "<fact>" --cat <cat> --imp <1-5> --entities "e1,e2" --source agent`
-   - Diff is built in: duplicates are skipped, conflicts are auto-replaced.
-   - Output includes `action` (added/updated/skipped), `semantic_candidates`, and `causal_candidates`.
+   - Only exact content repeats are skipped; distinct content is stored and diff suggestions are advisory.
+   - To retire a superseded memory, store and verify the new fact, then explicitly run `mnemon forget <old-id>`.
+   - Output includes `action` (added/skipped), `semantic_candidates`, and `causal_candidates`.
 2. **Link** (evaluate candidates from step 1 using judgment):
    - Review `causal_candidates`: link only when the memories are genuinely causally related.
    - Review `semantic_candidates`: high `similarity` alone is not enough; skip unrelated keyword matches.

@@ -94,7 +94,7 @@ mnemon setup --eject --target claude-code
 ### 核心命令
 
 ```bash
-# Remember — 存储新洞察（内置 diff：重复跳过，冲突自动替换）
+# Remember — 存储新洞察（仅跳过内容完全相同的记忆，保留不同内容）
 mnemon remember "选择 Qdrant 而非 Milvus 做向量搜索" \
   --cat decision --imp 5 --entities "Qdrant,Milvus" --tags "architecture,search" --source agent
 
@@ -132,6 +132,17 @@ mnemon import --no-diff memory_draft.json   # 跳过去重
 # Forget — 软删除洞察
 mnemon forget <id>
 ```
+
+`remember` 和 `import` 仅跳过与活跃记忆逐字节完全相同的内容。不同主体、
+变化后的属性值、调整语序的陈述和近似重复内容都会作为新记忆保存。
+`remember` 仍会返回建议性的 `diff_suggestion`（`UPDATE`、`CONFLICT` 或
+`DUPLICATE`）；实际写入结果以 `action` 的 `added` 或 `skipped` 为准。
+完全重复时，兼容字段 `replaced_id` 指向保持不变的已有记忆。
+使用 `--no-diff` 则连完全重复的内容也会插入。
+
+如需淘汰已被取代的记忆，先保存新事实，用 `mnemon show <new-id>` 验证，
+再显式执行 `mnemon forget <old-id>`。相似度本身不会授权替换；
+基于容量的自动清理仍独立生效。
 
 **Remember 标志：**
 
