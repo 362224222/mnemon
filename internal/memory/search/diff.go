@@ -1,6 +1,7 @@
 package search
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 
@@ -195,6 +196,21 @@ var negationWords = []string{
 	"不再", "放弃", "替换", "取消",
 }
 
+// negationMarkers matches explicit English negation markers in raw text.
+// Stopword filtering removes "not"/"no" from the token set, so polarity must be
+// read from the original text. Used only to tell a near-identical re-statement
+// apart from its negation; it is deliberately NOT part of the >= 0.7 similarity
+// conflict scan (bare "not" in scientific prose must not force CONFLICT).
+// Unicode word boundaries avoid matching names such as "Noté". Both common
+// apostrophes carry the same contraction. Individual CJK characters cannot
+// establish negation: "非常" and "未来", for example, are not negative statements.
+var negationMarkers = regexp.MustCompile(`(?i)(^|[^\p{L}\p{N}\p{M}_])(not|no|never|cannot|without|none)($|[^\p{L}\p{N}\p{M}_])|n['’]t($|[^\p{L}\p{N}\p{M}_])`)
+
+// hasNegation reports whether text carries an explicit negation marker.
+func hasNegation(text string) bool {
+	return negationMarkers.MatchString(text)
+}
+
 func classifySuggestion(tokenSim, similarity float64, newText, existingText string) DiffSuggestion {
 	if similarity < 0.5 {
 		return DiffAdd
@@ -205,10 +221,19 @@ func classifySuggestion(tokenSim, similarity float64, newText, existingText stri
 	// classified DUPLICATE — a skip would silently drop the new content.
 	isExtension := len(newText) > len(existingText)+len(existingText)/4
 
+	// A near-identical token set can still flip meaning: stopwords strip
+	// "not"/"no", so "X is allowed" and "X is not allowed" tokenize identically.
+	// A polarity mismatch on an otherwise near-verbatim re-statement is a
+	// contradiction to surface (CONFLICT keeps both), never a duplicate to skip.
+	polarityMismatch := hasNegation(newText) != hasNegation(existingText)
+
 	// Near-verbatim re-statement measured by TOKENS (not just embeddings) is a
 	// duplicate no matter what vocabulary it contains. Checked before the
 	// negation scan so a text can never "conflict" with a copy of itself.
 	if tokenSim > 0.9 && !isExtension {
+		if polarityMismatch {
+			return DiffConflict
+		}
 		return DiffDuplicate
 	}
 
@@ -227,6 +252,9 @@ func classifySuggestion(tokenSim, similarity float64, newText, existingText stri
 	}
 
 	if similarity > 0.9 && !isExtension {
+		if polarityMismatch {
+			return DiffConflict
+		}
 		return DiffDuplicate
 	}
 	return DiffUpdate

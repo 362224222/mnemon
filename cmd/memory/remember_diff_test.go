@@ -100,6 +100,18 @@ func TestRememberPreservesDistinctContent(t *testing.T) {
 			second:     "Project Alpha no longer uses PostgreSQL database for persistent application storage",
 			suggestion: search.DiffConflict,
 		},
+		{
+			name:       "near duplicate negation remains advisory",
+			first:      "Production deployment is allowed",
+			second:     "Production deployment is not allowed",
+			suggestion: search.DiffConflict,
+		},
+		{
+			name:       "removing negation remains advisory",
+			first:      "Production deployment is not allowed",
+			second:     "Production deployment is allowed",
+			suggestion: search.DiffConflict,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
