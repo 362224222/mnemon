@@ -188,3 +188,33 @@ func TestDiff_LowerKeywordScoreUpdateNotMasked(t *testing.T) {
 			"high-keyword-score ADD from insightA masked the UPDATE", result.Suggestion)
 	}
 }
+
+func TestClassifySuggestion_NegationIsNotDuplicate(t *testing.T) {
+	// Issue #133: "not" is a stopword, so both texts tokenize identically.
+	// The negated correction must never be classified DUPLICATE (a skip would
+	// silently discard it); it must surface as CONFLICT so both facts are kept.
+	got := classifySuggestion(1.0, 1.0, "Production deployment is not allowed", "Production deployment is allowed")
+	if got != DiffConflict {
+		t.Errorf("negated re-statement: want CONFLICT, got %s", got)
+	}
+}
+
+func TestClassifySuggestion_ExactRepetitionStillDuplicate(t *testing.T) {
+	// Control case: polarity is unchanged, so an exact repetition must still dedupe.
+	got := classifySuggestion(1.0, 1.0, "Production deployment is allowed", "Production deployment is allowed")
+	if got != DiffDuplicate {
+		t.Errorf("exact repetition: want DUPLICATE, got %s", got)
+	}
+}
+
+func TestDiff_NegatedCorrectionIsNotSkipped(t *testing.T) {
+	// End-to-end through Diff(): the affirmative fact is already stored and the
+	// negated correction must not be reported as an overall DUPLICATE.
+	insights := []*model.Insight{
+		{ID: "1", Content: "Production deployment is allowed"},
+	}
+	result := Diff(insights, "Production deployment is not allowed", DiffOptions{})
+	if result.Suggestion == DiffDuplicate {
+		t.Errorf("negated correction: overall suggestion must not be DUPLICATE, got %s", result.Suggestion)
+	}
+}
