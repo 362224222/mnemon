@@ -2,6 +2,7 @@ package search
 
 import (
 	"container/heap"
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -363,16 +364,15 @@ func IntentAwareRecall(db *store.DB, query string, queryVec []float64,
 	}
 
 	// An insight that another insight claims to supersede is demoted before
-	// ranking, and only the candidates in hand are looked up. Failing to look
-	// this up is not fatal: a superseded row ranking normally is the
-	// pre-existing behavior, which is worse but not broken.
+	// ranking, and only the candidates in hand are looked up. A failed lookup
+	// must not serve corrected content without its superseded marker.
 	candidateIDs := make([]string, len(candidates))
 	for i := range candidates {
 		candidateIDs[i] = candidates[i].id
 	}
 	superseded, supersededErr := db.GetSupersededIDs(candidateIDs)
 	if supersededErr != nil {
-		superseded = nil
+		return RecallResponse{}, fmt.Errorf("lookup superseded insights: %w", supersededErr)
 	}
 
 	results := make([]RecallResult, 0, len(candidates))
