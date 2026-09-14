@@ -218,3 +218,51 @@ func TestDiff_NegatedCorrectionIsNotSkipped(t *testing.T) {
 		t.Errorf("negated correction: overall suggestion must not be DUPLICATE, got %s", result.Suggestion)
 	}
 }
+
+func TestDiff_NegationMarkerBoundaries(t *testing.T) {
+	const suffix = " for the regional production cluster following security review and automated compliance checks across all services while ensuring observability resilience capacity backups restoration health readiness throughout primary secondary environments"
+	const chineseSuffix = "，值班团队完成上线审核流程并记录服务状态以及所有关键指标，监控系统会持续观察业务运行情况和生产资源使用情况"
+	tests := []struct {
+		name     string
+		existing string
+		newText  string
+		want     DiffSuggestion
+	}{
+		{"straight contraction", "Production deployment is allowed" + suffix, "Production deployment isn't allowed" + suffix, DiffConflict},
+		{"curly contraction", "Production deployment is allowed" + suffix, "Production deployment isn’t allowed" + suffix, DiffConflict},
+		{"equivalent apostrophes", "Production deployment isn't allowed" + suffix, "Production deployment isn’t allowed" + suffix, DiffDuplicate},
+		{"unicode word boundary", "Production deployment is allowed" + suffix, "Production deployment is allowed with Noté" + suffix, DiffDuplicate},
+		{"noteworthy is not a marker", "Production deployment is allowed" + suffix, "Production deployment is noteworthy and allowed" + suffix, DiffDuplicate},
+		{"nonetheless is not a marker", "Production deployment is allowed" + suffix, "Production deployment is nonetheless allowed" + suffix, DiffDuplicate},
+		{"chinese intensifier", "生产部署状态稳定" + chineseSuffix, "生产部署状态非常稳定" + chineseSuffix, DiffDuplicate},
+		{"chinese future word", "生产部署计划已经确认" + chineseSuffix, "未来生产部署计划已经确认" + chineseSuffix, DiffDuplicate},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if similarity := JaccardSimilarity(tt.newText, tt.existing); similarity <= 0.9 {
+				t.Fatalf("fixture must reach the near-duplicate branch, got %f", similarity)
+			}
+			result := Diff([]*model.Insight{{ID: "existing", Content: tt.existing}}, tt.newText, DiffOptions{})
+			if result.Suggestion != tt.want {
+				t.Fatalf("suggestion = %s, want %s", result.Suggestion, tt.want)
+			}
+		})
+	}
+}
+
+func TestDiff_NegationInEmbeddingDuplicate(t *testing.T) {
+	result := Diff(
+		[]*model.Insight{{ID: "existing", Content: "Production deployment is allowed"}},
+		"Production rollout is not allowed",
+		DiffOptions{
+			NewEmbedding:  []float64{1, 0},
+			ExistingEmbed: []EmbeddedItem{{ID: "existing", Embedding: []float64{0.95, 0.3122498999199199}}},
+		},
+	)
+	if len(result.Matches) != 1 || result.Matches[0].TokenSimilarity > 0.9 || result.Matches[0].Similarity <= 0.9 {
+		t.Fatalf("fixture must reach the embedding near-duplicate branch: %+v", result)
+	}
+	if result.Suggestion != DiffConflict {
+		t.Fatalf("suggestion = %s, want CONFLICT", result.Suggestion)
+	}
+}

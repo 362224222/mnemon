@@ -196,20 +196,19 @@ var negationWords = []string{
 	"不再", "放弃", "替换", "取消",
 }
 
-// negationMarkers matches explicit polarity-bearing negation in raw text.
+// negationMarkers matches explicit English negation markers in raw text.
 // Stopword filtering removes "not"/"no" from the token set, so polarity must be
 // read from the original text. Used only to tell a near-identical re-statement
 // apart from its negation; it is deliberately NOT part of the >= 0.7 similarity
 // conflict scan (bare "not" in scientific prose must not force CONFLICT).
-var negationMarkers = regexp.MustCompile(`(?i)\b(not|no|never|cannot|without|none)\b|n't`)
+// Unicode word boundaries avoid matching names such as "Noté". Both common
+// apostrophes carry the same contraction. Individual CJK characters cannot
+// establish negation: "非常" and "未来", for example, are not negative statements.
+var negationMarkers = regexp.MustCompile(`(?i)(^|[^\p{L}\p{N}\p{M}_])(not|no|never|cannot|without|none)($|[^\p{L}\p{N}\p{M}_])|n['’]t($|[^\p{L}\p{N}\p{M}_])`)
 
 // hasNegation reports whether text carries an explicit negation marker.
 func hasNegation(text string) bool {
-	lower := strings.ToLower(text)
-	if negationMarkers.MatchString(lower) {
-		return true
-	}
-	return strings.ContainsAny(lower, "不没无非未")
+	return negationMarkers.MatchString(text)
 }
 
 func classifySuggestion(tokenSim, similarity float64, newText, existingText string) DiffSuggestion {
