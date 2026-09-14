@@ -18,6 +18,7 @@ type briefResult struct {
 	Category   string   `json:"category,omitempty"`
 	Score      *float64 `json:"score,omitempty"`
 	Confidence string   `json:"confidence,omitempty"`
+	Superseded bool     `json:"superseded,omitempty"`
 }
 
 type briefResponse struct {

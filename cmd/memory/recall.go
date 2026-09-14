@@ -206,6 +206,7 @@ var recallCmd = &cobra.Command{
 					Category:   string(result.Insight.Category),
 					Score:      scorePointer(score),
 					Confidence: confidenceLabel(score),
+					Superseded: result.Superseded,
 				})
 			}
 			return encodeBrief(os.Stdout, newBriefResponse(brief, resp.Meta.Hint))
