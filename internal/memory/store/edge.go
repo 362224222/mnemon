@@ -10,6 +10,9 @@ import (
 
 // InsertEdge inserts or replaces an edge.
 func (db *DB) InsertEdge(e *model.Edge) error {
+	if e.EdgeType == model.EdgeSupersedes && e.SourceID == e.TargetID {
+		return fmt.Errorf("supersedes requires distinct insights")
+	}
 	_, err := db.execer().Exec(
 		`INSERT OR REPLACE INTO edges (source_id, target_id, edge_type, weight, metadata, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
@@ -76,7 +79,8 @@ func collectSupersededIDs(ex dbExecer, chunk []string, into map[string]bool) err
 	}
 
 	rows, err := ex.Query(fmt.Sprintf(
-		`SELECT DISTINCT target_id FROM edges WHERE edge_type = ? AND target_id IN (%s)`,
+		`SELECT DISTINCT target_id FROM edges
+		 WHERE edge_type = ? AND source_id != target_id AND target_id IN (%s)`,
 		strings.Join(placeholders, ",")), args...)
 	if err != nil {
 		return err

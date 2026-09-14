@@ -3,6 +3,7 @@ package memory
 import (
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/internal/memory/store"
@@ -70,4 +71,10 @@ func TestLinkRecordsDirectedEdgeOnceAndMutualEdgesBothWays(t *testing.T) {
 			}
 		})
 	}
+	t.Run("reject self supersession", func(t *testing.T) {
+		linkType = "supersedes"
+		if err := linkCmd.RunE(linkCmd, []string{"fresh", "fresh"}); err == nil || !strings.Contains(err.Error(), "distinct insights") {
+			t.Fatalf("self supersedes link must fail: %v", err)
+		}
+	})
 }
