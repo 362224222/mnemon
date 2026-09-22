@@ -94,7 +94,7 @@ mnemon setup --eject --target claude-code
 ### 核心命令
 
 ```bash
-# Remember — 存储新洞察（内置 diff：重复跳过，冲突自动替换）
+# Remember — 存储新洞察（仅跳过内容完全相同的记忆，保留不同内容）
 mnemon remember "选择 Qdrant 而非 Milvus 做向量搜索" \
   --cat decision --imp 5 --entities "Qdrant,Milvus" --tags "architecture,search" --source agent
 
@@ -133,6 +133,17 @@ mnemon import --no-diff memory_draft.json   # 跳过去重
 mnemon forget <id>
 ```
 
+`remember` 和 `import` 仅跳过与活跃记忆逐字节完全相同的内容。不同主体、
+变化后的属性值、调整语序的陈述和近似重复内容都会作为新记忆保存。
+`remember` 仍会返回建议性的 `diff_suggestion`（`UPDATE`、`CONFLICT` 或
+`DUPLICATE`）；实际写入结果以 `action` 的 `added` 或 `skipped` 为准。
+完全重复时，兼容字段 `replaced_id` 指向保持不变的已有记忆。
+使用 `--no-diff` 则连完全重复的内容也会插入。
+
+如需淘汰已被取代的记忆，先保存新事实，用 `mnemon show <new-id>` 验证，
+再显式执行 `mnemon forget <old-id>`。相似度本身不会授权替换；
+基于容量的自动清理仍独立生效。
+
 **Remember 标志：**
 
 | 标志 | 默认值 | 说明 |
@@ -167,6 +178,38 @@ mnemon forget <id>
 JSON 继续作为机器可读交换格式，因此既不破坏现有解析器，也无需绑定尚在演进的
 序列化草案。
 
+#### Recall 意图检测
+
+自动检测使用本地固定词语模式，无需 LLM 或服务提供商。覆盖英语、普通话
+（简体/繁体）、印地语（天城文）、西班牙语、现代标准阿拉伯语、法语、孟加拉语
+（孟加拉文）、葡萄牙语、印度尼西亚语（拉丁字母）、俄语（西里尔字母）和德语
+的部分疑问句形式；这不代表能理解这些语言的所有表达，也不是跨语言检索准确率承诺。
+完整例句及书写变体见[英文说明](../USAGE.md#recall-intent-detection)。
+
+词边界识别 Unicode 字母、组合标记和数字；中文不要求空格。新增语言的模式兼容
+Unicode 空白、法语直/弯撇号、西班牙语和葡萄牙语已列词语的组合/分解重音，
+以及阿拉伯语常用元音标记和 tatweel。其他方言、阿拉伯字母表现形式和非拉丁
+文字的拉丁转写不作系统支持。重音不会被普遍删除。
+
+没有命中时返回 `GENERAL`。新增语言的意图线索互相冲突，或与英/中文线索冲突，
+也返回 `GENERAL`；混合语言中一致的线索可正常识别。为保持兼容，仅含英/中文
+线索的查询沿用原有计数及 ENTITY 平分规则，例如 `what is the reason` 选择
+ENTITY。新增语言忽略成对引号/代码引用中的词语；英/中文引用词沿用原行为。
+该规则不理解否定、偶然提及、嵌套引号或复合问题的含义。
+
+宿主 agent 可根据用户含义显式选择意图，同时保留查询和记忆的原语言：
+
+```bash
+mnemon recall '¿Por qué elegimos PostgreSQL?' --intent WHY --verbose
+mnemon recall 'हमने PostgreSQL कब चुना?' --intent WHEN --verbose
+mnemon recall 'Was ist PostgreSQL?' --intent ENTITY --verbose
+```
+
+`--intent WHY|WHEN|ENTITY|GENERAL` 与语言无关，优先于自动检测：WHY 为原因、
+WHEN 为时间、ENTITY 为是什么/是谁、GENERAL 为中性遍历。意图会影响图遍历
+和排序。`--verbose` 输出 `meta.intent` 及 `meta.intent_source`
+（`auto` 或 `override`），即使无结果也可查看；`--basic` 完全跳过意图检测。
+
 **Import 标志：**
 
 | 标志 | 默认值 | 说明 |
@@ -181,6 +224,7 @@ JSON 继续作为机器可读交换格式，因此既不破坏现有解析器，
 mnemon link <source_id> <target_id> --type semantic --weight 0.85
 mnemon link <source_id> <target_id> --type causal --weight 0.8 \
   --meta '{"sub_type":"causes","reason":"..."}'
+mnemon link <new_id> <old_id> --type supersedes --weight 1.0
 
 # Related — 从某个洞察出发的 BFS 遍历
 mnemon related <id> --edge causal --depth 2
@@ -272,7 +316,7 @@ mnemon viz --format html -o graph.html
 open graph.html
 ```
 
-节点按分类着色（decision、fact、insight、preference、context），边按类型着色（temporal、semantic、causal、entity）。
+节点按分类着色（decision、fact、insight、preference、context），边按类型着色（temporal、semantic、causal、entity、supersedes）。
 
 ---
 

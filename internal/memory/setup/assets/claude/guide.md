@@ -10,6 +10,13 @@
 To recall: `mnemon recall "<query>" --limit 5`.
 Craft a focused, keyword-rich query — do not pass the raw user prompt.
 
+Keep the query and memories in their original language. If intent is clear from
+meaning, pass `--intent WHY` (reasons), `WHEN` (timing), `ENTITY` (what/who), or
+`GENERAL` (neutral). Automatic detection recognizes only bounded question forms;
+unrecognized forms and conflicting additional-language cues use GENERAL.
+English/Chinese-only scoring is preserved. `--verbose` reports the selected intent
+and its source. See [supported languages, scripts, and limits](https://github.com/mnemon-dev/mnemon/blob/master/docs/USAGE.md#recall-intent-detection).
+
 ### Remember — after responding
 
 Run this decision tree after every substantive response.
@@ -37,8 +44,8 @@ Tier C (importance 1, store only if genuinely reusable):
 → None of the above → STOP.
 
 **Step 2 — Does a highly overlapping memory already exist?**
-→ Yes, incremental new info → UPDATE (merge into existing)
-→ Yes, but contradicts/supersedes → REPLACE
+→ Yes, incremental new info → STORE the new content; review the existing memory separately
+→ Yes, but contradicts/supersedes → STORE and verify the new fact; explicitly forget the old ID only if superseded
 → No significant overlap → CREATE
 
 **Step 3 — Importance calibration**

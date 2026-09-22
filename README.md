@@ -370,7 +370,7 @@ memory is useful.
 - **Four-graph architecture** — temporal, entity, causal, and semantic edges, not just vector similarity
 - **Intent-native protocol** — three primitives (`remember`, `link`, `recall`) map to the LLM's cognitive vocabulary, not database syntax; structured JSON output with signal transparency
 - **Intent-aware recall** — graph traversal + optional vector search (RRF fusion), enabled by default for all queries
-- **Built-in deduplication** — `remember` auto-detects duplicates and conflicts; skips or auto-replaces
+- **Built-in deduplication** — `remember` and `import` skip exact content repeats and preserve distinct facts; similarity suggestions guide review
 - **Retention lifecycle** — importance decay, access-count boosting, and garbage collection
 - **Privacy-safe receipts** — export hashed operation receipts for memory-boundary audits without raw memory contents or queries
 - **Optional embeddings** — works fully without an embedding provider; add local [Ollama](https://ollama.ai) or an OpenAI-compatible server for enhanced vector+keyword hybrid search
@@ -511,10 +511,15 @@ mnemon embed --status
 
 A hosted provider such as Voyage AI needs only the endpoint, model, and key:
 
+```yaml
+# embed.yml
+provider: openai
+model: voyage-3.5
+endpoint: https://api.voyageai.com/v1
+api_key: pa-...
+```
+
 ```bash
-export MNEMON_EMBED_ENDPOINT=https://api.voyageai.com/v1
-export MNEMON_EMBED_MODEL=voyage-3.5
-export MNEMON_EMBED_API_KEY=pa-...
 mnemon embed --status
 ```
 

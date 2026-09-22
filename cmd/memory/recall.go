@@ -38,6 +38,10 @@ type compactResult struct {
 	MatchedVia string  `json:"matched_via,omitempty"`
 	Confidence string  `json:"confidence"`
 	Score      float64 `json:"score"`
+	// Superseded warns that another insight claims to replace this one.
+	// It must survive the compact projection: an agent reading only this
+	// shape would otherwise be handed corrected content with no signal.
+	Superseded bool `json:"superseded,omitempty"`
 }
 
 // compactResponse wraps compact results with an optional hint.
@@ -89,6 +93,7 @@ func toCompact(resp search.RecallResponse) compactResponse {
 			MatchedVia: r.Via,
 			Confidence: confidenceLabel(rounded),
 			Score:      rounded,
+			Superseded: r.Superseded,
 		}
 		results = append(results, cr)
 	}
@@ -101,8 +106,19 @@ func toCompact(resp search.RecallResponse) compactResponse {
 var recallCmd = &cobra.Command{
 	Use:   "recall [keyword]",
 	Short: "Retrieve insights by keyword",
-	Long:  "Search for insights using intent-aware graph-enhanced retrieval. Use --basic for simple SQL LIKE matching.",
-	Args:  cobra.MinimumNArgs(1),
+	Long: `Search for insights using intent-aware graph-enhanced retrieval. Use --basic for simple SQL LIKE matching.
+
+Automatic intent uses a limited set of question cues in English, Mandarin Chinese
+(simplified/traditional), Hindi (Devanagari), Spanish, Modern Standard Arabic,
+French, Bengali (Bengali script), Portuguese, Indonesian, Russian (Cyrillic), and
+German. It does not infer meaning or recognize every phrasing or transliteration.
+Unrecognized cues fall back to GENERAL. Conflicting cues involving the additional
+languages also use GENERAL; English/Chinese-only queries retain legacy scoring.
+
+Use --intent WHY (reasons), WHEN (timing), ENTITY (what/who), or GENERAL to select
+the strategy in any language while keeping the original query. --verbose reports
+meta.intent and meta.intent_source (auto or override). --basic bypasses intent.`,
+	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		keyword := strings.Join(args, " ")
 		if err := requirePositiveLimit("--limit", recLimit); err != nil {
@@ -201,6 +217,7 @@ var recallCmd = &cobra.Command{
 					Category:   string(result.Insight.Category),
 					Score:      scorePointer(score),
 					Confidence: confidenceLabel(score),
+					Superseded: result.Superseded,
 				})
 			}
 			return encodeBrief(os.Stdout, newBriefResponse(brief, resp.Meta.Hint))

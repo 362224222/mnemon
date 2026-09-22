@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
@@ -68,5 +69,48 @@ func TestReleaseDistributionPublishesWindowsArchives(t *testing.T) {
 	if windows.GOOS != "windows" || !slices.Equal(windows.Formats, []string{"zip"}) {
 		t.Fatalf("archive format override = (%q, %v), want (windows, [zip])",
 			windows.GOOS, windows.Formats)
+	}
+}
+
+func TestReleaseCaskEmitsPostflightSteps(t *testing.T) {
+	root := repositoryRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, ".goreleaser.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var config struct {
+		Casks []struct {
+			Name        string `yaml:"name"`
+			CustomBlock string `yaml:"custom_block"`
+			Hooks       struct {
+				Post struct {
+					Install string `yaml:"install"`
+				} `yaml:"post"`
+			} `yaml:"hooks"`
+		} `yaml:"homebrew_casks"`
+	}
+	if err := yaml.Unmarshal(raw, &config); err != nil {
+		t.Fatalf("parse .goreleaser.yml: %v", err)
+	}
+
+	if len(config.Casks) != 1 {
+		t.Fatalf("homebrew casks = %d, want one", len(config.Casks))
+	}
+	cask := config.Casks[0]
+
+	// hooks.post.install renders Homebrew's deprecated `postflight` stanza
+	// (goreleaser/goreleaser#6870); the quarantine strip must live in
+	// custom_block as `postflight_steps` until a steps-aware hook ships.
+	if cask.Hooks.Post.Install != "" {
+		t.Fatalf("homebrew cask still uses hooks.post.install, which emits the deprecated postflight stanza")
+	}
+	for _, want := range []string{"postflight_steps", "on_macos", "/usr/bin/xattr", `{{ "{{staged_path}}" }}`} {
+		if !strings.Contains(cask.CustomBlock, want) {
+			t.Fatalf("homebrew cask custom_block is missing %q; got:\n%s", want, cask.CustomBlock)
+		}
+	}
+	if strings.Contains(cask.CustomBlock, "postflight do") {
+		t.Fatalf("homebrew cask custom_block still emits deprecated postflight:\n%s", cask.CustomBlock)
 	}
 }

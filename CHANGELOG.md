@@ -61,6 +61,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   hook registry, but its current local Agent V2 turn path does not dispatch the
   user-prompt lifecycle event needed for reliable automatic recall.
 
+### Fixed
+
+- The generated Homebrew cask no longer emits the deprecated `postflight`
+  stanza. `brew` commands that load the cask printed "Calling `postflight` is
+  deprecated! Use `postflight_steps` instead." on every invocation. The
+  quarantine strip now runs through the declarative `postflight_steps` DSL.
+
 ## [0.2.7] - 2026-09-01
 
 ### Fixed

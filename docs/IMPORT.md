@@ -120,6 +120,7 @@ Chat export / Markdown -> LLM extraction prompt -> memory_draft.json -> mnemon i
 | `causal` | Causal influence; A caused or affected B |
 | `semantic` | Semantic similarity; A and B discuss the same topic |
 | `entity` | Entity co-occurrence; A and B mention the same named subject |
+| `supersedes` | Authority claim; A replaces B and B is demoted at recall |
 
 ---
 
@@ -132,7 +133,7 @@ mnemon import memory_draft.json
 # Validate without writing
 mnemon import --dry-run memory_draft.json
 
-# Skip duplicate/conflict detection and insert every entry as new
+# Skip exact duplicate detection and insert every entry as new
 mnemon import --no-diff memory_draft.json
 
 # Import into a specific store
@@ -141,10 +142,17 @@ mnemon import --store project-alpha memory_draft.json
 
 ### Output Example
 
+Import uses the same exact-content deduplication rule as `remember`: only
+byte-identical active content is skipped. Different facts and near-duplicates
+are added, including conflicting or updated values. A skipped draft index maps
+to the existing insight ID, so explicit edges still resolve to that memory.
+To retire a superseded fact, verify the new memory and use `mnemon forget
+<old-id>` explicitly. Capacity-based auto-pruning remains separate.
+
 ```json
 {
   "imported": 8,
-  "updated": 1,
+  "updated": 0,
   "skipped": 2,
   "errors": 0,
   "edges_inserted": 3,
@@ -160,8 +168,8 @@ mnemon import --store project-alpha memory_draft.json
 | Field | Description |
 |---|---|
 | `imported` | Number of newly added memories |
-| `updated` | Number of existing conflicting memories replaced |
-| `skipped` | Number of duplicate memories skipped |
+| `updated` | Always `0`; retained for output compatibility. Similarity does not replace existing memories |
+| `skipped` | Number of byte-identical content repeats skipped |
 | `errors` | Number of failed writes. Import allows partial success; script callers should check this is `0` |
 | `edges_inserted` | Number of explicit edges inserted |
 | `auto_pruned` | Number of memories auto-pruned after capacity checks |
