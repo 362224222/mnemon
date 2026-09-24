@@ -6,7 +6,7 @@ test("npm launcher hides native child consoles by default", async (t) => {
   const spawnCalls = [];
   const syncCalls = [];
   mock.module("node:child_process", {
-    exports: {
+    namedExports: {
       spawn: (...args) => {
         spawnCalls.push(args);
         const child = new EventEmitter();
@@ -35,7 +35,7 @@ test("npm launcher hides native child consoles by default", async (t) => {
 test("explicit child options can still override the default", async () => {
   const spawnCalls = [];
   mock.module("node:child_process", {
-    exports: {
+    namedExports: {
       spawn: (...args) => {
         spawnCalls.push(args);
         const child = new EventEmitter();
