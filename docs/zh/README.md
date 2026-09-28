@@ -462,6 +462,7 @@ make help           # 显示所有目标
 - [Memory 用法与参考](USAGE.md) — 根级 Memory 命令、导入、回执与嵌入向量支持
 - [记忆导入指南](IMPORT.md) — 导入历史聊天的 schema 与 LLM 提取提示词
 - [架构图](../diagrams/) — 系统架构、记忆/召回流程、四图模型、生命周期管理
+- [Memory Agent（实验性）](../../experimental/memory-agent/README.zh-CN.md) — Mnemon 以记忆 Agent 形态运行在 DSH 上的研究预览，由 System 1 决策模型 Jev 做判断；含论文、代码与运行记录
 
 ## 参考文献
 
