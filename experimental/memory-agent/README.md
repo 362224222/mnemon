@@ -24,7 +24,7 @@ the main agent and hands it a small View at every turn.
 - On the same records, Jev separates gold evidence better than DeepSeek and gpt-4.1-mini and is 3–11× faster.
 
 Details, baselines and caveats are in the paper, *Mnemon: Raw Records, Fast Judgments, Slow Thoughts*
-([PDF](https://github.com/Grivn/mnemon-memory-agent/blob/master/docs/paper/main.pdf); arXiv link to follow).
+([arXiv:2609.36059](https://arxiv.org/abs/2609.36059); [PDF](https://github.com/Grivn/mnemon-memory-agent/blob/master/docs/paper/main.pdf)).
 
 ## Status
 
