@@ -18,7 +18,7 @@
 - **LongMemEval-S 94.4%**：由 DeepSeek-V4.1-Flash 答题，与已公开的最好成绩持平。
 - 在同一批记录上，Jev 区分关键证据的效果优于 DeepSeek 和 gpt-4.1-mini，速度快 3–11 倍。
 
-细节、对比基线与注意事项见论文《Mnemon: Raw Records, Fast Judgments, Slow Thoughts》（[PDF](https://github.com/Grivn/mnemon-memory-agent/blob/master/docs/paper/main.pdf)；arXiv 链接稍后补充）。
+细节、对比基线与注意事项见论文《Mnemon: Raw Records, Fast Judgments, Slow Thoughts》（[arXiv:2609.36059](https://arxiv.org/abs/2609.36059)；[PDF](https://github.com/Grivn/mnemon-memory-agent/blob/master/docs/paper/main.pdf)）。
 
 ## 状态
 
