@@ -547,6 +547,7 @@ See [Development and Deployment](docs/DEPLOYMENT.md) for Docker, Compose, Ollama
 - [Memory Usage & Reference](docs/USAGE.md) — root Memory commands, import, receipts, and embedding support
 - [Memory Import Guide](docs/IMPORT.md) — schema and LLM prompt for importing historical chats
 - [Architecture Diagrams](docs/diagrams/) — system architecture, pipelines, lifecycle management
+- [Memory Agent (experimental)](experimental/memory-agent/) — research preview of Mnemon as a memory agent on DSH, with Jev as its System 1 decision model; paper, code and run records
 
 ## Star History
 
